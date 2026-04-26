@@ -50,6 +50,7 @@ All main queues bind to the `events` exchange with routing key = queue name.
 | `events.jitsi` | event-saver | yes / no | 10 | Jitsi meeting events |
 | `events.mail` | event-saver | yes / no | 10 | UniSender status callbacks |
 | `events.chat` | event-saver | yes / no | 10 | GetStream webhook events |
+| `events.user.email` | event-users | yes / no | 10 | Email change requests |
 | `events.unrouted` | event-saver (fallback) | yes / no | 10 | Unmatched events |
 | `*.dlq` variants | none (dead-letter storage) | -- | -- | 24h TTL dead-letter storage |
 
@@ -100,9 +101,45 @@ All main queues bind to the `events` exchange with routing key = queue name.
 | `jitsi.peer_connection.failure` | jitsi-chat (via event-receiver) | event-saver | `events.jitsi` | 5 (NORMAL) | `JitsiEventPayload` |
 | `jitsi.suspend.detected` | jitsi-chat (via event-receiver) | event-saver | `events.jitsi` | 5 (NORMAL) | `JitsiEventPayload` |
 | `jitsi.toolbar.button_clicked` | jitsi-chat (via event-receiver) | event-saver | `events.jitsi` | 5 (NORMAL) | `JitsiEventPayload` |
+| `user.email.change_requested` | event-admin (via event-receiver `/event/admin`) | event-users | `events.user.email` | 10 (CRITICAL) | `UserEmailChangeRequestedPayload` |
 | _(unmatched)_ | event-receiver | event-saver (fallback) | `events.unrouted` | -- | raw payload |
 
 **Source:** `docs/audit/CONTRACT_MAP.md:46-71`, `event-schemas/event_schemas/types.py:8-43`
+
+---
+
+## Event Detail: `user.email.change_requested`
+
+Событие запроса смены email клиента, инициируемое администратором через `event-admin`.
+
+| Атрибут | Значение |
+|---------|----------|
+| `ce-type` | `user.email.change_requested` |
+| `ce-source` | `admin` |
+| Queue | `events.user.email` |
+| Priority | 10 (CRITICAL) |
+| Producer | event-admin (через `POST /event/admin` в event-receiver) |
+| Consumer | event-users (FastStream RabbitMQ consumer) |
+
+**Payload schema (`UserEmailChangeRequestedPayload`)**:
+
+```json
+{
+  "user_id": "uuid",
+  "old_email": "old@example.com",
+  "new_email": "new@example.com",
+  "requested_by": "admin@example.com"
+}
+```
+
+**Flow**:
+1. Admin вызывает `POST /api/users/id/{user_id}/change-email` в event-admin.
+2. event-admin публикует CloudEvent в event-receiver `POST /event/admin` (auth: static API key).
+3. event-receiver маршрутизирует `admin` / `user.email.*` → `events.user.email`.
+4. event-users потребляет событие: обновляет `users.email`, создаёт запись в `user_email_changelog`, устанавливает `email_source='admin'`.
+5. Webhook outbox доставляет изменение в CRM; после успешной доставки сбрасывает `email_source='crm'`.
+
+**CRM sync protection**: поле `email_source='admin'` блокирует перезапись email при следующей синхронизации с CRM до тех пор, пока outbox не доставит изменение.
 
 ---
 
