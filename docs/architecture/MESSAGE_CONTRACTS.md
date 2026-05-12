@@ -69,12 +69,13 @@ All main queues bind to the `events` exchange with routing key = queue name.
 | `booking.reassigned` | event-receiver | event-notifier | `events.notifications` | 10 (CRITICAL) | `BookingReassignedPayload` |
 | `booking.cancelled` | event-receiver | event-notifier | `events.notifications` | 10 (CRITICAL) | `BookingCancelledPayload` |
 | `booking.reminder_sent` | event-receiver | event-notifier | `events.notifications` | 7 (HIGH) | `BookingReminderSentPayload` |
+| `booking.rejected` | event-booking (via event-receiver) | event-saver, event-notifier | `events.booking.lifecycle` | 10 (CRITICAL) | `BookingRejectedPayload` |
 | `chat.created` | event-receiver | event-saver | `events.chat.lifecycle` | 5 (NORMAL) | `ChatCreatedPayload` |
 | `chat.deleted` | event-receiver | event-saver | `events.chat.lifecycle` | 5 (NORMAL) | `ChatDeletedPayload` |
 | `chat.message_sent` | event-receiver | event-saver | `events.chat.activity` | 5 (NORMAL) | `ChatMessageSentPayload` |
 | `meeting.url_created` | event-receiver | event-saver | `events.meeting.lifecycle` | 5 (NORMAL) | `MeetingUrlCreatedPayload` |
 | `meeting.url_deleted` | event-receiver | event-saver | `events.meeting.lifecycle` | 5 (NORMAL) | `MeetingUrlDeletedPayload` |
-| `notification.send_requested` | event-receiver | event-notifier (intended, not delivered) | `events.notification.commands` | 7 (HIGH) | `NotificationCommandPayload` |
+| `notification.send_requested` | event-booking (via event-receiver) | event-notifier | `events.notification.commands` | 7 (HIGH) | `NotificationCommandPayload` |
 | `notification.email.message_sent` | event-notifier (NOT implemented) | event-saver | `events.notification.delivery` | 7 (HIGH) | `EmailNotificationPayload` |
 | `notification.telegram.message_sent` | event-notifier (NOT implemented) | event-saver | `events.notification.delivery` | 7 (HIGH) | `TelegramNotificationPayload` |
 | `notification.push.message_sent` | event-notifier (NOT implemented) | event-saver | `events.notification.delivery` | 5 (NORMAL) | `PushNotificationPayload` |
@@ -140,6 +141,39 @@ All main queues bind to the `events` exchange with routing key = queue name.
 5. Webhook outbox доставляет изменение в CRM; после успешной доставки сбрасывает `email_source='crm'`.
 
 **CRM sync protection**: поле `email_source='admin'` блокирует перезапись email при следующей синхронизации с CRM до тех пор, пока outbox не доставит изменение.
+
+---
+
+## Event Detail: `booking.rejected`
+
+Событие отказа в бронировании, инициируемое service event-booking при нарушении constraint (когда enabled).
+
+| Атрибут | Значение |
+|---------|----------|
+| `ce-type` | `booking.rejected` |
+| `ce-source` | `booking` |
+| Queue | `events.booking.lifecycle` |
+| Priority | 10 (CRITICAL) |
+| Producer | event-booking (через `POST /event/cloudevents` в event-receiver) |
+| Consumers | event-saver (audit), event-notifier (notifications) |
+
+**Payload schema (`BookingRejectedPayload`)**:
+
+```json
+{
+  "booking_uid": "uuid",
+  "rejection_reasons": ["string", ...]
+}
+```
+
+**Flow**:
+1. event-booking consumes `booking.created` from `events.booking.lifecycle`.
+2. Constraint analyzer determines violation (if `IS_ENABLE_BOOKING_CONSTRAINTS=true`).
+3. event-booking publishes CloudEvent to event-receiver `POST /event/cloudevents` (auth: Bearer token).
+4. event-receiver маршрутизирует `booking` / `booking.rejected` → `events.booking.lifecycle`.
+5. event-saver потребляет и сохраняет в audit table; event-notifier отправляет rejection notification client.
+
+**Intended flow**: This event integrates with event-notifier's routing rules to notify the client that their booking was rejected due to constraints.
 
 ---
 
