@@ -1,0 +1,184 @@
+{
+  "findings": [
+    {
+      "service": "event-admin",
+      "severity": "CRITICAL",
+      "title": "DEBUG=True disables all authentication (bypass still in middleware, .env still sets it)",
+      "file": "event-admin/event_admin/middleware.py:49",
+      "detail": "JWTAuthMiddleware._handle() still contains the unconditional debug early-return: when settings.debug is True every request gets a synthetic admin payload ({'sub': 'debug@local', 'role': 'admin'}) and full access to all bookings, notifications, meeting links, and users-proxy endpoints with zero credentials. The local .env (event-admin/.env:2) still sets DEBUG=True together with JWT_SECRET_KEY=CHANGE_ME_IN_PRODUCTION. Mitigation since April: .env is now covered by event-admin/.gitignore ('.env' and '*.env'), and the whole event-admin directory is currently untracked, so the file is no longer at risk of being committed. But the bypass mechanism itself is unchanged and there is still no startup guard, so any environment that inherits DEBUG=True (copied .env, compose env, shell var) silently serves all data unauthenticated.",
+      "fix_hint": "Remove the debug auth bypass entirely, or gate it behind an explicit second flag (e.g. ALLOW_INSECURE_DEBUG_AUTH=1) plus a loud startup warning/refusal. Set DEBUG=False in the local .env and add a .env.example with safe defaults.",
+      "cross_service": false,
+      "origin": "april"
+    },
+    {
+      "service": "event-admin",
+      "severity": "HIGH",
+      "title": "get_booking_details runs 7 concurrent queries on one AsyncSession via asyncio.gather — endpoint breaks at runtime",
+      "file": "event-admin/event_admin/adapters/bookings_db.py:123",
+      "detail": "The April N+1 finding was 'fixed' by wrapping the seven child-table fetch_all calls in asyncio.gather(), but all of them go through the same request-scoped SqlExecutor and therefore the same SQLAlchemy AsyncSession (ioc.py provides one AsyncSession per request). SQLAlchemy's AsyncSession is explicitly not safe for concurrent use from multiple tasks: concurrent session.execute() calls raise InvalidRequestError ('This session is provisioning a new connection; concurrent operations are not permitted') or asyncpg InterfaceError ('another operation is in progress'). GET /bookings/{booking_uid} will fail with 500 on essentially every call. There are no tests, so this regression is undetected.",
+      "fix_hint": "Either await the seven queries sequentially (correct, modest latency), combine them into fewer SQL statements, or give each concurrent query its own session/connection (e.g. ISqlExecutorFactory + sessionmaker per gathered task). Add an integration test for GET /bookings/{uid}.",
+      "cross_service": false,
+      "origin": "new"
+    },
+    {
+      "service": "event-admin",
+      "severity": "MEDIUM",
+      "title": "EventPublisher has no error handling: event-receiver failures surface as unhandled 500s with no failure logging",
+      "file": "event-admin/event_admin/adapters/event_publisher.py:45",
+      "detail": "EventPublisherClient.publish() calls response.raise_for_status() and only logs on success. Neither route that uses it (POST /api/users/id/{user_id}/change-email at routes.py:288, POST /bookings/{booking_uid}/reassign-client at routes.py:173) wraps publish() in try/except. If event-receiver is down, slow (>10s timeout), or returns 4xx/5xx (e.g. misconfigured EVENT_RECEIVER_API_KEY -> 401), the admin gets a generic 500 with no structured log of the failed publish, no retry (tenacity is a declared dependency but unused), and no way to tell whether the action was accepted or lost. This is the service's only write path, so its failure mode matters.",
+      "fix_hint": "Catch httpx.HTTPError around publish() in routes (or inside the adapter), log event_type/source/status on failure, and map to 502/503 with a clear detail. Optionally add tenacity retry for transient connection errors. Document the failure mode in docs/DEPENDENCIES.md.",
+      "cross_service": true,
+      "origin": "new"
+    },
+    {
+      "service": "event-admin",
+      "severity": "MEDIUM",
+      "title": "reassign-client publishes for arbitrary booking_uid without checking the booking exists",
+      "file": "event-admin/event_admin/routes.py:159",
+      "detail": "POST /bookings/{booking_uid}/reassign-client validates the new client email against event-users but never checks that booking_uid exists, even though event-admin has direct read access to the bookings table (IBookingsController.get_booking_details). A typo'd or stale booking_uid still produces a 202 and a booking.client_reassigned CloudEvent that event-receiver routes to events.booking.lifecycle and event-saver projects (lifecycle_projection.py maps BOOKING_CLIENT_REASSIGNED). Depending on event-saver's booking_ref resolution this either creates phantom booking/lifecycle rows or is silently dropped — in both cases the admin is told 'accepted' for an action that can never apply.",
+      "fix_hint": "Before publishing, fetch the booking via the existing controller and return 404 if it does not exist (mirroring the change-email pre-validation pattern).",
+      "cross_service": true,
+      "origin": "new"
+    },
+    {
+      "service": "event-admin",
+      "severity": "MEDIUM",
+      "title": "No brute-force protection on /auth/login; TOTP verified with no replay protection",
+      "file": "event-admin/event_admin/routes.py:58",
+      "detail": "The login endpoint has no rate limiting, lockout, or delay on repeated failures — password and TOTP guesses can be made at full speed. TOTPService.verify() (services/totp.py:7) uses pyotp's default verify with no replay tracking, so a captured 6-digit code can be reused within its 30s window; an invalid/empty totp_secret in the DB would also raise and 500 the endpoint. Failed attempts are logged (good) but nothing throttles them.",
+      "fix_hint": "Add per-account/per-IP rate limiting (e.g. slowapi or an in-memory token bucket keyed by email), track last-used TOTP counter per user to prevent replay, and guard TOTP verification against malformed secrets.",
+      "cross_service": false,
+      "origin": "new"
+    },
+    {
+      "service": "event-admin",
+      "severity": "MEDIUM",
+      "title": "admin_users table still has no real migration — DDL lives only in a model docstring",
+      "file": "event-admin/event_admin/db/models.py:11",
+      "detail": "The AdminUser model still carries its CREATE TABLE SQL inside the class docstring. admin_users is event-admin-specific (event-saver does not own it), and no Alembic migration or tracked script exists anywhere in the monorepo for it. Schema changes require untracked manual SQL.",
+      "fix_hint": "Add a minimal alembic setup (or a tracked scripts/ DDL file) for the admin_users table only, then remove the SQL from the docstring.",
+      "cross_service": true,
+      "origin": "april"
+    },
+    {
+      "service": "event-admin",
+      "severity": "MEDIUM",
+      "title": "Zero test coverage — now including the new write/publish flows",
+      "file": "event-admin/ (no tests/ directory)",
+      "detail": "Still no tests of any kind. Since April the service gained mutation endpoints (change-email, reassign-client), an EventPublisher adapter, a users cache, and the asyncio.gather rewrite of get_booking_details — the gather bug (HIGH above) would have been caught by a single integration test. Critical untested paths: login flow, JWT middleware (incl. debug bypass off), booking details, publish error paths, cache invalidation auth.",
+      "fix_hint": "Add pytest + httpx ASGI tests: middleware (debug off/on, expired/invalid token), login success/failure matrix, GET /bookings/{uid} against a test DB, publisher behavior with a mocked event-receiver (success, 401, timeout).",
+      "cross_service": false,
+      "origin": "april"
+    },
+    {
+      "service": "event-admin",
+      "severity": "MEDIUM",
+      "title": "Doc drift: 'read-only service' now publishes mutations; required EVENT_RECEIVER_* env vars and reassign endpoint undocumented",
+      "file": "event-admin/docs/SERVICE_OVERVIEW.md:15",
+      "detail": "The service now performs writes via CloudEvents but the docs still describe a strictly read-only service: (1) SERVICE_OVERVIEW 'NOT Responsible For: Writing data / Event ingestion' and 'No RabbitMQ dependencies' is no longer accurate as framed; its env-var table and CLAUDE.md's required-vars list omit EVENT_RECEIVER_URL and EVENT_RECEIVER_API_KEY, both of which are required Fields (config.py:40-41) — following the docs yields a service that fails to start. (2) docs/DEPENDENCIES.md:42 claims event-receiver downtime has 'No impact', but change-email and reassign-client now 500 when it is down. (3) docs/API_CONTRACTS.md documents change-email but not POST /bookings/{booking_uid}/reassign-client. Monorepo CLAUDE.md mandates doc updates with such changes.",
+      "fix_hint": "Update SERVICE_OVERVIEW (role, env table), CLAUDE.md required vars, DEPENDENCIES.md failure modes for event-receiver, and add the reassign-client endpoint to API_CONTRACTS.md.",
+      "cross_service": true,
+      "origin": "new"
+    },
+    {
+      "service": "event-admin",
+      "severity": "LOW",
+      "title": "Admin JWT lifetime still 24h with no revocation",
+      "file": "event-admin/event_admin/config.py:33",
+      "detail": "jwt_expire_minutes still defaults to 1440. Logout remains a documented client-side no-op (acceptable, now honestly described in the route description), so a stolen admin token is valid for up to 24 hours with no server-side revocation path.",
+      "fix_hint": "Reduce default to <=60 minutes; add refresh tokens if the frontend needs longer sessions.",
+      "cross_service": false,
+      "origin": "april"
+    },
+    {
+      "service": "event-admin",
+      "severity": "LOW",
+      "title": "Middleware ordering still implicit (CORS must remain last-added); no explanatory comment",
+      "file": "event-admin/event_admin/main.py:46",
+      "detail": "Ordering is still correct only because Starlette wraps last-added middleware outermost. Risk is reduced since April: JWTAuthMiddleware now passes OPTIONS through unconditionally (documented in its docstring), so preflight survives reordering. But a reorder would still produce 401 responses without CORS headers for non-preflight requests, and main.py has no comment explaining the constraint.",
+      "fix_hint": "Add a comment at the add_middleware block stating CORSMiddleware must be added last (outermost).",
+      "cross_service": false,
+      "origin": "april"
+    },
+    {
+      "service": "event-admin",
+      "severity": "LOW",
+      "title": "Cache invalidation token compared with non-constant-time != on an unauthenticated public path",
+      "file": "event-admin/event_admin/routes.py:335",
+      "detail": "/api/users/cache/invalidate is in JWT public_paths and authenticates via plain string comparison (auth[7:] != settings.cache_invalidation_token), which is timing-attack-prone; worst case is cache-flush DoS. The local .env uses token '1234'.",
+      "fix_hint": "Use hmac.compare_digest and set a strong token; consider rate-limiting the endpoint.",
+      "cross_service": false,
+      "origin": "new"
+    },
+    {
+      "service": "event-admin",
+      "severity": "LOW",
+      "title": "tenacity declared as a dependency but never imported",
+      "file": "event-admin/pyproject.toml:18",
+      "detail": "tenacity>=9.1.4 is in [project.dependencies] but no module imports it (grep finds zero usages). Either it was intended for EventPublisher retries (see MEDIUM publish finding) or it is dead weight.",
+      "fix_hint": "Use it for publish retries or remove it from dependencies.",
+      "cross_service": false,
+      "origin": "new"
+    },
+    {
+      "service": "event-admin",
+      "severity": "LOW",
+      "title": "Users proxy endpoints return untyped dict passthrough — no response models, fields leak by default",
+      "file": "event-admin/event_admin/routes.py:195",
+      "detail": "All /api/users/* proxy endpoints declare '-> dict' with no response_model, so whatever event-users returns (including any future internal/sensitive fields such as CRM identifiers) is forwarded verbatim to the admin frontend. This contrasts with the bookings endpoints' strict from_dto() schemas.",
+      "fix_hint": "Define minimal Pydantic response models for the proxied user payloads (id, email, role, timestamps) and re-serialize through them.",
+      "cross_service": true,
+      "origin": "new"
+    },
+    {
+      "service": "event-admin",
+      "severity": "LOW",
+      "title": "proxy_get_users_by_ids accepts untyped body; non-list 'ids' causes 500 instead of 422",
+      "file": "event-admin/event_admin/routes.py:213",
+      "detail": "The body is typed as bare dict. body.get('ids', []) may return a non-sized/non-iterable value (e.g. {'ids': 5}) so len(ids_raw) raises TypeError -> 500. A string value is silently iterated per character before failing UUID parsing. A Pydantic request model would reject these with 422.",
+      "fix_hint": "Replace the dict body with a Pydantic model: class UsersByIdsRequest(BaseModel): ids: list[uuid.UUID] = Field(max_length=200).",
+      "cross_service": false,
+      "origin": "new"
+    },
+    {
+      "service": "event-admin",
+      "severity": "LOW",
+      "title": "Settings constructed via three independent paths (module-level, lru_cache, DI)",
+      "file": "event-admin/event_admin/main.py:45",
+      "detail": "Settings() is instantiated at import time in main.py (_settings for middleware/CORS), again via lru_cache in auth.py:_get_settings (token creation), and again as the Dishka APP-scope provider in ioc.py. All read the same env, but config is evaluated at import time (hostile to tests/overrides) and three instances can drift if any path adds programmatic mutation.",
+      "fix_hint": "Provide Settings only through the DI container; pass it to middleware via app state or a factory, and inject into create_access_token call sites.",
+      "cross_service": false,
+      "origin": "new"
+    },
+    {
+      "service": "event-admin",
+      "severity": "LOW",
+      "title": "booking.client_reassigned missing from QUEUES_DIGEST.md and MESSAGE_CONTRACTS.md despite live routing rule",
+      "file": "docs/architecture/MESSAGE_CONTRACTS.md:105",
+      "detail": "event-receiver/event_receiver/config.py:105-107 routes source='admin' + type='booking.client_reassigned' to events.booking.lifecycle and event-saver's LifecycleProjection consumes it, but event-receiver/QUEUES_DIGEST.md (summary table and events.booking.lifecycle section) and docs/architecture/MESSAGE_CONTRACTS.md document only user.email.change_requested for the admin source. Monorepo CLAUDE.md requires QUEUES_DIGEST/MESSAGE_CONTRACTS updates for new event types.",
+      "fix_hint": "Add the booking.client_reassigned routing row and an event-detail section (producer event-admin via POST /event/admin, consumer event-saver, payload BookingClientReassignedPayload) to both docs.",
+      "cross_service": true,
+      "origin": "new"
+    },
+    {
+      "service": "event-admin",
+      "severity": "LOW",
+      "title": "Admin ingest API key sent as raw Authorization value and compared non-constant-time on receiver side",
+      "file": "event-admin/event_admin/adapters/event_publisher.py:42",
+      "detail": "event-admin sends the static key as a bare Authorization header (no Bearer scheme, inconsistent with every other inter-service call), and event-receiver's ingest_admin (controllers/ingest.py:238) compares it with '!=' rather than hmac.compare_digest. This key now guards the system's only admin-originated write path. Local .env value is '123'.",
+      "fix_hint": "Adopt 'Bearer <key>' for consistency, compare with hmac.compare_digest on the receiver, and use a strong key.",
+      "cross_service": true,
+      "origin": "new"
+    },
+    {
+      "service": "event-admin",
+      "severity": "LOW",
+      "title": "change_user_email publishes new_email with original casing while uniqueness check is lowercased",
+      "file": "event-admin/event_admin/routes.py:281",
+      "detail": "Uniqueness pre-validation calls get_user_by_email_role(str(body.new_email).lower(), 'client'), but the published payload sends body.new_email as typed by the admin. If event-users stores it verbatim, case-variant duplicates of the same logical address can be created downstream, and the pre-check (TOCTOU by design) gives false confidence. The old/new same-email comparison is also case-insensitive while the stored value may not be.",
+      "fix_hint": "Normalize (lowercase) new_email once at the top of the handler and use the normalized value for both validation and the published payload; ensure event-users re-validates uniqueness on consume.",
+      "cross_service": true,
+      "origin": "new"
+    }
+  ]
+}
