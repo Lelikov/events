@@ -1,0 +1,214 @@
+{
+ "findings": [
+  {
+   "service": "event-users",
+   "severity": "CRITICAL",
+   "title": "CRM sync never commits — every sync cycle's writes are silently rolled back",
+   "file": "event-users/event_users/crm/sync.py:134-152",
+   "detail": "CrmSyncRunner.run opens its own session ('async with self._sessionmaker() as session', sync.py:137) and runs CrmSyncService.sync, which performs all upserts through SqlExecutor.execute / fetch_one. SqlExecutor.execute (adapters/sql.py:23-24) no longer calls session.commit() (the April auto-commit was removed), and there is no session.commit() anywhere in sync.py or in UsersDBAdapter.upsert_user_from_crm (users_db.py:259-295). The 'async with sessionmaker()' block only closes the session on exit, which rolls back the open transaction. The session is also created outside the Dishka REQUEST scope, so the commit in AppProvider.provide_session (ioc.py:71-77) never applies. Result: the sync logs 'CRM user sync completed' (sync.py:113) while every INSERT/UPDATE it made is discarded — the users DB never receives any CRM data. The other write paths are unaffected only because they commit explicitly (consumer.py:77, webhook/sender.py:126) or via provide_session. Fix: commit at the end of each sync cycle (or per page) in CrmSyncRunner.run / CrmSyncService.sync, e.g. 'await session.commit()' after service.sync() succeeds.",
+   "cross_service": false,
+   "origin": "new",
+   "fix_hint": "Add an explicit commit in CrmSyncRunner.run after service.sync() (or per page inside sync) — e.g. pass the session down and call await session.commit() once the cycle succeeds, rolling back on failure."
+  },
+  {
+   "service": "event-users",
+   "severity": "HIGH",
+   "title": "AES decryption errors still unhandled — CRM sync breaks silently with no alerting or staleness detection",
+   "file": "event-users/event_users/crm/sync.py:32-57",
+   "detail": "Re-verified: decrypt_payload still has no error handling. base64.b64decode (sync.py:34-35) raises binascii.Error on malformed input, AES key/IV length problems raise ValueError (sync.py:37), unpadder.finalize() raises ValueError on bad PKCS7 padding (sync.py:42), and json.loads raises JSONDecodeError (sync.py:44). Any of these (wrong CRM_ENCRYPTION_KEY, rotated key, corrupted payload) propagates to CrmSyncService.sync's bare 'except Exception: logger.exception(...); raise' (sync.py:114-116), and CrmSyncRunner.run swallows it (sync.py:150-151) and sleeps the full interval. No last_successful_sync_at marker, no metric, no alert — sync can be broken for days with only an ERROR log line. The April partial-sync sub-issue (page 1 committed, page 2 failed) is currently moot only because of the separate CRITICAL no-commit bug; once committing is fixed, per-page commit boundaries must handle mid-pagination decryption failure explicitly.",
+   "cross_service": false,
+   "origin": "april",
+   "fix_hint": "Catch (binascii.Error, ValueError, json.JSONDecodeError) around decrypt_payload with cause-specific logging; record last_successful_sync_at in a status table; abort the whole cycle (no partial commit) on decryption failure."
+  },
+  {
+   "service": "event-users",
+   "severity": "HIGH",
+   "title": "No test coverage whatsoever — no tests/ directory exists",
+   "file": "event-users/event_users/crm/sync.py:32",
+   "detail": "Re-verified: 'find event-users -name \"test_*.py\"' returns nothing and there is no tests/ directory (pyproject.toml even carries tests/*.py ruff per-file-ignores for a directory that does not exist). Zero coverage for: decrypt_payload (correct/wrong key, bad base64, bad padding, bad JSON), upsert_user_from_crm idempotency and the email_source != 'admin' guard, BearerAuthMiddleware/verify_bearer_token/require_admin, EmailChangeConsumer transaction handling, WebhookOutboxSender retry/backoff state machine, and controller timezone validation. The new CRITICAL no-commit regression in CRM sync is exactly the kind of bug a single integration test would have caught.",
+   "cross_service": false,
+   "origin": "april",
+   "fix_hint": "Add pytest + pytest-asyncio; unit tests for decrypt_payload and auth; integration tests (testcontainers or sqlite-incompatible so use pg container) asserting CRM sync actually persists rows after a cycle."
+  },
+  {
+   "service": "event-users",
+   "severity": "HIGH",
+   "title": "event-notifier contact resolution relies on ILIKE substring match — can return the wrong user's contacts",
+   "file": "event-users/event_users/adapters/users_db.py:182-184",
+   "detail": "list_users builds the email filter as \"email ILIKE :email\" with values['email'] = f\"%{query.email}%\" (users_db.py:182-184). event-notifier resolves notification recipients via GET /api/users?email=<exact>&role=<role>&limit=1 (event-notifier/event_notifier/infrastructure/users_client.py:37-41) and uses items[0]'s telegram/push contact_ids for delivery. Because the match is a substring match ordered by created_at with LIMIT 1, a recipient whose email is a substring of another user's email (e.g. 'ann@x.com' vs 'joann@x.com') can resolve to the WRONG user — sending Telegram/push notifications to another person (data leak + lost notification). Additionally '_' and '%' in the search value are unescaped ILIKE wildcards ('_' is legal in email local parts), widening mismatches. docs/API_CONTRACTS.md:190-196 falsely claims this 'ensures a unique result'. An exact-match endpoint already exists (GET /api/users/roles/{role}/emails/{email}, routes.py:91-103) but event-notifier does not use it.",
+   "cross_service": true,
+   "origin": "new",
+   "fix_hint": "Point event-notifier at the exact-match endpoint (or add ?email_exact=) and escape ILIKE wildcards in list_users; update docs/API_CONTRACTS.md."
+  },
+  {
+   "service": "event-users",
+   "severity": "HIGH",
+   "title": "PATCH /api/users email updates bypass email_source/changelog guard — CRM sync will resurrect the old email as a duplicate user",
+   "file": "event-users/event_users/adapters/users_db.py:111-113",
+   "detail": "There are two email-change paths with different semantics. The RabbitMQ consumer path sets email_source='admin', writes a user_email_changelog entry, and queues a CRM webhook (consumer.py:38-75) — these power the CRM-sync guard is_email_changed_by_admin (changelog_db.py:80-93), which requires BOTH a changelog row for the old email AND users.email_source='admin'. The direct REST path PATCH /api/users/id/{user_id} (routes.py:53-73 → users_db.py:111-113) updates users.email with no email_source change, no changelog entry, and no webhook. After a REST email change, the next CRM sync (CRM still exporting the old email) finds no (old_email, role) row and no guard match, so INSERT ... ON CONFLICT creates a brand-new user with the old email — a duplicate person record with stale email that event-notifier lookups can then resolve to. The upsert's WHERE users.email_source != 'admin' (users_db.py:279) only guards the UPDATE arm, not the fresh INSERT.",
+   "cross_service": false,
+   "origin": "new",
+   "fix_hint": "Either remove email from UpdateUserRequest (force all email changes through the event/consumer path) or make the REST path set email_source='admin' + changelog + webhook outbox in the same transaction."
+  },
+  {
+   "service": "event-users",
+   "severity": "MEDIUM",
+   "title": "No exponential backoff on repeated CRM sync failures (remaining open part of April finding)",
+   "file": "event-users/event_users/crm/sync.py:134-152",
+   "detail": "Re-verified: CrmSyncRunner.run retries at a fixed cadence — 'except Exception: logger.exception(...)' then 'await asyncio.sleep(self._interval)' (sync.py:150-152). No consecutive-failure counter, no jitter, no backoff cap. The interval default is now 300s (config.py:51, the April sub-issue that was fixed), so severity is reduced from HIGH, but a sustained CRM outage still produces an identical failed request + full exception log every 5 minutes indefinitely with no escalation signal. tenacity is already in pyproject dependencies but unused.",
+   "cross_service": false,
+   "origin": "april",
+   "fix_hint": "Track consecutive failures in CrmSyncRunner; double sleep up to a max (e.g. 30 min) with jitter; emit a structured 'crm_sync_degraded' event above a threshold."
+  },
+  {
+   "service": "event-users",
+   "severity": "MEDIUM",
+   "title": "Double bearer-token validation: middleware and route dependency decode the JWT independently",
+   "file": "event-users/event_users/middleware.py:24-45",
+   "detail": "Re-verified still real: BearerAuthMiddleware.dispatch decodes the JWT for validity only (middleware.py:38-43) and verify_bearer_token decodes the same token again as a FastAPI dependency (auth.py:49-59). Both also duplicate the static-token check (_check_static_token called at middleware.py:35 and auth.py:45). Secret/algorithm changes must be applied in two places; the middleware's 'except jwt.InvalidTokenError, KeyError' (middleware.py:42, PEP 758 syntax) catches a KeyError that can never occur there (no claim access), evidence of copy-paste divergence. The April sub-issue about /health being gated is fixed (main.py:80 public_paths={'/health'}). Note read-only GET routes rely solely on the middleware, while write routes are validated twice — two different enforcement models in one service.",
+   "cross_service": false,
+   "origin": "april",
+   "fix_hint": "Drop JWT decoding from the middleware (keep it as a coarse 'header present' gate or delete it) and put verify_bearer_token on all routers via APIRouter(dependencies=[...]); single decode path."
+  },
+  {
+   "service": "event-users",
+   "severity": "MEDIUM",
+   "title": "update_user can raise unhandled IntegrityError → 500 instead of 409 on (email, role) conflict",
+   "file": "event-users/event_users/adapters/users_db.py:107-134",
+   "detail": "create_user wraps its INSERT in try/except IntegrityError and raises ConflictError (users_db.py:66-82), but update_user's dynamic UPDATE (users_db.py:124-134) has no IntegrityError handling. Changing a user's email or role to a combination that already exists violates uq_users_email_role and surfaces as a raw IntegrityError → HTTP 500. The route handler explicitly catches ConflictError to return 409 (routes.py:68-69), but on the update path that exception is never raised, so the documented 409 contract (docs/API_CONTRACTS.md:89 'Errors: 404, 409, 422') is unreachable. event-admin pre-validates uniqueness before publishing email changes, but the REST PATCH path has no such pre-check and is racy regardless.",
+   "cross_service": false,
+   "origin": "new",
+   "fix_hint": "Wrap the UPDATE in the same try/except IntegrityError → ConflictError pattern used in create_user."
+  },
+  {
+   "service": "event-users",
+   "severity": "MEDIUM",
+   "title": "Webhook delivery resets email_source='crm' immediately, disarming the CRM-sync guard before CRM has applied the change",
+   "file": "event-users/event_users/webhook/sender.py:75-81",
+   "detail": "On successful webhook POST, WebhookOutboxSender sets users.email_source back to 'crm' (sender.py:78-81, comment: 'CRM now has the new email'). But HTTP 2xx on the webhook only means the CRM received the payload, not that its /users export now reflects the new email. is_email_changed_by_admin (changelog_db.py:80-93) requires email_source='admin', so the moment it is reset, the guard that prevents the CRM sync from re-creating the old email is disabled. If the next sync cycle (every 300s; webhook poll is 1s, so reset almost always wins the race) runs before the CRM export is updated, INSERT ... ON CONFLICT re-creates a duplicate user with the old email. Also, if a second email change for the same user is pending in the outbox, delivering the first one resets email_source and unprotects the second. Fragile time-coupling to an external system's internal processing latency.",
+   "cross_service": false,
+   "origin": "new",
+   "fix_hint": "Don't reset on delivery; reset email_source (or expire the guard) only when a CRM sync cycle actually observes the new email in the export, or keep the changelog-based guard permanent and key it on old_email alone."
+  },
+  {
+   "service": "event-users",
+   "severity": "MEDIUM",
+   "title": "Outbox poller commits per row inside the FOR UPDATE SKIP LOCKED batch, releasing locks on unprocessed rows — duplicate webhook deliveries with >1 replica",
+   "file": "event-users/event_users/webhook/sender.py:126",
+   "detail": "_process_batch selects up to batch_size rows with FOR UPDATE SKIP LOCKED (sender.py:45-56), then iterates and calls 'await session.commit()' inside the for-loop after each row (sender.py:126). The first commit ends the transaction and releases the SELECT's row locks on ALL remaining rows in the batch, while the loop continues processing them unlocked. A second sender instance polling concurrently can select those still-'pending' rows and deliver the same webhooks again (no idempotency key on the CRM side). With a single replica this is latent, but it silently breaks the exact mechanism (SKIP LOCKED) that exists to make the outbox scale horizontally.",
+   "cross_service": false,
+   "origin": "new",
+   "fix_hint": "Either commit once after the loop, or mark rows status='processing' in the locking transaction, commit, then deliver and finalize each row in its own short transaction keyed by id+status."
+  },
+  {
+   "service": "event-users",
+   "severity": "MEDIUM",
+   "title": "Email-change consumer is not idempotent — redelivery duplicates changelog entries and CRM webhooks",
+   "file": "event-users/event_users/consumer.py:56-75",
+   "detail": "handle_email_change unconditionally inserts a user_email_changelog row (consumer.py:59-64) and a webhook_outbox row (consumer.py:67-75) on every message. RabbitMQ delivery is at-least-once: a redelivered user.email.change_requested (e.g. consumer crash between session.commit() at consumer.py:77 and the broker ack) re-applies the UPDATE (harmless) but also creates a second changelog entry and a second outbox row → the CRM receives the same user.email.changed webhook twice, and the audit log shows phantom changes. There is no dedup key (ce-id is read for ce-type only, consumer.py:120-121, and never persisted).",
+   "cross_service": false,
+   "origin": "new",
+   "fix_hint": "Persist the CloudEvent ce-id with a unique constraint (processed_events table or unique column on changelog/outbox) and skip already-seen ids inside the same transaction."
+  },
+  {
+   "service": "event-users",
+   "severity": "MEDIUM",
+   "title": "CRM sync issues ~4-5 sequential queries per user: per-user changelog guard, post-upsert SELECT instead of RETURNING, per-contact upserts",
+   "file": "event-users/event_users/crm/sync.py:93",
+   "detail": "Inside the page loop, every CRM user triggers: (1) is_email_changed_by_admin — one SELECT per user (sync.py:93 → changelog_db.py:80-93); (2) the upsert (users_db.py:270-282); (3) a separate 'SELECT id FROM users WHERE email=... AND role=...' instead of RETURNING id on the upsert (users_db.py:284-287, also a TOCTOU window and it returns no row when the email_source='admin' WHERE arm suppressed the update of a conflicting row — actually it selects by email/role so it finds the row, but it is still an extra round trip); (4) one INSERT per contact in _upsert_contacts (users_db.py:95-105). For 1000 CRM users that is ~4000-5000 sequential round trips per 5-minute cycle. The HTTP list_users N+1 from April was fixed with ANY(:ids) batching (users_db.py:211-222) — the same technique should be applied here.",
+   "cross_service": false,
+   "origin": "new",
+   "fix_hint": "Batch: prefetch admin-changed emails for the page in one query, use RETURNING id on the upsert, and multi-row VALUES for contacts."
+  },
+  {
+   "service": "event-users",
+   "severity": "MEDIUM",
+   "title": "Cache invalidation fires before the request transaction commits — event-admin can re-cache stale data",
+   "file": "event-users/event_users/routes.py:49",
+   "detail": "create_user and update_user routes call 'await notifier.invalidate()' (routes.py:49, routes.py:72) while the request-scoped session is still uncommitted — provide_session commits only when the Dishka REQUEST scope closes after the handler returns (ioc.py:71-77). CacheNotifier synchronously POSTs to event-admin's /api/users/cache/invalidate; if event-admin (or a concurrent reader) repopulates its users cache in the window between the invalidation and the commit, it caches the pre-change data and serves it until the next invalidation. The consumer path does this correctly: commit first (consumer.py:77), then invalidate (consumer.py:78). Also note invalidate() swallows all errors silently by design (adapters/cache_notifier.py:15-21), so a permanently misconfigured EVENT_ADMIN_URL is only visible in logs.",
+   "cross_service": false,
+   "origin": "new",
+   "fix_hint": "Commit explicitly in the handler (or move invalidation to an after-commit hook) so the order matches consumer.py: commit → invalidate."
+  },
+  {
+   "service": "event-users",
+   "severity": "LOW",
+   "title": "Email passed as URL path segment in GET /api/users/roles/{role}/emails/{email}",
+   "file": "event-users/event_users/routes.py:91",
+   "detail": "Re-verified still present. Emails legally contain '+', '.', and '%'; '%2B' vs '+' decoding differs across proxies, and dots in path segments confuse some reverse proxies. A query-param variant (e.g. GET /api/users/by-identity?email=&role=) is safer. This endpoint is also the correct exact-match lookup that event-notifier should be using (see the ILIKE finding), so fixing its shape now avoids cementing the awkward path contract.",
+   "cross_service": false,
+   "origin": "april",
+   "fix_hint": "Replace with query parameters; update event-admin's UsersClient.get_user_by_email_role and docs/API_CONTRACTS.md together."
+  },
+  {
+   "service": "event-users",
+   "severity": "LOW",
+   "title": "No index on user_contacts.channel for channel-based lookups",
+   "file": "event-users/event_users/db/models.py:70-73",
+   "detail": "Re-verified still present: user_contacts has uq_user_contacts_user_id_channel and ix_user_contacts_user_id only (models.py:70-73; migration 0001). Any reverse lookup 'find user by telegram contact_id' or per-channel dedup requires a full scan. No code currently performs such lookups, so this remains LOW — either add the index when a consumer needs it or document that channel lookups are unsupported.",
+   "cross_service": false,
+   "origin": "april",
+   "fix_hint": "Add Index('ix_user_contacts_channel_contact_id', 'channel', 'contact_id') when/if reverse lookup is needed."
+  },
+  {
+   "service": "event-users",
+   "severity": "LOW",
+   "title": "Dead code: NotFoundError, ISqlExecutorFactory + provider, execute_in_transaction, and 'processing' outbox status never set",
+   "file": "event-users/event_users/errors.py:1-5",
+   "detail": "Pre-production — these should be deleted, not kept: (1) NotFoundError (errors.py:1-5) has zero usages. (2) ISqlExecutorFactory (interfaces/sql.py:19-20) and provide_sql_executor_factory (ioc.py:95-100) are provided in the DI container but never injected anywhere. (3) SqlExecutor.execute_in_transaction (adapters/sql.py:26-34, interfaces/sql.py:16) is defined and exposed on the protocol but never called. (4) webhook_outbox status 'processing' appears in the poller's WHERE clause (webhook/sender.py:49) and in the partial index predicate (db/models.py:138, migration 0004:55) but no code ever sets status='processing' — either implement it (it would fix the multi-replica duplicate-delivery finding) or remove it from the query and index.",
+   "cross_service": false,
+   "origin": "new",
+   "fix_hint": "Delete NotFoundError, ISqlExecutorFactory and its provider, and execute_in_transaction; decide on 'processing' (implement or remove)."
+  },
+  {
+   "service": "event-users",
+   "severity": "LOW",
+   "title": "Unused dependencies in pyproject.toml: cloudevents, colorama, rich, tenacity",
+   "file": "event-users/pyproject.toml:9-24",
+   "detail": "grep over event_users/ and alembic/ finds no imports of cloudevents, colorama, rich, or tenacity. tenacity is ironic given the open no-backoff finding — it is installed but unused. Dead dependencies inflate the image and the supply-chain surface.",
+   "cross_service": false,
+   "origin": "new",
+   "fix_hint": "Remove the four packages from [project].dependencies (or actually use tenacity for the CRM sync backoff) and run uv sync."
+  },
+  {
+   "service": "event-users",
+   "severity": "LOW",
+   "title": "Static API token compared with non-constant-time equality",
+   "file": "event-users/event_users/auth.py:27",
+   "detail": "_check_static_token uses 'token == settings.api_bearer_token' (auth.py:27), reached on every request via both the middleware (middleware.py:35) and verify_bearer_token (auth.py:45). String '==' short-circuits on first differing byte, enabling timing side-channel recovery of the admin-granting static token. Low practical risk on a LAN-internal service, but secrets.compare_digest is a one-line fix.",
+   "cross_service": false,
+   "origin": "new",
+   "fix_hint": "Use hmac.compare_digest(token, settings.api_bearer_token)."
+  },
+  {
+   "service": "event-users",
+   "severity": "LOW",
+   "title": "Two independent Settings instances: module-level get_settings() bypasses the DI container at import time",
+   "file": "event-users/event_users/main.py:83",
+   "detail": "main.py builds CORS config via get_settings().cors_origins at module import (main.py:81-88), using the lru_cache singleton from auth.py:21-23, while the Dishka container constructs a separate Settings via provide_settings (ioc.py:36-43). The middleware also uses the lru_cache instance (middleware.py:33). Settings are therefore instantiated twice from the environment, and any future provider-side customization (overrides in tests, secrets injection) silently diverges from what auth/CORS/middleware see. Also means the app cannot be imported at all without a full production .env (Field(...) required vars), which blocks tooling like openapi export.",
+   "cross_service": false,
+   "origin": "new",
+   "fix_hint": "Make get_settings the single source (have the container provider call it), or wire middleware/CORS from the container inside lifespan."
+  },
+  {
+   "service": "event-users",
+   "severity": "LOW",
+   "title": ".env.example missing required JWT_SECRET_KEY and all consumer/webhook variables",
+   "file": "event-users/.env.example:1-17",
+   "detail": "config.py declares jwt_secret_key as required with no default (config.py:15, Field(...)), but .env.example does not contain JWT_SECRET_KEY — copying the example to .env yields a pydantic ValidationError at import. The example also omits CORS_ORIGINS, RABBIT_URL, IS_CONSUMER_ENABLED, CRM_WEBHOOK_URL/CRM_WEBHOOK_TOKEN/IS_WEBHOOK_ENABLED, WEBHOOK_POLL_INTERVAL_SECONDS, WEBHOOK_BATCH_SIZE, EVENT_ADMIN_URL, EVENT_ADMIN_CACHE_TOKEN, and CRM_SYNC_INTERVAL_SECONDS (config.py:18, 51-65). CLAUDE.md says 'See .env.example for required variables', which is currently false.",
+   "cross_service": false,
+   "origin": "new",
+   "fix_hint": "Regenerate .env.example from Settings (all fields, required ones marked) and keep it in CI sync."
+  },
+  {
+   "service": "event-users",
+   "severity": "LOW",
+   "title": "Documentation drift: CLAUDE.md, SERVICE_OVERVIEW, and API_CONTRACTS describe a previous version of the service",
+   "file": "event-users/docs/SERVICE_OVERVIEW.md:63-71",
+   "detail": "Multiple stale claims: (1) SERVICE_OVERVIEW Known Limitations #3 still describes per-user implicit-transaction commits (now a never-commit bug instead) and #7 claims httpx.AsyncClient is created per CRM page — fixed, the client is shared (crm/client.py:23); #5 lists COALESCE as a limitation though it is now documented as intentional (users_db.py:267-269). (2) CLAUDE.md:63 says role is 'client|volunteer' — renamed to organizer in migration 0003 and enforced as Literal['client','organizer'] in schemas; CLAUDE.md also omits the RabbitMQ consumer, webhook outbox, and email changelog subsystems entirely. (3) API_CONTRACTS.md email-changelog section documents limit 1-500 default 50 and a 404 error, but the route is ge=1,le=100 default 20 and never returns 404 for unknown users (routes.py:138-149 returns an empty list). (4) API_CONTRACTS.md:196 claims the ILIKE filter 'ensures a unique result' — false (see HIGH finding). (5) routes.py:27 comment still references 'JWTAuthMiddleware', renamed to BearerAuthMiddleware. (6) SERVICE_OVERVIEW env-var table (lines 44-59) omits RABBIT_URL, IS_CONSUMER_ENABLED, and all CRM_WEBHOOK_* variables.",
+   "cross_service": false,
+   "origin": "new",
+   "fix_hint": "Single docs pass: refresh Known Limitations against this audit, fix role values, document consumer/outbox/changelog, correct changelog endpoint params, fix the routes.py comment."
+  }
+ ]
+}

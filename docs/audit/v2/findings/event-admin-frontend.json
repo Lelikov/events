@@ -1,0 +1,204 @@
+{
+ "findings": [
+  {
+   "service": "event-admin-frontend",
+   "severity": "HIGH",
+   "title": "Global 401 interceptor fires on failed login: full page reload, 'Invalid credentials' error never shown",
+   "file": "event-admin-frontend/src/modules/shared/api.ts:61",
+   "detail": "The 401 handler added to apiRequest (api.ts:61-65) unconditionally clears localStorage and sets window.location.href = '/login' for ANY 401 response, including the response of POST /auth/login itself. event-admin returns 401 'Invalid credentials' for wrong email/password/TOTP (event-admin/event_admin/routes.py:67-76). So every failed login attempt triggers a full document reload of /login: the LoginPage catch block (LoginPage.tsx:37-38) sets the error state, but the navigation immediately reloads the page, wiping the typed email/password and never (or only for a flash) showing the error. The user gets no feedback about why login failed. Additionally api.ts:62-63 hardcodes the localStorage keys 'event_admin_jwt'/'event_admin_role', duplicating the constants in auth/storage.ts (fragile coupling).",
+   "fix_hint": "Skip the redirect for requests made with auth: false (the login call), or only redirect when a token was actually attached. Reuse removeJwtToken/removeUserRole from storage.ts instead of hardcoded keys.",
+   "cross_service": false,
+   "origin": "new"
+  },
+  {
+   "service": "event-admin-frontend",
+   "severity": "HIGH",
+   "title": "Bookings list silently truncated at 50 rows: frontend sends no limit/offset and has no pagination UI",
+   "file": "event-admin-frontend/src/modules/bookings/bookingsApi.ts:15",
+   "detail": "April finding 'No pagination on BookingsPage' re-verified: the backend has since gained limit/offset (event-admin/event_admin/routes.py:103-104, default limit=50, max 500), but the frontend was never updated. getBookings (bookingsApi.ts:15-31) builds only filter params and never passes limit/offset; BookingsPage.tsx renders all returned items with no paging controls and shows 'Найдено: {items.length}' (BookingsPage.tsx:138), which displays at most 50. With more than 50 bookings matching a filter, the remainder is invisible with no indication and no way to reach it. This is worse than the original unbounded-response issue: data now silently disappears. ParticipantsPage already implements the correct paged pattern (ParticipantsPage.tsx:25-62) to copy.",
+   "fix_hint": "Pass limit/offset from BookingsPage and add prev/next paging like ParticipantsPage; or at minimum request a higher explicit limit and show a truncation notice.",
+   "cross_service": false,
+   "origin": "april"
+  },
+  {
+   "service": "event-admin-frontend",
+   "severity": "HIGH",
+   "title": "JWT and role persisted in localStorage (XSS exfiltration risk)",
+   "file": "event-admin-frontend/src/modules/auth/storage.ts:1",
+   "detail": "Re-verified, unchanged since April: the JWT is stored under 'event_admin_jwt' and the role under 'event_admin_role' in localStorage (storage.ts:1-27), read by api.ts:35 and AuthContext.tsx:27-28. Any XSS or compromised npm dependency can read and exfiltrate the admin token, enabling full session hijacking of an admin tool that can trigger booking reassignment and email-change events (write paths now exist via /bookings/{uid}/reassign-client and /api/users/id/{id}/change-email). No CSP is configured (index.html has no CSP meta; no server headers in repo).",
+   "fix_hint": "Move to httpOnly session cookies set by event-admin, or document the accepted risk and add a strict CSP; stop storing role separately (derivable from JWT).",
+   "cross_service": true,
+   "origin": "april"
+  },
+  {
+   "service": "event-admin-frontend",
+   "severity": "MEDIUM",
+   "title": "Role model contract drift: backend requires admin for ALL endpoints, frontend still implements a 'user' role with access to dashboard/bookings",
+   "file": "event-admin-frontend/src/App.tsx:41",
+   "detail": "event-admin attaches require_admin to the whole bookings router (event-admin/event_admin/routes.py:43) and to the /api/users proxy router (routes.py:187), so a JWT with role='user' gets 403 'Admin access required' on every data endpoint. The frontend, however, still implements a two-role model: App.tsx:41-43 only blocks 'user' from /participants, AdminLayout.tsx:33 marks only 'Пользователи' adminOnly, AdminLayout.tsx:128 renders a 'Пользователь' badge, and CLAUDE.md:58 documents that 'user' can access all pages except /participants. A user-role login therefore sees Dashboard/Bookings nav but every page shows the raw English error 'Admin access required'. Either the 'user' role is dead (delete all role branching in the frontend and the role claim handling) or the backend over-restricts; the two sides disagree.",
+   "fix_hint": "Pre-prod: pick one model. Simplest: drop the 'user' role entirely (frontend role branching, storage of role, backend role claim) since require_admin gates everything anyway.",
+   "cross_service": true,
+   "origin": "new"
+  },
+  {
+   "service": "event-admin-frontend",
+   "severity": "MEDIUM",
+   "title": "userBatchLoader cache is never invalidated: stale user email shown after email-change/reassign flows (and cache grows unbounded)",
+   "file": "event-admin-frontend/src/modules/shared/userBatchLoader.ts:9",
+   "detail": "The module-level Map cache (userBatchLoader.ts:9) has no TTL and no invalidation API; getCachedUser/loadUser always return the first-fetched record for the rest of the SPA session. After EmailChangeModal successfully requests an email change or reassignment, onSuccess re-fetches booking details (BookingDetailsPage.tsx:611-614) but every UserInfo still resolves the old email from the stale cache, and BookingDetailsPage.tsx:372-376 seeds the modal's 'current email' from that same stale cache — so the admin keeps seeing the pre-change email indefinitely (even after the async RabbitMQ update lands) until a hard reload. Users missing from a by-ids response are also not negative-cached (userBatchLoader.ts:32-34), so each new UserInfo mount re-requests unknown IDs.",
+   "fix_hint": "Add an invalidate(userId)/clear() export and call it from EmailChangeModal onSuccess; optionally add a TTL and negative caching.",
+   "cross_service": false,
+   "origin": "new"
+  },
+  {
+   "service": "event-admin-frontend",
+   "severity": "MEDIUM",
+   "title": "Vite dev proxy routes /api/users directly to event-users, contradicting the event-admin proxy architecture; dead config with current .env",
+   "file": "event-admin-frontend/vite.config.ts:13",
+   "detail": "vite.config.ts:13-24 proxies '/api/users' to VITE_USERS_API_BASE_URL (event-users) and '/api' to VITE_API_BASE_URL. But all code now sends /api/users/* through apiRequest, whose production routing is event-admin's authenticated proxy (require_admin, caching) at routes.py:187-316. Two failure modes: (a) with VITE_API_BASE_URL set (as in .env), apiRequest builds absolute URLs to another origin, so the dev proxy is never used — dead config; (b) with VITE_API_BASE_URL empty, requests become relative and the proxy sends /api/users straight to event-users, bypassing event-admin's admin RBAC proxy and hitting a service whose JWT middleware uses a different secret/auth model — dev behavior diverges from production. VITE_USERS_API_BASE_URL is referenced nowhere else in src/, making it effectively a dead env var.",
+   "fix_hint": "Delete the '/api/users' proxy rule and VITE_USERS_API_BASE_URL; proxy everything ('/api', '/auth', '/bookings') to event-admin only.",
+   "cross_service": false,
+   "origin": "new"
+  },
+  {
+   "service": "event-admin-frontend",
+   "severity": "LOW",
+   "title": "CLAUDE.md still documents VITE_USERS_API_TOKEN and usersApiRequest, which no longer exist in code",
+   "file": "event-admin-frontend/CLAUDE.md:42",
+   "detail": "Remnant of the April CRITICAL 'VITE_USERS_API_TOKEN docs/code mismatch'. The code side is resolved (all user lookups now go through event-admin's authenticated /api/users proxy via apiRequest; there is no usersApiRequest function and no static token anywhere in src/), so the security ambiguity is gone — but the docs were never updated: CLAUDE.md:42 ('calls event-users backend (VITE_USERS_API_BASE_URL) with static bearer token (VITE_USERS_API_TOKEN)'), CLAUDE.md:52 ('usersApiRequest ... uses VITE_USERS_API_BASE_URL and VITE_USERS_API_TOKEN'), and docs/API_CONTRACTS.md:118 ('usersApiRequest() in participantsApi.ts:42-44'). Also CLAUDE.md:16 has a typo header \"## Environment Variables'yl\".",
+   "fix_hint": "Rewrite the API-layer and env-var sections of CLAUDE.md and API_CONTRACTS.md to describe the event-admin proxy model; remove all VITE_USERS_API_TOKEN mentions.",
+   "cross_service": false,
+   "origin": "april"
+  },
+  {
+   "service": "event-admin-frontend",
+   "severity": "LOW",
+   "title": "Service docs describe pre-fix architecture: fixed bugs listed as current, new endpoints undocumented",
+   "file": "event-admin-frontend/docs/API_CONTRACTS.md:161",
+   "detail": "docs/API_CONTRACTS.md:161-167 documents 'GET /api/users/{id} (BUG -- should be /api/users/id/{id})' — that call no longer exists; :91 documents the removed 404-retry as a current bug; :207-211 shows a sequence diagram of the removed N+1 per-user fetch. docs/SERVICE_OVERVIEW.md:80-90 'Known Limitations' lists the wrong-URL bug, missing 401 handling, the 404 retry, and the N+1 — all fixed in code. docs/DEPENDENCIES.md:8,39,52 describes a direct frontend→event-users dependency that no longer exists. None of the docs cover the actually-used endpoints POST /api/users/by-ids (userBatchLoader.ts:21), POST /api/users/id/{id}/change-email and GET .../email-changelog (emailChangeApi.ts:24,36), or POST /bookings/{uid}/reassign-client (emailChangeApi.ts:17), nor the EmailChangeModal feature. README.md additionally documents a never-implemented proposed contract POST /auth/totp/login with a 'login' field and claims the backend has no auth endpoints, contradicting the real POST /auth/login.",
+   "fix_hint": "Regenerate API_CONTRACTS, DEPENDENCIES, SERVICE_OVERVIEW from current code; delete the stale 'proposed contract' section of README.",
+   "cross_service": false,
+   "origin": "new"
+  },
+  {
+   "service": "event-admin-frontend",
+   "severity": "LOW",
+   "title": "formatDateTime passes unvalidated timeZone from localStorage to Intl.DateTimeFormat — corrupt value blanks the whole app (no error boundary)",
+   "file": "event-admin-frontend/src/modules/shared/format.ts:8",
+   "detail": "Re-verified, unchanged since April: format.ts:8-12 passes the timeZone string straight into Intl.DateTimeFormat; TimeZoneContext.getStoredTimeZone (TimeZoneContext.tsx:23-25) returns whatever is in localStorage 'event_admin_time_zone' with no validation. A malformed value throws RangeError ('Invalid time zone') during render; since the app has no React error boundary (main.tsx renders App directly), every page that formats a date white-screens until the user manually clears localStorage.",
+   "fix_hint": "Validate the stored zone on load (e.g. try new Intl.DateTimeFormat with it, fall back to default) or wrap formatDateTime in try/catch falling back to UTC.",
+   "cross_service": false,
+   "origin": "april"
+  },
+  {
+   "service": "event-admin-frontend",
+   "severity": "LOW",
+   "title": "Role stored redundantly in localStorage separate from the JWT claim",
+   "file": "event-admin-frontend/src/modules/auth/storage.ts:17",
+   "detail": "Re-verified, unchanged since April: storage.ts:17-27 persists 'event_admin_role' separately while the JWT already carries a role claim (event-admin/event_admin/auth.py:28). AuthContext.tsx:28,31-34 reads/writes the separate key. Editing the localStorage key desynchronizes the client-rendered role from the JWT (UI shows admin nav, backend returns 403). storage.ts:2 even contains a comment acknowledging this. The dev-bypass path now decodes role from the token (LoginPage.tsx:98-99), proving the derivation approach works.",
+   "fix_hint": "Decode role from the stored JWT payload everywhere; delete the event_admin_role key and setUserRole/getUserRole/removeUserRole.",
+   "cross_service": false,
+   "origin": "april"
+  },
+  {
+   "service": "event-admin-frontend",
+   "severity": "LOW",
+   "title": "Dev bypass button crashes if VITE_DEV_BYPASS_JWT is unset or not a JWT; atob cannot decode base64url payloads",
+   "file": "event-admin-frontend/src/modules/auth/LoginPage.tsx:98",
+   "detail": "The April dev-bypass findings (no MODE guard, hardcoded admin role) are fixed (import.meta.env.DEV guard at LoginPage.tsx:93,110; role decoded from token). New defect in the fix: LoginPage.tsx:98 runs JSON.parse(atob(DEV_BYPASS_JWT.split('.')[1])) inside the onClick with no error handling. The fallback default 'dev-bypass-jwt-token' (LoginPage.tsx:8) contains no '.', so split('.')[1] is undefined and atob('undefined')/JSON.parse throws — clicking the button with the env var unset throws an unhandled exception and does nothing visible. JWT payloads are also base64url-encoded; atob fails on '-'/'_' characters in real tokens.",
+   "fix_hint": "Wrap in try/catch falling back to role 'user', and base64url-normalize before atob (replace -/_ and pad).",
+   "cross_service": false,
+   "origin": "new"
+  },
+  {
+   "service": "event-admin-frontend",
+   "severity": "LOW",
+   "title": "npm run lint fails with 3 errors",
+   "file": "event-admin-frontend/src/modules/shared/UserInfo.tsx:31",
+   "detail": "eslint exits non-zero: react-hooks/set-state-in-effect at UserInfo.tsx:31 (synchronous setUser(cached) in effect body causing cascading renders) and react-refresh/only-export-components at AuthContext.tsx:66 and TimeZoneContext.tsx:63 (hooks exported from component files break Fast Refresh). The documented lint gate (CLAUDE.md commands) is red, so new violations cannot be caught. Verified by running `npm run lint` (3 errors); `npm run build` (tsc -b && vite build) passes.",
+   "fix_hint": "Seed UserInfo state from getCachedUser in the useState initializer only (already done at line 22) and drop the synchronous setUser branch, or restructure; move useAuth/useTimeZone hooks to separate files or disable the react-refresh rule for context files.",
+   "cross_service": false,
+   "origin": "new"
+  },
+  {
+   "service": "event-admin-frontend",
+   "severity": "LOW",
+   "title": "Error translation keyed on exact backend English detail strings — fragile cross-service coupling",
+   "file": "event-admin-frontend/src/modules/participants/EmailChangeModal.tsx:20",
+   "detail": "ERROR_MESSAGES (EmailChangeModal.tsx:20-25) maps human-readable backend detail strings ('Email already in use by another client', 'Only client emails can be changed', etc.) to Russian translations. These must byte-match the literals in event-admin/event_admin/routes.py:265,271,278,285; any wording change there silently degrades the UI to raw English. The reassign flow also keys on err.status === 409 (EmailChangeModal.tsx:86), which is fine, but the string map should be replaced by machine-readable error codes in the contract. Note routes.py:168 returns 404 detail 'Client with this email not found' which has no translation entry at all.",
+   "fix_hint": "Have event-admin return stable error codes (e.g. detail: {code: 'email_in_use'}) and map codes, not prose.",
+   "cross_service": true,
+   "origin": "new"
+  },
+  {
+   "service": "event-admin-frontend",
+   "severity": "LOW",
+   "title": "bookingUid not URL-encoded in reassignBookingClient (inconsistent with getBookingDetails)",
+   "file": "event-admin-frontend/src/modules/participants/emailChangeApi.ts:17",
+   "detail": "emailChangeApi.ts:17 interpolates bookingUid into `/bookings/${bookingUid}/reassign-client` without encodeURIComponent, while bookingsApi.ts:34 and the navigation calls (BookingsPage.tsx:159, DashboardPage.tsx:82) consistently encode it. A uid containing '/' or '?' (not expected from cal.com but unvalidated) would hit the wrong route.",
+   "fix_hint": "Use encodeURIComponent(bookingUid) for consistency.",
+   "cross_service": false,
+   "origin": "new"
+  },
+  {
+   "service": "event-admin-frontend",
+   "severity": "LOW",
+   "title": "Duplicated booking-details load logic in BookingDetailsPage",
+   "file": "event-admin-frontend/src/modules/bookings/BookingDetailsPage.tsx:277",
+   "detail": "loadBookingDetails (BookingDetailsPage.tsx:277-288) and the inner load() in the useEffect (lines 293-310) are near-identical copies of the same fetch/setState/error sequence; the only difference is the cancelled guard. The standalone copy exists solely for EmailChangeModal onSuccess (line 613). Pre-prod duplication that will drift.",
+   "fix_hint": "Extract one load function (e.g. useCallback with a cancellation token or a reload counter state that the effect depends on) and delete the duplicate.",
+   "cross_service": false,
+   "origin": "new"
+  },
+  {
+   "service": "event-admin-frontend",
+   "severity": "LOW",
+   "title": "Dead code: public/env-config.js is referenced nowhere",
+   "file": "event-admin-frontend/public/env-config.js:1",
+   "detail": "public/env-config.js sets window._env_ = {} (a runtime-env-injection stub) but index.html never includes it and no source file reads window._env_ (verified by grep over src/, index.html, docs). It is git-tracked and shipped to dist for nothing. Pre-prod: delete it. The stray nested build dir event-admin-frontend/event-admin-frontend/.vite/ is untracked junk worth removing too.",
+   "fix_hint": "Delete public/env-config.js and the stray nested event-admin-frontend/ directory.",
+   "cross_service": false,
+   "origin": "new"
+  },
+  {
+   "service": "event-admin-frontend",
+   "severity": "LOW",
+   "title": "else-if chain violates the project no-elif/no-else convention",
+   "file": "event-admin-frontend/src/modules/shared/ParticipantPicker.tsx:74",
+   "detail": "ParticipantPicker.tsx:71-77 handleKeyDown uses `if (e.key === 'Escape') {...} else if (e.key === 'Backspace' ...)`, violating the documented convention (CLAUDE.md Conventions: 'No else if — use early returns, guard clauses, or mapping objects'). Nested double ternaries in BookingDetailsPage.tsx:42 and :46 (getAccessTitle/getAccessIcon) are the same pattern in expression form and would read better as mapping objects.",
+   "fix_hint": "Early-return per key in handleKeyDown; replace the nested ternaries with a Record<kind, string> map.",
+   "cross_service": false,
+   "origin": "new"
+  },
+  {
+   "service": "event-admin-frontend",
+   "severity": "LOW",
+   "title": "No .env.example and no runtime validation of required env vars",
+   "file": "event-admin-frontend/.env:1",
+   "detail": "Re-verified, unchanged since April: only a gitignored local .env exists (verified: `git ls-files` does not include .env); there is no .env.example, and api.ts:3 silently defaults VITE_API_BASE_URL to '' producing relative requests against the static host when unset. CLAUDE.md/SERVICE_OVERVIEW additionally document the now-misleading VITE_USERS_API_BASE_URL as required.",
+   "fix_hint": "Add .env.example with VITE_API_BASE_URL, VITE_ENABLE_DEV_BYPASS_LOGIN, VITE_DEV_BYPASS_JWT; warn at startup if VITE_API_BASE_URL is empty in production builds.",
+   "cross_service": false,
+   "origin": "april"
+  },
+  {
+   "service": "event-admin-frontend",
+   "severity": "LOW",
+   "title": "Unknown routes render a pseudo-404 inside AdminLayout",
+   "file": "event-admin-frontend/src/App.tsx:58",
+   "detail": "Re-verified, unchanged since April: parseRoute returns {name:'not-found'} (routing.ts:31) and App.tsx:58-63 renders the 'Страница не найдена' card inside the full authenticated AdminLayout with sidebar; the message does not include the offending path. Acceptable for an internal tool but unchanged since the April audit flagged it.",
+   "fix_hint": "Render a standalone 404 view (or include the current pathname in the message).",
+   "cross_service": false,
+   "origin": "april"
+  },
+  {
+   "service": "event-admin-frontend",
+   "severity": "LOW",
+   "title": "Zero test coverage; no test runner configured",
+   "file": "event-admin-frontend/package.json:6",
+   "detail": "Re-verified, unchanged since April: package.json has no test script or test dependencies (only dev/build/lint/preview) and there are no test files anywhere under src/. Critical regressions this audit found (failed-login reload, silent 50-row truncation) and previously found (wrong getUserById URL, 404 retry) would all have been caught by a handful of unit tests on apiRequest, parseRoute, and the API URL builders. New untested critical paths: userBatchLoader batching/caching semantics and the EmailChangeModal 409→reassign flow.",
+   "fix_hint": "Add Vitest + React Testing Library; cover apiRequest (incl. 401 on login vs authed calls), userBatchLoader batching/cache, parseRoute, and EmailChangeModal flow.",
+   "cross_service": false,
+   "origin": "april"
+  }
+ ]
+}

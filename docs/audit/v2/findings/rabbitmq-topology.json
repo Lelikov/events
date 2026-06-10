@@ -1,0 +1,114 @@
+{
+ "findings": [
+  {
+   "service": "event-booking",
+   "severity": "CRITICAL",
+   "title": "event-booking and event-saver are competing consumers on the same queue events.booking.lifecycle — each booking event reaches only one of them",
+   "file": "event-booking/event_booking/main.py:33",
+   "detail": "event-booking subscribes to the queue from settings.booking_lifecycle_queue, default 'events.booking.lifecycle' (event-booking/event_booking/config.py:24, consumer.register at main.py:33). event-saver subscribes to ALL its topology_queues, which include the very same 'events.booking.lifecycle' (event-saver/event_saver/config.py:10-29 + adapters/consumer.py:39-53, queue_names=settings.topology_queues in ioc.py:262). With two services consuming one queue, RabbitMQ round-robins deliveries: roughly half of booking.created/rescheduled/reassigned/cancelled events are persisted by event-saver but never orchestrated by event-booking (no chat, no Jitsi URL, no short link), and the other half are orchestrated but never persisted. A topic exchange delivers one copy per BOUND QUEUE, not per consumer — fan-out requires a dedicated queue per service bound to the same routing key. This silently breaks both the audit trail and the booking enrichment pipeline.",
+   "fix_hint": "Give event-booking its own queue (e.g. events.booking.lifecycle.booking) bound to the 'events' exchange with routing key events.booking.lifecycle (or rename saver's to events.booking.lifecycle.saver). Update event-receiver's RabbitTopologyManager queue set, both consumers, QUEUES_DIGEST.md files and docs/architecture/MESSAGE_CONTRACTS.md consistently.",
+   "cross_service": true,
+   "origin": "new"
+  },
+  {
+   "service": "event-booking",
+   "severity": "CRITICAL",
+   "title": "events.booking.lifecycle declared with inequivalent arguments by event-booking vs event-receiver/event-saver — 406 PRECONDITION_FAILED at startup",
+   "file": "event-booking/event_booking/consumer.py:54-61",
+   "detail": "event-booking declares the queue with arguments {'x-max-priority': 10, 'x-dead-letter-exchange': 'events.booking.lifecycle.dlq'} and NO x-dead-letter-routing-key (consumer.py:57-60). event-receiver declares the same queue with {'x-max-priority': 10, 'x-dead-letter-exchange': 'events.dlx', 'x-dead-letter-routing-key': 'events.booking.lifecycle.dlq'} (event-receiver/event_receiver/adapters/publisher.py:199-208), and event-saver declares it identically to receiver (event-saver/event_saver/adapters/consumer.py:41-51). RabbitMQ rejects redeclaration of an existing queue with different arguments: whichever service starts second gets channel error 406 PRECONDITION_FAILED and fails to consume. Additionally, event-booking's DLX value 'events.booking.lifecycle.dlq' is a QUEUE name, not an exchange — that exchange is never declared anywhere, so if event-booking's declaration wins (fresh broker), every nacked/rejected message is dead-lettered into a nonexistent exchange and silently destroyed.",
+   "fix_hint": "Use the exact same arguments as receiver/saver: x-dead-letter-exchange='events.dlx', x-dead-letter-routing-key=f'{queue_name}.dlq', x-max-priority=10. Better: extract a single queue-arguments constant into event-schemas (or a shared topology module) so all declarers stay byte-identical.",
+   "cross_service": true,
+   "origin": "new"
+  },
+  {
+   "service": "event-notifier",
+   "severity": "CRITICAL",
+   "title": "events.notification.commands declared with inequivalent arguments by event-notifier vs event-receiver; dead letters from it are unroutable",
+   "file": "event-notifier/event_notifier/adapters/consumer.py:33-39",
+   "detail": "event-notifier declares the queue with arguments={'x-dead-letter-exchange': 'events.dlx'} only — missing both 'x-max-priority': 10 and 'x-dead-letter-routing-key' that event-receiver's RabbitTopologyManager sets on the same queue (event-receiver/event_receiver/adapters/publisher.py:199-208; events.notification.commands is in receiver's routing destinations via config.py:65-68). Consequences: (1) inequivalent-args redeclaration → 406 PRECONDITION_FAILED, the second service to start crashes its channel; (2) if notifier's declaration wins, dead-lettered messages keep their original routing key 'events.notification.commands', but events.dlx only has bindings for '*.dlq' keys (publisher.py:228), so every dead-lettered notification command is dropped at the DLX — unmatched topic-exchange messages are discarded; (3) without x-max-priority the per-message priority that event-receiver always publishes (publisher.py:142) is ignored on this queue.",
+   "fix_hint": "Declare with the identical argument set: {'x-max-priority': 10, 'x-dead-letter-exchange': 'events.dlx', 'x-dead-letter-routing-key': 'events.notification.commands.dlq'}.",
+   "cross_service": true,
+   "origin": "new"
+  },
+  {
+   "service": "event-notifier",
+   "severity": "HIGH",
+   "title": "Stale .env.example still points NOTIFICATIONS_QUEUE at orphaned phantom queue events.notifications",
+   "file": "event-notifier/.env.example:4",
+   "detail": "The C-3 queue-mismatch finding was fixed in code (config.py:18 now defaults to 'events.notification.commands') and event-receiver no longer routes anything to 'events.notifications', but .env.example:4 still ships NOTIFICATIONS_QUEUE=events.notifications. Any deployment that copies .env.example (the documented setup path) overrides the correct default and consumes a queue that receives ZERO messages — notification.send_requested commands pile up unconsumed in events.notification.commands and no email/Telegram notifications are ever sent. The consumer module docstring also still says 'events.notifications' (adapters/consumer.py:1). The open AUDIT.md recommendation ('update .env.example accordingly') was never completed; docs/architecture/ONBOARDING.md:221 even warns 'Do not configure NOTIFICATIONS_QUEUE=events.notifications' while the example file does exactly that.",
+   "fix_hint": "Change .env.example to NOTIFICATIONS_QUEUE=events.notification.commands, fix the consumer.py docstring, and close the AUDIT.md item. Optionally delete the orphaned events.notifications queue from any existing brokers.",
+   "cross_service": false,
+   "origin": "april"
+  },
+  {
+   "service": "event-receiver",
+   "severity": "HIGH",
+   "title": "No service consumes any DLQ, and DLQs have a 24h TTL with no further dead-lettering — dead letters are permanently deleted",
+   "file": "event-receiver/event_receiver/adapters/publisher.py:219-228",
+   "detail": "RabbitTopologyManager declares '{queue}.dlq' for every topology queue with arguments={'x-message-ttl': 86400000} (publisher.py:224) and binds them to events.dlx. A repo-wide search shows no subscriber on any '*.dlq' queue in event-saver, event-booking, event-notifier, event-users, or event-receiver — the DLQs are pure write-only parking. Because the DLQs themselves have a 24-hour TTL and no x-dead-letter-exchange of their own, expired messages are not re-routed anywhere: every message that lands in a DLQ (consumer nack after parse/save failure, e.g. event-saver re-raises in adapters/consumer.py:85,130) is silently and irrecoverably destroyed after 24h. A DLQ nobody drains plus TTL equals scheduled data loss with no alerting and no redrive path.",
+   "fix_hint": "Either remove the x-message-ttl from DLQs (let them retain until manually redriven) and add monitoring/alerting on DLQ depth, or add a redrive worker / ops runbook. At minimum document the 24h loss window in docs/audit.",
+   "cross_service": false,
+   "origin": "new"
+  },
+  {
+   "service": "event-users",
+   "severity": "HIGH",
+   "title": "event-users subscribes to events.user.email without an exchange — it never binds the queue, relying on event-receiver startup ordering",
+   "file": "event-users/event_users/consumer.py:118",
+   "detail": "EmailChangeConsumer.start() registers the subscriber as self._broker.subscriber(self._queue) with no exchange argument (consumer.py:118), so FastStream only declares the queue and consumes it via the default exchange — it creates NO binding to the 'events' topic exchange. Messages reach events.user.email solely because event-receiver's RabbitTopologyManager happens to bind it (publisher.py:210; events.user.email is in receiver's routing destinations, config.py:99-103). On a fresh broker where event-users starts before event-receiver, admin 'user.email.change_requested' events are published to the topic exchange with routing key events.user.email, match no binding, and are silently dropped (no mandatory flag). The queue arguments themselves (consumer.py:110-115) match receiver's declaration exactly, so no inequivalent-args risk — only the missing binding.",
+   "fix_hint": "Pass the RabbitExchange('events', topic, durable) and routing_key='events.user.email' to the subscriber so event-users owns its own binding, like every other consumer does.",
+   "cross_service": false,
+   "origin": "new"
+  },
+  {
+   "service": "event-saver",
+   "severity": "MEDIUM",
+   "title": "Consumer services reference DLX events.dlx in queue arguments but never declare it — dead letters dropped if event-receiver has not run",
+   "file": "event-saver/event_saver/adapters/consumer.py:48",
+   "detail": "event-saver (adapters/consumer.py:48), event-notifier (adapters/consumer.py:38) and event-users (consumer.py:112) all set x-dead-letter-exchange='events.dlx' on the queues they declare, but only event-receiver's RabbitTopologyManager declares the events.dlx exchange and the '*.dlq' queues bound to it (publisher.py:193-194, 219-228). RabbitMQ accepts a queue declaration whose DLX does not exist, but at dead-letter time messages routed to a nonexistent exchange are dropped. So on a fresh broker, or in any deployment where a consumer starts and nacks messages before event-receiver runs ensure_topology(), dead letters vanish with no trace. Topology ownership is implicitly centralized in the ingress service while every consumer depends on it — a hidden startup-order coupling that nothing enforces or documents.",
+   "fix_hint": "Make every queue-declaring service idempotently declare events.dlx and its own '{queue}.dlq' (declarations are idempotent when args match), or extract topology bootstrap into a shared module/init job and document the ordering in docs/architecture/ARCHITECTURE.md.",
+   "cross_service": true,
+   "origin": "new"
+  },
+  {
+   "service": "event-saver",
+   "severity": "MEDIUM",
+   "title": "Duplicate BOOKING_REMINDER_SENT routing rules in event-saver config; saver's rule list is a stale, divergent copy of receiver's routing table used only to derive queue names",
+   "file": "event-saver/event_saver/config.py:30-39",
+   "detail": "Saver's _default_route_rules() routes EventType.BOOKING_REMINDER_SENT to 'events.booking.lifecycle' (lines 30-34) AND to 'events.booking.reminder' (lines 35-39). Under first-match semantics the second rule is dead. This is the still-open HIGH item in event-saver/docs/AUDIT.md (lines 15-16) — re-verified as present. In practice saver never routes anything: the rules are only used to compute topology_queues (config.py:125-133), i.e. the set of queues it subscribes to, so both destinations end up subscribed and data still flows (event-receiver, the actual router, sends reminder_sent only to events.booking.reminder, event-receiver/config.py:34-38). But maintaining a parallel pseudo-routing table whose patterns are never evaluated (saver uses source_pattern='*' where receiver uses 'booking') is pure drift risk: a new destination added in receiver will silently not be persisted until someone remembers to mirror it here.",
+   "fix_hint": "Replace event-saver's RouteRule list with an explicit list[str] of queue names to subscribe to (it already supports RABBIT_TOPOLOGY_QUEUES); delete routing.py from saver as dead code per pre-production legacy-removal policy, and close the AUDIT.md item.",
+   "cross_service": false,
+   "origin": "april"
+  },
+  {
+   "service": "event-notifier",
+   "severity": "HIGH",
+   "title": "No explicit ack policy and unparseable messages re-raised — poison-pill loop whose only exit is the broken DLX path",
+   "file": "event-notifier/event_notifier/adapters/consumer.py:40-62",
+   "detail": "Re-verified open item from event-notifier/docs/AUDIT.md (HIGH #6, recap line 242): the subscriber still has no explicit ack_policy (TODO at consumer.py:40), and _handle re-raises on CloudEvent parse failure (consumer.py:60-62). Depending on FastStream defaults this either requeues the malformed message forever (poison loop hot-spinning the consumer) or rejects it into the DLX — and per the inequivalent-args finding, the notifier-declared queue has no x-dead-letter-routing-key, so the rejected message is dropped at events.dlx with no binding match. Either way there is no safe disposal path for bad messages on the notification-critical queue.",
+   "fix_hint": "Set an explicit ack policy: catch parse errors, log, and ACK (or publish to a quarantine queue); nack-without-requeue only transient failures once the DLX routing key is fixed so dead letters actually land in events.notification.commands.dlq.",
+   "cross_service": false,
+   "origin": "april"
+  },
+  {
+   "service": "event-users",
+   "severity": "MEDIUM",
+   "title": "events.user.email is always declared and bound by event-receiver, but the consumer is off by default — unbounded accumulation",
+   "file": "event-users/event_users/config.py:59",
+   "detail": "is_consumer_enabled defaults to False (config.py:59), so by default event-users never starts EmailChangeConsumer (main.py:48-51). Meanwhile event-receiver unconditionally declares and binds events.user.email (it is a routing destination, event-receiver/config.py:99-103, declared in publisher.py:197-210) and routes every admin 'user.email.*' event into it. With the default flag, those messages accumulate forever: the queue has no TTL and no max-length, and its priority/DLX arguments do not bound growth. In a default-config deployment the admin email-change feature silently does nothing while filling the broker.",
+   "fix_hint": "Default is_consumer_enabled to True (the queue exists unconditionally), or gate the receiver-side routing rule and queue declaration on the same deployment decision; add a max-length or TTL only if intentional.",
+   "cross_service": true,
+   "origin": "new"
+  },
+  {
+   "service": "event-saver",
+   "severity": "LOW",
+   "title": "events.notification.commands and events.user.email bypass event-saver entirely — no audit-trail persistence for command events",
+   "file": "event-saver/event_saver/config.py:8-90",
+   "detail": "Saver's subscription set (derived from its routing-rule destinations) covers events.booking.lifecycle, events.booking.reminder, events.chat.*, events.meeting.lifecycle, events.notification.delivery, events.jitsi, events.mail, events.chat and events.unrouted — but not events.notification.commands or events.user.email, which event-receiver routes to (event-receiver/config.py:65-68, 99-103). Since a topic exchange delivers one copy per bound queue and each of these routing keys has exactly one queue, notification.send_requested commands (published by event-booking's ReminderScheduler) and user.email.change_requested events are never written to the events table, leaving a gap in the system-of-record that event-admin exposes. If this is intentional (commands vs facts), it should be documented; if not, saver needs its own queues bound to those routing keys.",
+   "fix_hint": "Document the commands-are-not-persisted decision in docs/architecture/MESSAGE_CONTRACTS.md, or add saver-owned queues (e.g. events.notification.commands.saver) bound to the same routing keys.",
+   "cross_service": true,
+   "origin": "new"
+  }
+ ]
+}
