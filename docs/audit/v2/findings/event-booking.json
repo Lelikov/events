@@ -1,0 +1,304 @@
+{
+  "findings": [
+    {
+      "service": "event-booking",
+      "severity": "CRITICAL",
+      "title": "APP-scoped AsyncSession shared by all concurrent messages and the scheduler",
+      "file": "event-booking/event_booking/ioc.py:55",
+      "detail": "get_session is provided at Scope.APP, so a single SQLAlchemy AsyncSession is shared by every concurrently processed RabbitMQ message AND the background ReminderScheduler. AsyncSession is not safe for concurrent use: interleaved execute()/commit() calls raise InvalidRequestError ('session is already in a transaction' / 'another operation is in progress' from asyncpg) and one handler's commit() can commit another handler's half-finished writes (e.g. the two-statement delete in delete_booking_and_attendee_by_booking_id). Additionally there is no rollback anywhere: after the first SQL error the shared session is permanently wedged in PendingRollbackError and every subsequent message fails until restart. The TODO at the top of ioc.py acknowledges this.",
+      "fix_hint": "Provide AsyncSession/SqlExecutor/BookingDatabaseAdapter/BookingController at Scope.REQUEST and open a Dishka request-scope container per message in the subscriber (container().enter() in handle_message); use 'async with session.begin()' per unit of work and rollback on exception. Keep a dedicated session factory call inside ReminderScheduler iterations.",
+      "cross_service": false,
+      "origin": "new"
+    },
+    {
+      "service": "event-booking",
+      "severity": "CRITICAL",
+      "title": "Constraints analyzer counts the booking being validated against itself: every new booking is rejected and DELETED",
+      "file": "event-booking/event_booking/controllers/booking.py:48",
+      "detail": "handle_created loads the new booking FROM the cal.com DB (it already exists there), then get_attendee_bookings_by_email returns ALL attendee bookings for the client email — including the booking under validation (no 'b.id != :booking_id' exclusion in _GET_ATTENDEE_BOOKINGS_SQL, adapters/db.py:69). With cal.com auto-confirm the new booking has status 'accepted' and a future start_time, so analyze_on_create's future_active check (constraints.py:17-25) matches the booking itself and rejects with 'Active future booking already exists'; even if that check were fixed, the month/year/min-interval checks are all off-by-one for the same reason (min-interval would see delta_days=0 against itself). The rejection path then calls delete_booking_and_attendee_by_booking_id, physically deleting the legitimate booking from cal.com. With IS_ENABLE_BOOKING_CONSTRAINTS=true, 100% of new bookings are destroyed.",
+      "fix_hint": "Exclude the current booking in SQL (AND b.id != :booking_id) or filter attendee_bookings by booking_uid != booking.uid before analysis; add a regression test for self-inclusion.",
+      "cross_service": false,
+      "origin": "new"
+    },
+    {
+      "service": "event-booking",
+      "severity": "CRITICAL",
+      "title": "event-booking and event-saver are competing consumers of the same queue — each sees only ~half of booking events",
+      "file": "event-booking/event_booking/consumer.py:55",
+      "detail": "event-booking subscribes to queue events.booking.lifecycle. event-saver also consumes that exact queue (event-saver/event_saver/adapters/consumer.py builds subscribers for every routing destination, which includes events.booking.lifecycle per event-saver/event_saver/config.py:11-33). Two different services consuming one queue means RabbitMQ round-robins deliveries: roughly half the booking.created/rescheduled/reassigned/cancelled events go to event-saver (never enriched: no chat, no meeting URL, no notifications) and the other half go to event-booking (never persisted by event-saver). Both services silently malfunction.",
+      "fix_hint": "Give event-booking its own queue (e.g. events.booking.lifecycle.booking-svc) bound to the same topic routing key, or fan out via separate bindings; update event-receiver topology and QUEUES_DIGEST docs.",
+      "cross_service": true,
+      "origin": "new"
+    },
+    {
+      "service": "event-booking",
+      "severity": "CRITICAL",
+      "title": "Queue declared with conflicting x-dead-letter-exchange arguments — PRECONDITION_FAILED at startup",
+      "file": "event-booking/event_booking/consumer.py:57",
+      "detail": "BookingConsumer.register declares events.booking.lifecycle with arguments {x-max-priority: 10, x-dead-letter-exchange: 'events.booking.lifecycle.dlq'}. event-receiver (adapters/publisher.py:199-212) and event-saver (adapters/consumer.py:41-51) declare the SAME queue with {x-max-priority: 10, x-dead-letter-exchange: 'events.dlx', x-dead-letter-routing-key: '<queue>.dlq'}. RabbitMQ rejects redeclaration with inequivalent arguments (406 PRECONDITION_FAILED), so whichever service starts second crashes/fails to subscribe. Additionally no exchange named 'events.booking.lifecycle.dlq' is declared anywhere, so if event-booking's declaration wins, dead-lettered messages are routed to a nonexistent exchange and silently dropped.",
+      "fix_hint": "Use the shared convention: x-dead-letter-exchange='events.dlx' + x-dead-letter-routing-key=f'{queue}.dlq' (identical argument set across all declarers), or centralize topology declaration in one service.",
+      "cross_service": true,
+      "origin": "new"
+    },
+    {
+      "service": "event-booking",
+      "severity": "HIGH",
+      "title": "Handler exceptions reject without requeue and dead-letter into a missing exchange — booking events lost",
+      "file": "event-booking/event_booking/consumer.py:66",
+      "detail": "FastStream 0.6's default AckPolicy is REJECT_ON_ERROR (faststream/rabbit/subscriber/config.py:46-47): any exception escaping handle_message (DB down, GetStream create_token error, constraint TypeError) rejects the message with requeue=False. Combined with the undeclared DLX 'events.booking.lifecycle.dlq' (see queue-arguments finding), the message is dropped permanently — no retry, no DLQ visibility. docs/SERVICE_OVERVIEW.md explicitly (and wrongly) claims 'message is requeued by RabbitMQ' on DB failure. CloudEvent parse failures are also swallowed and ACKed with only a log line (consumer.py:73-77).",
+      "fix_hint": "Choose explicit ack semantics: AckPolicy.NACK_ON_ERROR with limited redelivery + working DLQ topology, or catch transient errors and NackMessage with requeue; ensure the DLX/DLQ actually exist; fix the doc claim.",
+      "cross_service": false,
+      "origin": "new"
+    },
+    {
+      "service": "event-booking",
+      "severity": "HIGH",
+      "title": "Timezone-aware datetimes used against cal.com 'timestamp without time zone' columns — scheduler query and constraints crash",
+      "file": "event-booking/event_booking/scheduler.py:33",
+      "detail": "cal.com (Prisma DateTime) stores Booking.startTime/endTime as timestamp(3) WITHOUT time zone, so asyncpg returns NAIVE datetimes and expects naive parameters. (1) ReminderScheduler.send_reminders passes datetime.now(UTC)+shift (aware) as :start_time_from/:start_time_to — asyncpg raises on binding an aware datetime to a timestamp parameter, so every poll cycle fails (exception is swallowed by run_forever, reminders are never sent). (2) constraints.analyze_on_create compares naive b.start_time from the DB with aware datetime.now(UTC) (constraints.py:17-18) — TypeError 'can't compare offset-naive and offset-aware datetimes' on every constraint evaluation, which (with REJECT_ON_ERROR) drops the booking.created message. No test covers DB-shaped naive datetimes; factories use tz-aware values, masking the bug.",
+      "fix_hint": "Normalize at the adapter boundary: convert DB naive datetimes to aware UTC in _fill_booking_dto / AttendeeBookingDTO mapping, and strip tzinfo (after converting to UTC) on bind parameters; add tests with naive datetimes.",
+      "cross_service": false,
+      "origin": "new"
+    },
+    {
+      "service": "event-booking",
+      "severity": "HIGH",
+      "title": "No rollback/saga on partial failure: chat created, then meeting URL failure drops the message and orphans state",
+      "file": "event-booking/event_booking/controllers/booking.py:117",
+      "detail": "_process_booking_flow runs create_chat (errors swallowed inside ChatController) then create_meeting_urls. MeetingController has NO exception handling: jwt.encode or GetStreamAdapter.create_token (sync HTTP inside _generate_long_url, meeting.py:80-87) raising propagates up through handle_created to the subscriber, so the message is rejected (lost, see ack finding) AFTER the GetStream channel and welcome messages were already created — and before notification.send_requested is sent. Result: orphaned chat channel, no meeting URL, no notification, no retry, no compensation. Conversely, if everything fails but exceptions are swallowed (chat failure + shortener failure), the message is ACKed as success. SERVICE_OVERVIEW lists this as a known HIGH gap.",
+      "fix_hint": "Wrap the flow in explicit step orchestration: catch per-step errors, compensate (delete chat on meeting failure) or persist a processing-state marker for retry; make ack/nack decisions deliberate per failure class.",
+      "cross_service": false,
+      "origin": "new"
+    },
+    {
+      "service": "event-booking",
+      "severity": "HIGH",
+      "title": "Client receives the ORGANIZER's personal meeting URL in notifications; client URL is never delivered",
+      "file": "event-booking/event_booking/controllers/booking.py:124",
+      "detail": "_create_meeting_urls returns only organizer_url; _process_booking_flow puts it into template_data['meeting_url'] and _send_notification sends ONE notification.send_requested with recipients=[organizer, client] sharing that template_data. event-notifier renders the same template_data for both recipients, so the client's email contains the organizer's URL — which embeds the organizer's Jitsi JWT (name/email/role 'organizer') and organizer chat JWT. That is both a wrong link and a credential leak letting the client join as the organizer identity. The client's own URL exists only in the meeting.url_created audit event (data.participant_id=client email), which nothing delivers to the client.",
+      "fix_hint": "Include per-recipient URLs in template_data (e.g. organizer_meeting_url / client_meeting_url) or per-recipient template_data entries, and have event-notifier select per role.",
+      "cross_service": true,
+      "origin": "new"
+    },
+    {
+      "service": "event-booking",
+      "severity": "HIGH",
+      "title": "GetStream chat JWT never expires: create_token called with wrong kwarg 'expiration'",
+      "file": "event-booking/event_booking/adapters/get_stream.py:58",
+      "detail": "stream_chat's signature is create_token(user_id, exp=None, iat=None, **claims). GetStreamAdapter passes expiration=expires_at, which lands in **claims as a meaningless 'expiration' JWT claim while 'exp' stays unset — Stream treats the token as valid indefinitely. These tokens are embedded in shareable short URLs (jwt_chat query param), so anyone with an old meeting link keeps a permanently valid chat credential, defeating the intended end_time+5min expiry computed in meeting.py:84.",
+      "fix_hint": "Call self._client.create_token(encoded, exp=expires_at); add a test decoding the token and asserting the exp claim.",
+      "cross_service": false,
+      "origin": "new"
+    },
+    {
+      "service": "event-booking",
+      "severity": "HIGH",
+      "title": "Reminder scheduler guarantees duplicate reminders: 10-minute window polled every 5 minutes, no cursor",
+      "file": "event-booking/event_booking/scheduler.py:31",
+      "detail": "Defaults: interval 300s, window [now+55m, now+65m]. A booking stays inside the 10-minute window for two consecutive 5-minute polls, so every booking gets ~2 reminder notifications even without restarts. There is no persistent cursor or sent-marker, so a restart inside the window re-emits again (known TODO). The window/interval relationship is not validated in config. Also: because the SQL joins Attendee, a multi-attendee booking produces one reminder per attendee row.",
+      "fix_hint": "Track last-run watermark (query 'startTime in (last_to, new_to]') persisted in DB/metadata, or record reminded booking ids; validate shift_to - shift_from <= interval; deduplicate rows per booking uid.",
+      "cross_service": false,
+      "origin": "new"
+    },
+    {
+      "service": "event-booking",
+      "severity": "HIGH",
+      "title": "Published payloads drift from event-schemas models (meeting.url_created/deleted, chat.created/deleted)",
+      "file": "event-booking/event_booking/controllers/meeting.py:122",
+      "detail": "event-schemas declares MeetingUrlCreatedPayload {email, recipient_role, meeting_url} but MeetingController sends {participant_id, url}; MeetingUrlDeletedPayload declares {recipient_role} but delete_meeting_url sends {external_id} (meeting.py:134-139); ChatCreatedPayload declares {organizer_id, client_id} but ChatController sends {channel_id} (controllers/chat.py:24-28); ChatDeletedPayload declares empty payload but {channel_id} is sent. Any consumer (event-saver projections) validating against the shared schema library will reject or mis-store these events; docs/architecture/MESSAGE_CONTRACTS.md:76 also promises MeetingUrlCreatedPayload.",
+      "fix_hint": "Construct payloads from the event-schemas models (model_dump) so drift is impossible, or update the schema models if the new shape is intended; sync MESSAGE_CONTRACTS.md.",
+      "cross_service": true,
+      "origin": "new"
+    },
+    {
+      "service": "event-booking",
+      "severity": "HIGH",
+      "title": "booking.rejected payload missing required BookingRejectedPayload fields",
+      "file": "event-booking/event_booking/controllers/booking.py:56",
+      "detail": "handle_created publishes booking.rejected with data={'rejection_reasons': [...]} only. event-schemas BookingRejectedPayload requires client_email (required field) and defines rejection_type, available_from, has_active_booking, active_booking_start — all of which the ConstraintsResult actually has but are only put into the separate notification command, not the booking.rejected event. event-saver/event-notifier consuming booking.rejected per MESSAGE_CONTRACTS.md:72 (payload_model=BookingRejectedPayload) will fail validation on the missing client_email.",
+      "fix_hint": "Build the event payload via BookingRejectedPayload(client_email=booking.client.email, rejection_type=result.rejection_type, available_from=..., has_active_booking=..., active_booking_start=..., rejection_reasons=...).",
+      "cross_service": true,
+      "origin": "new"
+    },
+    {
+      "service": "event-booking",
+      "severity": "MEDIUM",
+      "title": "No idempotency on redelivery: duplicate welcome messages and duplicate notifications",
+      "file": "event-booking/event_booking/consumer.py:66",
+      "detail": "ce-id is parsed but never used for deduplication (API_CONTRACTS even labels it 'idempotency (future)'). If a message is redelivered (consumer crash/connection drop before ack, or manual DLQ shovel), handle_created re-runs fully: GetStream channel.create is upsert-like, but the two welcome messages are re-sent, notification.send_requested is re-published (duplicate emails to client+organizer), and meeting.url_created audit events are duplicated. Shortify create_url with an existing external_id likely 409s, silently falling back to a long URL — so retries also degrade the delivered URL.",
+      "fix_hint": "Track processed ce-id (DB table or Redis) before side effects, and/or make each step idempotent (skip welcome messages if channel has messages; shortener upsert-by-external_id).",
+      "cross_service": false,
+      "origin": "new"
+    },
+    {
+      "service": "event-booking",
+      "severity": "MEDIUM",
+      "title": "Reassignment deletes then recreates the same GetStream channel ID — recreation fails on soft-deleted channels",
+      "file": "event-booking/event_booking/controllers/booking.py:88",
+      "detail": "handle_reassigned calls delete_chat(channel_id=booking.uid) then _create_chat_with_welcome with the same channel_id. GetStream's channel.delete() is a soft delete; creating a channel with the same type+id afterwards returns the deleted-channel error unless a hard delete was performed. Both errors are swallowed by ChatController's blanket except, so after reassignment the booking ends up with NO usable chat and only log lines as evidence — while chat.deleted/chat.created audit events may have been emitted misleadingly (chat.created is only sent on success, but the failure is invisible to the system).",
+      "fix_hint": "Use hard delete (channel.delete(hard=True) per Stream API) or update channel members in place (add new organizer, remove old) instead of delete+create.",
+      "cross_service": false,
+      "origin": "new"
+    },
+    {
+      "service": "event-booking",
+      "severity": "MEDIUM",
+      "title": "Reschedule flow recreates chat with welcome messages and orphans the old booking's chat and short URLs when from_reschedule is absent",
+      "file": "event-booking/event_booking/controllers/booking.py:73",
+      "detail": "cal.com reschedules create a NEW booking uid (old booking cancelled with fromReschedule pointing back). handle_rescheduled runs _process_booking_flow which (1) creates a brand-new chat channel for the new uid and re-sends both welcome messages on every reschedule, and (2) never deletes the old uid's channel — orphaned channels accumulate. For URLs, update_url_data is only used when booking.from_reschedule is set; otherwise create_url runs with the new external_id while the OLD booking's short URLs remain live in Shortify (still resolving to a meeting whose JWT covers the old time window).",
+      "fix_hint": "On reschedule: delete/migrate the old uid's chat channel and old external_id short URLs (organizer + client_ prefixed); skip welcome messages when the channel already exists.",
+      "cross_service": false,
+      "origin": "new"
+    },
+    {
+      "service": "event-booking",
+      "severity": "MEDIUM",
+      "title": "Multi-attendee bookings: LEFT JOIN Attendee returns multiple rows, fetch_one picks an arbitrary attendee",
+      "file": "event-booking/event_booking/adapters/db.py:33",
+      "detail": "_GET_BOOKING_SQL joins \"Attendee\" without aggregation or LIMIT/ORDER. cal.com bookings can have multiple attendees (guests, seats). get_booking uses fetch_one — an arbitrary row wins, so the 'client' (chat member, notification recipient, URL recipient) is nondeterministic. _GET_BOOKINGS_SQL has the same shape, so the scheduler emits one reminder per attendee row for the same booking.",
+      "fix_hint": "Decide the primary-attendee rule (e.g. MIN(a.id) or noShow IS NOT TRUE) and enforce it via ORDER BY + DISTINCT ON (b.id), or model all attendees explicitly in BookingDTO.",
+      "cross_service": false,
+      "origin": "new"
+    },
+    {
+      "service": "event-booking",
+      "severity": "MEDIUM",
+      "title": "EventPublisher ignores HTTP response status and is fully fire-and-forget — silent loss of all follow-up events",
+      "file": "event-booking/event_booking/adapters/events.py:55",
+      "detail": "send_event posts to event-receiver and logs 'Event sent' without checking resp.status_code: a 401 (wrong EVENTS_API_KEY, receiver compares raw Authorization header at event-receiver/controllers/ingest.py:104), 400, or 422 is recorded as success. All exceptions are swallowed with no retry/queue, so booking.rejected, notification.send_requested, chat/meeting audit events can all vanish silently. A new httpx.AsyncClient is also constructed per call (no connection reuse). Note: events.py and shortener.py DO set timeouts; the GetStream SDK calls do not (see blocking-SDK finding) — the 'no timeouts anywhere' TODO is only partially accurate.",
+      "fix_hint": "raise_for_status() (or check status) and log/route failures distinctly; reuse a single AsyncClient injected at APP scope; consider bounded retries for notification.send_requested and booking.rejected.",
+      "cross_service": false,
+      "origin": "new"
+    },
+    {
+      "service": "event-booking",
+      "severity": "MEDIUM",
+      "title": "EVENTS_ENDPOINT_URL is optional and defaults to None — service silently produces zero output",
+      "file": "event-booking/event_booking/config.py:26",
+      "detail": "events_endpoint_url: str | None = None, and EventPublisher.send_event returns immediately when unset. With a missing env var the service consumes and ACKs every booking event, creates chats/URLs, but publishes nothing downstream (no notifications, no rejected events) without any startup warning. SERVICE_OVERVIEW.md documents the variable as Required=Yes, contradicting the code.",
+      "fix_hint": "Make events_endpoint_url and events_api_key required (Field(strict=True)) like other mandatory settings, or log a loud startup warning when publishing is disabled.",
+      "cross_service": false,
+      "origin": "new"
+    },
+    {
+      "service": "event-booking",
+      "severity": "MEDIUM",
+      "title": "Synchronous GetStream SDK called from async code — blocks the event loop, no configurable timeout",
+      "file": "event-booking/event_booking/adapters/get_stream.py:30",
+      "detail": "GetStreamAdapter wraps the sync stream_chat.StreamChat (requests-based) but its methods are declared async and are awaited inside the FastStream consumer. Every upsert_users/channel.create/send_message/delete blocks the entire event loop — consumer, scheduler, RabbitMQ heartbeats — for the duration of the HTTP call (SDK default timeout 6s, not exposed via Settings). Under GetStream latency this can stall message processing and risk broker heartbeat timeouts. This is the concrete form of the 'no GetStream timeout' known TODO.",
+      "fix_hint": "Use stream_chat.async_chat.StreamChatAsync, or run sync calls via asyncio.to_thread; expose timeout in Settings.",
+      "cross_service": false,
+      "origin": "new"
+    },
+    {
+      "service": "event-booking",
+      "severity": "MEDIUM",
+      "title": "Meeting URL never written back to cal.com Booking.metadata (update_booking_video_url is dead code) and reschedule notifications lack meeting_url",
+      "file": "event-booking/event_booking/adapters/db.py:97",
+      "detail": "update_booking_video_url (jsonb merge of metadata.videoCallUrl) exists and MeetingController is injected with the db adapter (meeting.py constructor), but neither is ever used — cal.com's own UI/emails never get the video link, which was the evident purpose of the write-back. Separately, handle_rescheduled calls _process_booking_flow(is_update_url_data=True) which returns the organizer URL but handle_rescheduled discards it: the BOOKING_RESCHEDULED notification template_data contains no meeting_url at all, so reschedule emails go out without a meeting link.",
+      "fix_hint": "After URL creation, call db.update_booking_video_url(booking.uid, organizer_url) (decide organizer vs client URL semantics) and pass the regenerated URL into the reschedule notification template_data.",
+      "cross_service": false,
+      "origin": "new"
+    },
+    {
+      "service": "event-booking",
+      "severity": "MEDIUM",
+      "title": "Constraint rejection hard-DELETEs cal.com Booking rows — likely FK violations and broken cal.com invariants",
+      "file": "event-booking/event_booking/adapters/db.py:103",
+      "detail": "delete_booking_and_attendee_by_booking_id deletes only Attendee then Booking. cal.com's schema has other tables referencing Booking (BookingReference, Payment, BookingSeat, WorkflowReminder, etc.); unless every FK is ON DELETE CASCADE in the target deployment, the DELETE raises an FK violation — which, given the shared APP session with no rollback, also wedges the session (see CRITICAL session finding). Even when it succeeds, hard-deleting rows behind cal.com's back (a declared hard invariant: 'cal.com schema, read as-is') diverges from cal.com's own cancellation flow (status=cancelled), so cal.com never notifies its side and calendar invites remain.",
+      "fix_hint": "Prefer UPDATE \"Booking\" SET status='rejected'/'cancelled' (cal.com semantics) over DELETE, or use cal.com's API to cancel; if DELETE must stay, verify FK cascade behavior against the real schema and add rollback handling.",
+      "cross_service": false,
+      "origin": "new"
+    },
+    {
+      "service": "event-booking",
+      "severity": "MEDIUM",
+      "title": "Scheduler never emits booking.reminder_sent — spec, docs, and event-saver routing expect it",
+      "file": "event-booking/event_booking/scheduler.py:60",
+      "detail": "The design spec ('publishes booking.reminder events'), SERVICE_OVERVIEW.md ('emits booking.reminder_sent events'), API_CONTRACTS.md (booking.reminder_sent section), and routing in event-receiver/event-saver (events.booking.reminder queue, BOOKING_REMINDER_SENT rules) all expect a booking.reminder_sent audit event. The scheduler only publishes notification.send_requested with trigger_event=BOOKING_REMINDER. The audit trail in event-saver will never record reminders and the events.booking.reminder queue stays empty.",
+      "fix_hint": "Either also publish EventType.BOOKING_REMINDER_SENT (per BookingReminderSentPayload {client_id, email}) per reminded booking, or update spec/docs/routing to drop the event.",
+      "cross_service": true,
+      "origin": "new"
+    },
+    {
+      "service": "event-booking",
+      "severity": "MEDIUM",
+      "title": "Missing tests for the riskiest paths: reassignment, constraint self-inclusion, naive datetimes, ack semantics, DI wiring",
+      "file": "event-booking/tests",
+      "detail": "824 test lines, all happy-path with mocks. Nothing covers: handle_reassigned (delete+recreate chat ordering), constraints when attendee_bookings include the booking itself (would have caught the CRITICAL self-rejection), naive DB datetimes (would have caught the tz crashes), handle_message ack/exception behavior, the Dishka container wiring (APP-scope session bug invisible to tests), GetStream create_token exp claim, scheduler double-fire across overlapping windows, or EventPublisher non-2xx responses. test_shortener.py is 13 lines (only the no-api-key path).",
+      "fix_hint": "Add: constraints test with self-included booking; DTO mapping tests with naive datetimes; a container smoke test asserting per-message session scope; consumer test asserting nack/ack on handler exception; token exp decode test.",
+      "cross_service": false,
+      "origin": "new"
+    },
+    {
+      "service": "event-booking",
+      "severity": "LOW",
+      "title": "Deterministic AES-CBC with fixed zero IV for chat user IDs",
+      "file": "event-booking/event_booking/adapters/get_stream.py:19",
+      "detail": "_encode_user_id uses AES-128-CBC with IV=b'\\x00'*16 and a SHA-256-truncated key. Fixed-IV CBC leaks equality of plaintext prefixes across IDs (emails sharing 16-byte prefixes produce identical leading ciphertext blocks). Determinism is required for stable user IDs, but CBC-fixed-IV is the wrong construction for it.",
+      "fix_hint": "Use a keyed pseudorandom function instead: HMAC-SHA256(key, email) truncated/base64 (deterministic, non-reversible), or AES-SIV if reversibility is required.",
+      "cross_service": false,
+      "origin": "new"
+    },
+    {
+      "service": "event-booking",
+      "severity": "LOW",
+      "title": "ACTIVE_STATUSES contains 'rescheduled', which is not a cal.com BookingStatus",
+      "file": "event-booking/event_booking/controllers/constraints.py:8",
+      "detail": "cal.com BookingStatus values are cancelled/accepted/rejected/pending/awaiting_host (rescheduling is represented by status='cancelled' + rescheduled flag/fromReschedule). 'rescheduled' never matches, so the entry is dead; meanwhile 'pending'/'awaiting_host' bookings are NOT counted as active, which may or may not be intended for the limits.",
+      "fix_hint": "Align the status set with the real cal.com enum and document whether pending bookings count toward limits.",
+      "cross_service": false,
+      "origin": "new"
+    },
+    {
+      "service": "event-booking",
+      "severity": "LOW",
+      "title": "Jitsi JWT role claim 'organizer'/'client' is not a Jitsi-recognized claim; no moderator semantics",
+      "file": "event-booking/event_booking/controllers/meeting.py:65",
+      "detail": "context.user.role with values organizer/client is not interpreted by standard Jitsi deployments (moderator is granted via 'moderator': true in context.user or affiliation='owner'). If the deployment expects the organizer to be moderator, neither participant gets elevated rights; if the deployed Jitsi is customized to read this claim, fine — but it is undocumented. sub='*' and HS256 are otherwise consistent with self-hosted Jitsi.",
+      "fix_hint": "Confirm against the actual Jitsi/prosody config; if standard, add 'moderator': role == 'organizer' to context.user and document the claim contract.",
+      "cross_service": false,
+      "origin": "new"
+    },
+    {
+      "service": "event-booking",
+      "severity": "LOW",
+      "title": "No CLAUDE.md for event-booking; root CLAUDE.md service table omits the service",
+      "file": "event-booking",
+      "detail": "The design spec's layout includes event-booking/CLAUDE.md; the file does not exist. The monorepo root CLAUDE.md's service table and per-service documentation table also do not list event-booking (and event-booking is the only service living inside the root git repo, which deserves a note). Known TODO confirmed.",
+      "fix_hint": "Add event-booking/CLAUDE.md (commands, architecture, conventions) and a row in the root CLAUDE.md tables.",
+      "cross_service": false,
+      "origin": "new"
+    },
+    {
+      "service": "event-booking",
+      "severity": "LOW",
+      "title": "Documentation drift: wrong queues, wrong endpoint, wrong auth scheme, wrong requeue claim, nonexistent files",
+      "file": "event-booking/docs/SERVICE_OVERVIEW.md",
+      "detail": "Multiple doc/code mismatches: (1) SERVICE_OVERVIEW + API_CONTRACTS route chat.*/meeting.* audit events to events.notification.delivery, but event-receiver routes them to events.chat.lifecycle / events.meeting.lifecycle; (2) endpoint documented as POST /event/cloudevents, actual receiver route is POST /event/booking (routes.py:16); (3) auth documented as 'Bearer token', code sends the raw API key and receiver compares raw equality; (4) 'message is requeued by RabbitMQ' on DB failure is false (REJECT_ON_ERROR, no requeue); (5) API_CONTRACTS notification recipients documented as {user_id, role} but code sends {email, role}; (6) architecture diagram references adapters/jitsi.py which does not exist; (7) spec layout names consumers/, scheduler/, reminder.py, settings.py — actual files are consumer.py, scheduler.py, config.py with no reminder controller.",
+      "fix_hint": "Sweep docs/SERVICE_OVERVIEW.md and docs/API_CONTRACTS.md against actual code + event-receiver routing; per CLAUDE.md doc requirements also update MESSAGE_CONTRACTS.md.",
+      "cross_service": true,
+      "origin": "new"
+    },
+    {
+      "service": "event-booking",
+      "severity": "LOW",
+      "title": "Dead code and convention violations: unused DB methods, mutable BookingDTO, chat_controller typed as object, else-branch style",
+      "file": "event-booking/event_booking/dtos.py:24",
+      "detail": "(1) BookingDTO is intentionally mutable ('previous_booking is set after construction') violating the frozen-DTO convention, yet previous_booking is never set anywhere (dead field); (2) BookingDatabaseAdapter.get_user_by_email and get_organizer_chat_id are never called; (3) BookingController declares chat_controller: object instead of an IChatController Protocol (no interface exists for ChatController, unlike every other collaborator); (4) MeetingController.create_meeting_url uses an if/else where the codebase convention prefers early returns (meeting.py:106-118); (5) ioc._ConstraintsAnalyzerAdapter wraps a module function with noqa'd signatures instead of a class-based analyzer.",
+      "fix_hint": "Freeze BookingDTO and drop previous_booking; delete or wire the unused DB methods; add IChatController Protocol in interfaces/; restructure the shortener branch with early return.",
+      "cross_service": false,
+      "origin": "new"
+    },
+    {
+      "service": "event-booking",
+      "severity": "LOW",
+      "title": "Default RabbitMQ DSN embeds guest:guest credentials",
+      "file": "event-booking/event_booking/config.py:22",
+      "detail": "rabbit_url defaults to amqp://guest:guest@localhost:5672/. Same pattern exists in sibling services, but secrets-in-defaults is flagged per audit scope; all other credentials are correctly strict-required with no defaults.",
+      "fix_hint": "Drop the default (Field(strict=True)) or keep localhost default only behind a debug flag.",
+      "cross_service": false,
+      "origin": "new"
+    }
+  ]
+}
