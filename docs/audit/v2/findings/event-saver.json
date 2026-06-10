@@ -1,0 +1,154 @@
+{
+  "findings": [
+    {
+      "service": "event-saver",
+      "severity": "HIGH",
+      "title": "booking.rejected events are consumed but never reflected: no status mapping, no lifecycle projection entry",
+      "file": "event-saver/event_saver/domain/services/booking_extractor.py:11",
+      "detail": "event-receiver routes 'booking.rejected' (source 'booking') to events.booking.lifecycle (event-receiver/event_receiver/config.py:29-33) and event-schemas defines EventType.BOOKING_REJECTED with CRITICAL priority. event-saver consumes that queue, but: (1) _STATUS_BY_EVENT_TYPE in booking_extractor.py only maps BOOKING_CREATED and BOOKING_CANCELLED (rescheduled/reassigned/reminder_sent are documented as intentional omissions, rejected is not even mentioned), so bookings.current_status stays NULL/'created' for a rejected booking; (2) LifecycleProjection._LIFECYCLE_TYPES (lifecycle_projection.py:14-20) and _ACTION_MAP omit BOOKING_REJECTED, so no booking_lifecycle_events timeline row is written. A rejected booking therefore looks active in event-admin. The raw event is saved, but every projection silently ignores it.",
+      "fix_hint": "Add EventType.BOOKING_REJECTED -> 'rejected' to _STATUS_BY_EVENT_TYPE and to LifecycleProjection._LIFECYCLE_TYPES/_ACTION_MAP; add it to QUEUES_DIGEST.md/EVENTS_DIGEST.md and to the saver's default routing rules for consistency.",
+      "cross_service": true,
+      "origin": "new"
+    },
+    {
+      "service": "event-saver",
+      "severity": "HIGH",
+      "title": "No retry path for transient failures: any handler exception sends the event to a 24h-TTL DLQ that nothing consumes",
+      "file": "event-saver/event_saver/adapters/consumer.py:40-53",
+      "detail": "Subscribers use FastStream defaults (reject without requeue on handler exception), dead-lettering to events.dlx with routing key '<queue>.dlq'. The DLQs (declared by event-receiver's RabbitTopologyManager, publisher.py:219-228) carry x-message-ttl=86400000 (24h) and have no consumer, no re-shovel job, and no alerting anywhere in the monorepo. Consequence: a transient PostgreSQL outage/restart means every message processed during the outage is rejected on first attempt, parked in the DLQ, and silently expired after 24h — permanent loss of CRITICAL-priority booking lifecycle events for the service that owns the system of record. There is no distinction between poison messages (parse errors) and retryable infrastructure errors.",
+      "fix_hint": "Distinguish retryable errors (DB connectivity) from poison messages: nack+requeue or use a delayed-retry queue for transient errors, keep DLQ for poison messages only, and add a DLQ consumer/alert. At minimum remove the 24h TTL on DLQs so failed events are never auto-deleted.",
+      "cross_service": true,
+      "origin": "new"
+    },
+    {
+      "service": "event-saver",
+      "severity": "MEDIUM",
+      "title": "events.dlx exchange and *.dlq queues are never declared by event-saver — startup-order dependency on event-receiver, dropped dead letters on fresh broker",
+      "file": "event-saver/event_saver/adapters/consumer.py:46-51",
+      "detail": "event-saver declares its queues (declare=True) with arguments x-dead-letter-exchange='events.dlx' and x-dead-letter-routing-key='<queue>.dlq', but never declares the events.dlx exchange or any DLQ queue. Only event-receiver's RabbitTopologyManager.ensure_topology() does that. If event-saver starts first on a fresh broker (or receiver's topology step is removed), queues are created pointing at a nonexistent DLX; RabbitMQ silently drops dead-lettered messages published to a missing exchange — rejected events vanish without trace. Queue arguments themselves do match receiver's declaration (x-max-priority 10 etc.), so no PRECONDITION_FAILED, the failure mode is silent.",
+      "fix_hint": "Declare events.dlx and the per-queue DLQs in event-saver's consumer start() (idempotent declarations are safe), or extract shared topology setup into event-schemas/a bootstrap step both services run.",
+      "cross_service": true,
+      "origin": "new"
+    },
+    {
+      "service": "event-saver",
+      "severity": "MEDIUM",
+      "title": "LifecycleProjection loses previous start_time on booking.rescheduled: flat key 'previous_booking.start_time' never matches the nested payload",
+      "file": "event-saver/event_saver/infrastructure/persistence/projections/lifecycle_projection.py:91",
+      "detail": "_extract_details for BOOKING_RESCHEDULED calls _pick(original, 'start_time', 'end_time', 'previous_booking.start_time'). _pick does literal dict-key lookup, but per event-schemas (BookingRescheduledPayload.previous_booking: dict) and event-receiver/RABBITMQ_MESSAGES_SPEC.md:105 the payload is nested: {'previous_booking': {'start_time': ...}}. The literal dotted key never matches, so the previous time is always dropped from booking_lifecycle_events.details. The unit test (tests/infrastructure/test_lifecycle_projection.py:118,132) codifies the wrong flat shape, so it passes while production payloads lose the data.",
+      "fix_hint": "Read original.get('previous_booking', {}).get('start_time') and store it under a 'previous_start_time' key; fix the test fixture to use the nested shape from the spec.",
+      "cross_service": false,
+      "origin": "new"
+    },
+    {
+      "service": "event-saver",
+      "severity": "MEDIUM",
+      "title": "Alembic ORM models drifted from the real schema: events tracing columns and booking_lifecycle_events table missing — autogenerate would emit destructive drops",
+      "file": "event-saver/event_saver/db/models.py:11",
+      "detail": "Per project convention the ORM exists only for Alembic, yet db/models.py is stale: Event lacks idempotency_key, trace_id, span_id, dataschema (added by migration c5d7f9e3a1b2) and the partial unique index idx_events_idempotency; there is no model for booking_lifecycle_events (created by migration ca7326cf2ec5). alembic/env.py uses this metadata as target_metadata, so the next 'alembic revision --autogenerate' (the documented workflow in CLAUDE.md) would generate drop_column/drop_table migrations against production-bound data.",
+      "fix_hint": "Sync db/models.py with the migration chain (add the 4 events columns + indexes and a BookingLifecycleEvent model), and add a CI check that autogenerate against head produces an empty diff.",
+      "cross_service": false,
+      "origin": "new"
+    },
+    {
+      "service": "event-saver",
+      "severity": "MEDIUM",
+      "title": "Test coverage gaps: repositories, ingest use case, consumer, and 6 of 8 projections untested",
+      "file": "event-saver/tests",
+      "detail": "April finding 'no tests exist' is partially resolved: 34 tests now cover EventParser (incl. hash determinism), BookingDataExtractor, ParticipantExtractor, ProjectionExecutor and LifecycleProjection. Still untested: EventRepository (both dedup INSERT paths — the idempotency-key path and the legacy constraint path), BookingRepository (upsert COALESCE semantics, get_or_none queue special-casing, organizer history dedup SQL), IngestEventUseCase orchestration (skip-on-duplicate, client_reassigned branch), RabbitEventConsumerRunner, BookingTimelineClassifier, and the chat/meeting/notification/video projections. The one projection test that exists (lifecycle) encodes a wrong payload shape (see previous_booking finding), illustrating the risk.",
+      "fix_hint": "Add unit tests for the remaining projections and the ingest use case with fake repositories; add integration tests for EventRepository/BookingRepository against PostgreSQL (testcontainers) covering both dedup constraints and upsert COALESCE behavior.",
+      "cross_service": false,
+      "origin": "april"
+    },
+    {
+      "service": "event-saver",
+      "severity": "LOW",
+      "title": "Dual deduplication paths can crash instead of dedup, and events without booking_id+idempotency_key are never deduplicated",
+      "file": "event-saver/event_saver/infrastructure/persistence/repositories/event_repository.py:31-118",
+      "detail": "EventRepository.save uses ON CONFLICT (idempotency_key) when a key is present, else ON CONFLICT (booking_id, event_type, source, hash). ON CONFLICT only suppresses the named constraint: an incoming keyed event that collides with a pre-existing keyless row on the legacy unique index (or vice versa) raises IntegrityError, rolling back the whole message to the DLQ instead of skipping a duplicate. Separately, the legacy unique index treats NULLs as distinct, so events with NULL booking_id and no idempotency_key are never deduplicated at all. Currently all rabbit producers go through event-receiver which always sets a deterministic idempotencykey, so exposure is limited — but the fallback path is effectively untested dead weight with sharp edges.",
+      "fix_hint": "Since this is pre-production and event-receiver always sets idempotencykey, consider making idempotency_key NOT NULL and dropping the legacy constraint+path entirely; otherwise catch IntegrityError and treat as duplicate.",
+      "cross_service": false,
+      "origin": "new"
+    },
+    {
+      "service": "event-saver",
+      "severity": "LOW",
+      "title": "Stale routing config: EventRouter is dead code, duplicate BOOKING_REMINDER_SENT rules, rules missing client_reassigned/rejected",
+      "file": "event-saver/event_saver/routing.py:30",
+      "detail": "Residual of April H-10 (the bare 'booking.rescheduled' string is fixed). event-saver no longer publishes: EventRouter, RoutingConfig consumers, resolve_routing_key* and Settings.routing (config.py:135-140) have zero callers — routing rules are only used to derive the set of queues to consume (Settings.topology_queues). Yet config.py still carries full pattern-matching rules including two rules for BOOKING_REMINDER_SENT (lifecycle + reminder, config.py:30-39) and omits booking.client_reassigned and booking.rejected which event-receiver does route to events.booking.lifecycle. This misleads readers into thinking saver routes events and that reminder_sent reaches the lifecycle queue.",
+      "fix_hint": "Delete EventRouter/RoutingConfig/Settings.routing and replace event_routing_rules with a plain list of queue names to consume (rabbit_topology_queues default), matching what event-receiver actually publishes.",
+      "cross_service": true,
+      "origin": "april"
+    },
+    {
+      "service": "event-saver",
+      "severity": "LOW",
+      "title": "Dead code: decode_user_id + getstream_user_id_encryption_key setting and QUEUE_DOMAIN_MAP are unused",
+      "file": "event-saver/event_saver/utils.py:28",
+      "detail": "decode_user_id (AES/PKCS7 GetStream user-id decryption, utils.py:28-46) has no callers — the decoder moved to event-receiver (docs/GETSTREAM_DECODER_MOVED.md) — yet the function, the cryptography dependency usage, and the Settings.getstream_user_id_encryption_key field (config.py:120) remain. QUEUE_DOMAIN_MAP in adapters/event_classification.py:10-20 is also never referenced. Pre-production policy is to delete legacy, not keep it.",
+      "fix_hint": "Delete decode_user_id, the AES constants, the getstream_user_id_encryption_key setting, and QUEUE_DOMAIN_MAP; drop 'cryptography' from dependencies if nothing else uses it.",
+      "cross_service": false,
+      "origin": "new"
+    },
+    {
+      "service": "event-saver",
+      "severity": "LOW",
+      "title": "ChatReadUpdateProjection never marks messages with NULL user_id as read",
+      "file": "event-saver/event_saver/infrastructure/persistence/projections/chat_projection.py:175",
+      "detail": "The UPDATE uses 'user_id != :reader_user_id'; for booking_chat_events rows where user_id IS NULL (which ChatEventProjection produces whenever normalized.participants is missing/unmapped — a common case for raw GetStream events) the comparison evaluates to NULL and the row is never flipped to is_read=true. Unread indicators derived from this table will overcount.",
+      "fix_hint": "Use 'user_id IS DISTINCT FROM :reader_user_id' (or explicitly include user_id IS NULL).",
+      "cross_service": false,
+      "origin": "new"
+    },
+    {
+      "service": "event-saver",
+      "severity": "LOW",
+      "title": "Style violations: elif/else chains in participant_extractor.py, symmetric else in event_repository.py, nested ternary in notification_projection.py",
+      "file": "event-saver/event_saver/domain/services/participant_extractor.py:51",
+      "detail": "Project rules prohibit elif and discourage else. participant_extractor.py:46-59 has two elif chains (raw_user_id type dispatch and role dispatch) plus an else. event_repository.py:76 uses a large if/else for the two insert paths where a guard clause with early return would fit the convention. notification_projection.py:74-80 uses a nested conditional expression (a if x else b if y else None) which is an elif in disguise.",
+      "fix_hint": "Replace with guard clauses/early continue and small helper functions (e.g. _parse_uuid(raw) -> UUID|None, role->slot mapping dict); split EventRepository.save into _save_with_idempotency_key/_save_legacy with an early return.",
+      "cross_service": false,
+      "origin": "new"
+    },
+    {
+      "service": "event-saver",
+      "severity": "LOW",
+      "title": "Doc/code drift: CLAUDE.md describes removed participants table and outdated dedup formula; digests omit handled event types; stale one-off docs",
+      "file": "event-saver/CLAUDE.md:198-211",
+      "detail": "CLAUDE.md still documents a 'participants' table with unique email, ParticipantRepository, and domain/models/participant.py — all removed by migration 28bba7523965 (participants replaced by user UUID columns); it documents dedup as md5(payload::text) while the code uses md5(json.dumps(payload, sort_keys=True, ensure_ascii=False)); it claims 'FastStream handles retry' which it does not. QUEUES_DIGEST.md/EVENTS_DIGEST.md omit booking.client_reassigned (handled in ingest_event.py:115) and booking.rejected on events.booking.lifecycle. Stale one-off reports (REFACTORING_SUMMARY.md, IMPLEMENTATION_VERIFIED.md, GEMINI.md, AGENTS.md duplicates, docs/EXTRACTION_*, docs/INTEGRATION_*) linger contrary to the delete-legacy policy. main.py:29,41,44 logs 'event receiver application' — copy-paste from event-receiver.",
+      "fix_hint": "Update CLAUDE.md architecture/schema/dedup sections, add client_reassigned and rejected to both digests, fix main.py log strings, delete the stale one-off reports.",
+      "cross_service": false,
+      "origin": "new"
+    },
+    {
+      "service": "event-saver",
+      "severity": "LOW",
+      "title": "Migration-backfilled hash values differ from application-computed hashes",
+      "file": "event-saver/alembic/versions/5f1c2e9a8b1d_add_hash_to_events.py:30",
+      "detail": "Migration 5f1c2e9a8b1d backfilled events.hash with md5(payload::text) (jsonb text rendering: key order sorted by length-then-alpha, ', '/': ' separators), while the application computes md5 over json.dumps(payload, sort_keys=True, ensure_ascii=False) (pure lexicographic key order, unicode unescaped). The two serializations differ for most payloads, so rows backfilled by the migration will never dedup against a redelivered identical event via the legacy constraint. Pre-production impact is minimal but the column now holds two incompatible hash schemes.",
+      "fix_hint": "Pre-production: re-backfill (or truncate) so all rows use the application formula, or drop the legacy hash dedup entirely in favor of idempotency_key (see related finding).",
+      "cross_service": false,
+      "origin": "new"
+    },
+    {
+      "service": "event-saver",
+      "severity": "LOW",
+      "title": "No health/readiness endpoint — FastAPI app exposes zero routes",
+      "file": "event-saver/event_saver/main.py:47",
+      "detail": "The FastAPI app exists solely to host the lifespan; no /health or /ready endpoint is registered, so orchestrator liveness/readiness probes have nothing to call and broker/DB connectivity is not surfaced. CLAUDE.md documents running on port 8888 implying HTTP is expected to serve something.",
+      "fix_hint": "Add a /health endpoint (and optionally /ready checking broker.ping + a SELECT 1).",
+      "cross_service": false,
+      "origin": "new"
+    },
+    {
+      "service": "event-saver",
+      "severity": "LOW",
+      "title": "Consumer handler binds queue name via a plain default parameter that FastStream treats as a message-body field",
+      "file": "event-saver/event_saver/adapters/consumer.py:55-60",
+      "detail": "The per-queue handler is defined as 'async def consume(message=Context(\"message\"), _queue_name: str = queue_name)'. _queue_name is not a Context/Depends parameter, so FastStream's parameter resolution treats it as an expected field of the decoded message body that merely falls back to its default; a payload containing a top-level '_queue_name' key would silently override the queue name used for booking lookup and projections. It works today only by accident of the fallback.",
+      "fix_hint": "Use functools.partial or a closure factory (def _make_handler(queue_name): async def consume(message=Context(\"message\")): ...) so the queue name is captured outside FastStream's signature parsing.",
+      "cross_service": false,
+      "origin": "new"
+    }
+  ]
+}
