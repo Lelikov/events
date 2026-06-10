@@ -1,0 +1,194 @@
+{
+  "findings": [
+    {
+      "service": "event-notifier",
+      "severity": "CRITICAL",
+      "title": "notification.send_requested recipients contract broken end-to-end: all booking notifications silently dropped",
+      "file": "event-notifier/event_notifier/application/use_cases/process_domain_event.py:44",
+      "detail": "Three-way contract break on the main notification path. (1) event-schemas NotificationRecipient (notification.py:86-99) defines recipients as {email, role} and event-booking sends exactly that (controllers/booking.py:178-188, scheduler.py:41-65). (2) event-receiver's publisher wraps EVERY payload as {\"original\": {...}, \"normalized\": {...}} (publisher.py:92-131), so on the queue recipients live at data['original']['recipients']. event-notifier reads event.data.get('recipients') at top level -> always [] -> 'no recipients, skipping'. (3) Even if unwrapped, the notifier requires recipient['user_id'] (process_domain_event.py:67-70) and calls get_contacts_by_id(user_id=...), but neither the schema nor the producer ever sends user_id. Net effect: every booking created/rescheduled/cancelled/reassigned/reminder notification command is consumed and silently discarded. NotificationCommandPayload is never used to validate anything on either side.",
+      "fix_hint": "Decide the canonical wire shape in event-schemas (NotificationCommandPayload), validate with it in both event-booking (before publish) and event-notifier (on consume). Either add user_id to NotificationRecipient and have event-booking/event-receiver resolve it, or make the notifier resolve contacts by email. Make the notifier unwrap the {original, normalized} envelope (or exempt notification.send_requested from normalization in event-receiver).",
+      "cross_service": true,
+      "origin": "new"
+    },
+    {
+      "service": "event-receiver",
+      "severity": "CRITICAL",
+      "title": "Publisher crashes with ValueError on any event type not in the shared EventType enum (real GetStream webhook types)",
+      "file": "event-receiver/event_receiver/adapters/publisher.py:87",
+      "detail": "ingest_getstream publishes event_type=f\"getstream.{data.get('type','unknown')}\" for EVERY webhook GetStream sends (ingest.py:227). The EventType enum in event-schemas only covers 6 getstream.* values (channel.created/deleted, message.new/updated/deleted/read). Real GetStream webhooks also emit member.added, member.removed, channel.updated, user.watching.start, message.flagged, etc. publisher.py:87 does an unguarded EventType(event_type_str) which raises ValueError for any unknown type -> the HTTP ingest returns 500 and the event is lost. Same crash path applies to any unknown jitsi.* or admin event type. The enum is treated as closed-world while the ingress is open-world.",
+      "fix_hint": "In event-receiver, guard the conversion (try/except ValueError with fallback priority/version, or EventType lookup via a dict.get). In event-schemas, either add the missing GetStream member/channel-update types or document/provide an explicit 'unknown event type' policy (e.g. helper event_type_or_none()).",
+      "cross_service": true,
+      "origin": "new"
+    },
+    {
+      "service": "event-booking",
+      "severity": "CRITICAL",
+      "title": "event-saver and event-booking are competing consumers on the same queue events.booking.lifecycle",
+      "file": "event-booking/event_booking/config.py:24",
+      "detail": "event-booking subscribes to booking_lifecycle_queue='events.booking.lifecycle' (config.py:24, consumer.py:52-63) while event-saver also consumes 'events.booking.lifecycle' (its routing_destinations from config.py:11-33 become its subscription queues). Two services on one RabbitMQ queue means round-robin delivery: roughly half of booking.created/rescheduled/reassigned/cancelled events never reach event-saver (no DB record, no projections) and the other half never reach event-booking (no chat, no meeting URL, no notifications). Additionally event-booking declares the queue with x-dead-letter-exchange=f'{queue}.dlq' (consumer.py:59) while event-receiver's topology declares it with x-dead-letter-exchange='events.dlx' (publisher.py:205) -> inequivalent-arg PRECONDITION_FAILED on declare, whichever service starts second. Root cause: queue names and queue arguments are duplicated string literals per service; event-schemas (the intended single source of truth) defines no queue/topology constants.",
+      "fix_hint": "Give event-booking its own queue (e.g. events.booking.commands) bound to the same routing keys, or have event-receiver route to two queues. Move queue names + standard queue arguments (x-max-priority, DLX) into event-schemas as shared constants and import them in event-receiver, event-saver, event-booking, event-notifier, event-users.",
+      "cross_service": true,
+      "origin": "new"
+    },
+    {
+      "service": "event-schemas",
+      "severity": "HIGH",
+      "title": "meeting.url_created: schema matches neither producer nor consumer; booking_meeting_links is never populated",
+      "file": "event-schemas/event_schemas/meeting.py:8",
+      "detail": "Three different contracts exist for the same event. Schema MeetingUrlCreatedPayload requires {email, recipient_role, meeting_url}. Producer event-booking sends {participant_id, url} (controllers/meeting.py:122-129). Consumer event-saver's MeetingLinkProjection reads original['meeting_url'] (meeting_projection.py:43-44) -> always None, and requires organizer/client user_ids from normalized participants, but event-receiver's normalizer expects a 'users' list for MEETING_URL_* (normalizers.py:70-71, _participants_from_users_list) which the producer doesn't send -> participants always empty -> projection returns None. Result: meeting link rows are never written and nothing validates the payload. MeetingUrlDeletedPayload (requires recipient_role) vs producer's {external_id} has the same mismatch.",
+      "fix_hint": "Pick one wire format (the producer's {participant_id, url} plus email/role if saver needs them), update MeetingUrlCreatedPayload/MeetingUrlDeletedPayload to match, validate in event-booking before publish, and align the receiver normalizer and saver projection field names (url vs meeting_url).",
+      "cross_service": true,
+      "origin": "new"
+    },
+    {
+      "service": "event-schemas",
+      "severity": "HIGH",
+      "title": "Booking lifecycle wire format (users list) is not modeled; BookingCancelled/Rescheduled/Reassigned payload models match nothing real and are never validated",
+      "file": "event-schemas/event_schemas/booking.py:34",
+      "detail": "The actual wire payloads for booking.* events carry a 'users' list ([{email, role, time_zone, ...}]) - proven by event-receiver's _transform_booking_created_payload (ingest.py:154-171) and by the normalizer routing booking.cancelled/reassigned/rescheduled through _participants_from_users_list(payload['users']) (normalizers.py:66-67, 108-114). No schema model has a 'users' field. BookingRescheduledPayload, BookingCancelledPayload and BookingReassignedPayload (volunteer_id/client_id/previous_* shape) are imported by no service and validated nowhere; a producer that followed the published schema would yield zero normalized participants downstream. April items MEDIUM-3 (rescheduled never validated) and LOW-3 (cancelled missing user/client emails) are still real in this evolved form.",
+      "fix_hint": "Model the real ingress format (e.g. BookingLifecycleIngressPayload with users: list[ParticipantInfo]) or change producers to the modeled format. Then validate cancelled/rescheduled/reassigned in event-receiver's ingest_booking the same way booking.created is validated.",
+      "cross_service": true,
+      "origin": "april"
+    },
+    {
+      "service": "event-schemas",
+      "severity": "HIGH",
+      "title": "No EventType-to-payload-model mapping; 17 of 22 payload models are dead code never instantiated by any service",
+      "file": "event-schemas/event_schemas/__init__.py:47",
+      "detail": "There is still no EVENT_TYPE_TO_MODEL mapping. Grep across all services shows only 5 models are ever used: BookingCreatedPayload, BookingReminderSentPayload, GetStreamEventPayload, JitsiEventPayload, UniSenderStatusPayload (all in event-receiver). The other 17 exported models (BookingCancelled/Rescheduled/Reassigned/Rejected, Chat*, MeetingUrl*, EmailNotification, EmailRejectionNotification, TelegramNotification, PushNotification, NotificationCommand, NotificationRecipient, BookingClientReassigned, UserEmailChangeRequested) are imported by zero producers and zero consumers, so the 'shared contract' is fiction for most event types and schema drift is invisible at build and run time.",
+      "fix_hint": "Add EVENT_TYPE_TO_MODEL: dict[EventType, type[BaseModel]] in event-schemas, use it for dispatch/validation in event-receiver ingest and in consumers (event-saver, event-notifier, event-users), and add a test asserting every EventType has a model.",
+      "cross_service": true,
+      "origin": "april"
+    },
+    {
+      "service": "event-notifier",
+      "severity": "HIGH",
+      "title": "booking_id CloudEvent extension attribute name not centralized: receiver publishes 'bookingid', notifier reads 'booking_id' -> always empty",
+      "file": "event-notifier/event_notifier/adapters/consumer.py:69",
+      "detail": "event-receiver publishes the extension attribute as 'bookingid' (publisher.py:129). event-saver and event-booking defensively read both spellings ('bookingid' or 'booking_id'), but event-notifier reads only ce.get('booking_id') with a fallback to top-level data['booking_id'] - which is also wrong because the data is wrapped in {original, normalized}. So booking_id is always '' in notifier outbox records. The monorepo CLAUDE.md documents the header as ce-booking_id, which matches no publisher. There is no shared constant for CloudEvent extension attribute names in event-schemas.",
+      "fix_hint": "Define BOOKING_ID_ATTRIBUTE = 'bookingid' (and the other ce extension names) in event-schemas and import it everywhere; fix event-notifier's lookup; update docs/architecture/MESSAGE_CONTRACTS.md and root CLAUDE.md.",
+      "cross_service": true,
+      "origin": "new"
+    },
+    {
+      "service": "event-schemas",
+      "severity": "MEDIUM",
+      "title": "BookingRejectedPayload does not match what event-booking actually publishes for booking.rejected",
+      "file": "event-schemas/event_schemas/booking.py:116",
+      "detail": "BookingRejectedPayload requires client_email (EmailStr) plus rejection_type/available_from/has_active_booking fields. The only producer, event-booking, publishes booking.rejected with data={'rejection_reasons': [...]} only (controllers/booking.py:55-59); the rich rejection details go separately into the notification command's template_data. If the schema were ever applied, every real booking.rejected event would fail validation. EmailRejectionNotificationPayload is similarly orphaned (no producer/consumer).",
+      "fix_hint": "Shrink BookingRejectedPayload to the actually-published shape (rejection_reasons, optional rejection_type/available_from/has_active_booking) or extend the producer to send the full payload; delete or wire up EmailRejectionNotificationPayload.",
+      "cross_service": true,
+      "origin": "new"
+    },
+    {
+      "service": "event-schemas",
+      "severity": "MEDIUM",
+      "title": "ChatCreatedPayload requires organizer_id/client_id but producer sends only channel_id",
+      "file": "event-schemas/event_schemas/chat.py:6",
+      "detail": "event-booking publishes chat.created/chat.deleted with data={'channel_id': ...} (controllers/chat.py:24-39). ChatCreatedPayload requires organizer_id and client_id (GetStream user IDs) and has no channel_id field; ChatDeletedPayload is documented as empty. Nothing validates either, and event-receiver's normalizer has no CHAT_* case, so the drift is silent. The schema documents a contract no service honors.",
+      "fix_hint": "Align ChatCreatedPayload/ChatDeletedPayload with the actual {channel_id} payload (or make event-booking send organizer_id/client_id) and validate at the producer.",
+      "cross_service": true,
+      "origin": "new"
+    },
+    {
+      "service": "event-admin",
+      "severity": "MEDIUM",
+      "title": "event-admin and event-users bypass event-schemas entirely: hardcoded event type strings and hand-built payloads",
+      "file": "event-admin/event_admin/routes.py:175",
+      "detail": "event-admin publishes 'booking.client_reassigned' (routes.py:175) and 'user.email.change_requested' (routes.py:290) as string literals with hand-assembled dicts; event-users' consumer compares against the literal 'user.email.change_requested' (consumer.py:123) and indexes original['user_id']/['old_email']/['new_email']/['requested_by'] with no Pydantic validation (KeyError -> message requeue loop on malformed payloads). The payload shapes currently match BookingClientReassignedPayload/UserEmailChangeRequestedPayload in event_schemas/user.py only by coincidence - neither service even declares event-schemas as a dependency, so any rename in the shared library silently breaks this flow.",
+      "fix_hint": "Add event-schemas as a dependency of event-admin and event-users; publish via EventType enum + model_dump() of the user.py models; validate with UserEmailChangeRequestedPayload.model_validate(original) in the event-users consumer.",
+      "cross_service": true,
+      "origin": "new"
+    },
+    {
+      "service": "event-schemas",
+      "severity": "MEDIUM",
+      "title": "Queue names and routing rules duplicated per service with no shared constants; receiver and saver rule sets have already drifted",
+      "file": "event-schemas/event_schemas/types.py:1",
+      "detail": "event-schemas defines no queue/routing constants although it is the designated single source of truth. Queue names are repeated as string literals in event-receiver/config.py (21 rules), event-saver/config.py (16 rules - missing booking.rejected, notification.send_requested, notification.push delivery, user.email.*, booking.client_reassigned rules that receiver has), event-booking/config.py:24, event-notifier/config.py:18 ('events.notification.commands'), event-users/consumer.py:108 ('events.user.email'). Root CLAUDE.md and QUEUES_DIGEST docs list only 5 queues while the actual topology has ~12 (events.mail, events.chat, events.chat.lifecycle, events.meeting.lifecycle, events.booking.reminder, events.notification.commands, events.user.email...). Each new queue must currently be updated in N places.",
+      "fix_hint": "Add a queues.py module to event-schemas with queue-name constants (and ideally the canonical EventType->queue routing table); import it from both configs; regenerate QUEUES_DIGEST docs from it.",
+      "cross_service": true,
+      "origin": "new"
+    },
+    {
+      "service": "event-schemas",
+      "severity": "MEDIUM",
+      "title": "EVENT_SCHEMA_VERSIONS remains cosmetic: only embedded in dataschema URI, never checked by any consumer",
+      "file": "event-schemas/event_schemas/types.py:164",
+      "detail": "Still real from April. The only use is event-receiver/adapters/publisher.py:88,116 building dataschema='https://schemas.example.com/{type}/{version}'. event-saver, event-notifier, event-booking and event-users never read the attribute. All 40 entries are 'v1' with no bump or compatibility mechanism, giving false confidence that versioning exists.",
+      "fix_hint": "Either implement consumer-side version checks (reject/route unknown versions) or remove the table and document that the system is unversioned until needed.",
+      "cross_service": true,
+      "origin": "april"
+    },
+    {
+      "service": "event-schemas",
+      "severity": "MEDIUM",
+      "title": "NormalizedParticipant.email is an unvalidated plain str (TypedDict) on the structure every consumer trusts",
+      "file": "event-schemas/event_schemas/normalized.py:19",
+      "detail": "Still real from April. The {original, normalized} envelope is now attached to EVERY published event (publisher.py:92-106) and event-saver's ParticipantExtractor consumes it directly. NormalizedParticipant is a TypedDict, so emails extracted from raw GetStream/Jitsi/UniSender dicts (normalizers.py:139-189) reach the participants table without any format validation; event-receiver's UserResolver also creates users in event-users keyed by these unvalidated strings.",
+      "fix_hint": "Validate email format in the normalizer before insertion (or convert the normalized structures to Pydantic models), or explicitly document that normalized participants carry unvalidated emails.",
+      "cross_service": true,
+      "origin": "april"
+    },
+    {
+      "service": "event-schemas",
+      "severity": "MEDIUM",
+      "title": "ClientInfo has diverged from UserInfo (no time_zone) and its docstring falsely claims inheritance; time_zone is dropped end-to-end anyway",
+      "file": "event-schemas/event_schemas/types.py:108",
+      "detail": "April MEDIUM-6 evolved: UserInfo gained time_zone (types.py:101-105) but ClientInfo did not, so a client timezone cannot be expressed in BookingCreatedPayload at all - exactly the divergence the April finding predicted, since ClientInfo says 'extends UserInfo' but does not inherit. Compounding it, event-receiver's _transform_booking_created_payload (ingest.py:161-163) keeps only email from the incoming users list, discarding role/time_zone, so UserInfo.time_zone is never populated on the only validated path and saver's participants.timezone stays empty.",
+      "fix_hint": "Make ClientInfo inherit from UserInfo (or merge into one PersonInfo with email + time_zone), and have event-receiver's transform pass time_zone through for both organizer and client.",
+      "cross_service": true,
+      "origin": "april"
+    },
+    {
+      "service": "event-schemas",
+      "severity": "LOW",
+      "title": "GetStreamEventPayload mixes an explicit 'extra' field with model_config extra='allow'",
+      "file": "event-schemas/event_schemas/external.py:45",
+      "detail": "Still real from April. Unknown webhook fields land in __pydantic_extra__, never in the declared extra dict, which is dead weight and misleading. JitsiEventPayload (external.py:71) has the same pattern.",
+      "fix_hint": "Remove the explicit extra field from both models and rely on extra='allow', or drop extra='allow' and document the explicit dict.",
+      "cross_service": false,
+      "origin": "april"
+    },
+    {
+      "service": "event-schemas",
+      "severity": "LOW",
+      "title": "CLAUDE.md still claims an IANA timezone pattern validator that does not exist",
+      "file": "event-schemas/CLAUDE.md:48",
+      "detail": "Still real from April. 'timezone fields use an IANA pattern validator' - no validator exists anywhere; UserInfo.time_zone and NormalizedParticipant.time_zone are plain optional strings.",
+      "fix_hint": "Add a zoneinfo-based validator on UserInfo.time_zone or fix the doc to state timezone strings are unvalidated.",
+      "cross_service": false,
+      "origin": "april"
+    },
+    {
+      "service": "event-schemas",
+      "severity": "LOW",
+      "title": "Still no test suite: map coverage, enum-model pairing and wire-format fidelity are untested",
+      "file": "event-schemas/CLAUDE.md:18",
+      "detail": "Still real from April; no tests/ directory exists. EVENT_PRIORITIES and EVENT_SCHEMA_VERSIONS are currently complete (verified: all 40 EventType members covered), but only by manual discipline - the next enum addition can silently regress, and nothing asserts payload examples actually validate or that producers' shapes match the models (this audit found five such mismatches).",
+      "fix_hint": "Add a minimal pytest suite: (a) every EventType in both maps, (b) every EventType has a payload model once EVENT_TYPE_TO_MODEL exists, (c) each model's json_schema_extra example validates against the model.",
+      "cross_service": false,
+      "origin": "april"
+    },
+    {
+      "service": "event-schemas",
+      "severity": "LOW",
+      "title": "volunteer_id / client_id / user_id fields described as UUIDs are plain str with no format validation",
+      "file": "event-schemas/event_schemas/booking.py:13",
+      "detail": "Still real from April: BookingCreatedPayload.volunteer_id/client_id (booking.py:13-14), BookingRescheduledPayload (37-38), BookingReassignedPayload (62-63), BookingReminderSentPayload.client_id (103), user.py new_client_user_id/user_id all say 'UUID' in their descriptions but accept any string.",
+      "fix_hint": "Use uuid.UUID (or pydantic UUID4) annotations, or document deliberately loose typing because GetStream user IDs share these fields.",
+      "cross_service": false,
+      "origin": "april"
+    },
+    {
+      "service": "event-schemas",
+      "severity": "LOW",
+      "title": "Dead/unwired types: NOTIFICATION_PUSH_SENT has no producer, EmailRejectionNotificationPayload is orphaned, SourceType lacks the notifier source",
+      "file": "event-schemas/event_schemas/types.py:43",
+      "detail": "EventType.NOTIFICATION_PUSH_SENT and PushNotificationPayload have no producer (event-notifier's PushChannel is disabled) and no consumer beyond a routing rule. EmailRejectionNotificationPayload is exported but referenced by no service and tied to no EventType. SourceType enumerates admin/booking/getstream/unisender-go/jitsi but not 'event-notifier' (NOTIFIER_SOURCE in event-notifier/event_types.py:5), which publishes notification.*.message_sent result events, so SourceType cannot be used exhaustively for source matching.",
+      "fix_hint": "Delete the orphaned model and the push event type until a producer exists (pre-production allows removal), and add NOTIFIER to SourceType if result-event sources should be typed.",
+      "cross_service": true,
+      "origin": "new"
+    }
+  ]
+}
