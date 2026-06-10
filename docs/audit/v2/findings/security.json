@@ -1,0 +1,54 @@
+{
+  "findings": [
+    {
+      "service": "event-users",
+      "severity": "MEDIUM",
+      "title": "Read endpoints are not admin-gated: any authenticated principal can enumerate all users' PII and the email-change audit log",
+      "file": "event-users/event_users/routes.py:76-149",
+      "detail": "Only create_user (POST /api/users) and update_user (PATCH /api/users/id/{id}) carry Depends(require_admin). Every read route — get_users_by_ids (POST /by-ids), get_user_by_email_role (GET /roles/{role}/emails/{email}), get_user (GET /id/{id}), list_users (GET /api/users), and get_email_changelog (GET /{id}/email-changelog) — is protected only by the global BearerAuthMiddleware, which accepts ANY valid bearer including a role=user JWT. So a non-admin token (or the shared static api_bearer_token, which itself maps to role=admin) can page through the entire users table, resolve users by email, and read the full email-change history (names, emails, prior emails). On a service that 'will face the internet' this is broad PII disclosure. The email path-segment leak (GET .../emails/{email}) compounds it by putting addresses into access logs.",
+      "fix_hint": "Add Depends(require_admin) to all read routes (or a read-scope dependency), and stop minting role=user JWTs / mapping the static token to admin without least-privilege scoping. Move email out of the URL path into a query/body.",
+      "cross_service": false,
+      "origin": "new"
+    },
+    {
+      "service": "event-users",
+      "severity": "MEDIUM",
+      "title": "JWT verification across event-admin and event-users omits aud/iss; HS256 symmetric tokens have no audience binding between the browser-facing admin token and the internal users service",
+      "file": "event-users/event_users/middleware.py:40 ; event-users/event_users/auth.py:48 ; event-admin/event_admin/middleware.py:71 ; event-admin/event_admin/auth.py:34",
+      "detail": "event-admin issues HS256 JWTs ({sub,role,exp}) with jwt_secret_key and no aud/iss claim. event-users verifies HS256 JWTs with jwt.decode(token, secret, algorithms=[alg]) and also no aud/iss check (it reads role straight from the payload to authorize, with require_admin gating writes). Because neither service binds an audience or pins an issuer, a token is accepted by whichever service shares the secret. The admin JWT is held in the browser (localStorage, per existing finding) yet is structurally valid against the internal users API: if JWT_SECRET_KEY is ever reused across services (operationally tempting — same algorithm, same claim shape), a browser-exfiltrated admin token directly drives event-users admin mutations. There is also no issuer pinning, so any component sharing the secret can mint an admin token. event-users additionally accepts a static api_bearer_token that maps to role=admin — a single shared, unrotatable root credential (the dev default is the weak literal 'dev-token').",
+      "fix_hint": "Add and verify distinct aud (e.g. 'event-admin-ui' vs 'event-users-internal') and a fixed iss on every jwt.encode/decode; never share JWT_SECRET_KEY across services; replace the shared static admin bearer with scoped, rotatable service credentials.",
+      "cross_service": true,
+      "origin": "new"
+    },
+    {
+      "service": "event-booking",
+      "severity": "LOW",
+      "title": "Jitsi meeting JWT minted with sub:'*' (wildcard tenant/domain) instead of a fixed tenant",
+      "file": "event-booking/event_booking/controllers/meeting.py:60",
+      "detail": "_create_jitsi_token sets sub:'*'. room is correctly scoped to booking.uid (so a token for booking A cannot join room B once the Jitsi server enforces the room claim), but sub:'*' makes the token tenant-agnostic: it is valid against any tenant/subdomain served by the same key rather than a single deployment. On a shared/multi-tenant Jitsi (JaaS) or any future multi-domain setup this removes a containment boundary. Combined with the existing finding that the chat token never expires, token blast radius is wider than necessary.",
+      "fix_hint": "Set sub to the concrete Jitsi tenant/app id rather than '*', and keep room == booking.uid so server-side room enforcement remains the authority.",
+      "cross_service": false,
+      "origin": "new"
+    },
+    {
+      "service": "event-receiver",
+      "severity": "LOW",
+      "title": "No secret-strength validation in any Settings class; weak/placeholder secrets are accepted at startup across services",
+      "file": "event-receiver/event_receiver/config.py:120-145 ; event-admin/event_admin/config.py:31 ; event-users/event_users/config.py:16",
+      "detail": "Settings fields for credentials use Field(strict=True)/Field(...) which only enforce presence and type, never length or entropy. The local dev .env files (untracked, so not a leak) reveal the de-facto defaults operators copy: event-receiver BOOKING_API_KEY=123 and ADMIN_API_KEY=123POST..., event-admin JWT_SECRET_KEY=CHANGE... (a literal CHANGE_ME placeholder) and CACHE_INVALIDATION_TOKEN=1234, event-users API_BEARER_TOKEN=dev-token and CRM_API_TOKEN=123, and CRM_ENCRYPTION_KEY=0000...00 (all-zero AES-256 key — passes the hex/length validator). All of these gate authentication or encryption; a JWT_SECRET_KEY left at the placeholder makes every admin token forgeable, and a 3-character API key is trivially brute-forced (comparisons are also non-constant-time per existing findings). Nothing in code prevents shipping these.",
+      "fix_hint": "Add field_validators enforcing a minimum length/entropy on every secret (e.g. >=32 chars for keys/tokens), reject known placeholders (CHANGE..., dev-token, all-zero keys), and fail startup outside DEBUG if any secret is below threshold.",
+      "cross_service": true,
+      "origin": "new"
+    },
+    {
+      "service": "event-admin",
+      "severity": "LOW",
+      "title": "CORS configured with allow_credentials=True plus wildcard methods/headers although auth is header-based Bearer (credentials unnecessary, widens blast radius on origin misconfig)",
+      "file": "event-admin/event_admin/main.py:50 ; event-users/event_users/main.py:81",
+      "detail": "Both event-admin and event-users add CORSMiddleware with allow_credentials=True, allow_methods=['*'], allow_headers=['*']. Authentication is performed via an Authorization: Bearer header sourced from localStorage, not cookies, so credentialed CORS is not needed. allow_credentials=True means that if cors_origins is ever broadened (e.g. an operator adds a staging/wildcard-ish origin, or a future env sets multiple origins) the browser will attach and expose credentials cross-origin, and the wildcard methods/headers maximize what a permitted malicious origin can do. event-receiver, by contrast, omits allow_credentials — inconsistent posture across services.",
+      "fix_hint": "Drop allow_credentials=True (token is sent explicitly by the SPA, not as a cookie), and restrict allow_methods/allow_headers to the actually-used set. Keep allow_origins to an exact, env-validated allow-list.",
+      "cross_service": false,
+      "origin": "new"
+    }
+  ]
+}
