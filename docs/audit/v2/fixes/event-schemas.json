@@ -1,0 +1,31 @@
+{
+  "service": "event-schemas",
+  "branch": "audit-fixes",
+  "fixed": [
+    {
+      "title": "MEDIUM-5 / LOW: GetStreamEventPayload (and JitsiEventPayload, same defect) mixed explicit `extra` field with extra=\"allow\"; explicit field removed, extra=\"allow\" is the single mechanism",
+      "commit": "b0d2745"
+    },
+    {
+      "title": "MEDIUM-1 / LOW: IANA time zone validator implemented (TimeZoneName via zoneinfo.ZoneInfo AfterValidator) on UserInfo.time_zone and BookingParticipant.time_zone; CLAUDE.md claim is now true",
+      "commit": "2aba224"
+    },
+    {
+      "title": "LOW-2: UUID-format validation (UuidStr, str on the wire) on volunteer_id/client_id (BookingCreatedPayload, optional), client_id (BookingReminderSentPayload, optional), user_id (UserEmailChangeRequestedPayload), new_client_user_id (BookingClientReassignedPayload); producers verified read-only: event-admin sends real event-users UUIDs, cal.com webhooks never carry volunteer_id/client_id",
+      "commit": "2aba224"
+    },
+    {
+      "title": "LOW-1 test gaps: contract completeness (every EventType has payload model + priority + schema version, no orphan map entries) and wire-format fidelity (every model's documented example round-trips through the canonical {original, normalized} envelope JSON) + validator tests; suite now 73 tests",
+      "commit": "3d90c0d"
+    }
+  ],
+  "skipped": [
+    {
+      "title": "EnvelopeParticipant.time_zone/user_id left as lenient str | None",
+      "reason": "consumer-side envelope parsing must tolerate in-flight legacy messages; strictness belongs on producer-validated payload models"
+    }
+  ],
+  "testsPass": true,
+  "lintPass": true,
+  "notes": "uv run pytest: 73 passed; uv run ruff check . + ruff format --check: clean. AUDIT.md MEDIUM-1, MEDIUM-5, LOW-1, LOW-2 marked resolved (audit-v2 2026-06-11). API_CONTRACTS.md and CLAUDE.md updated for changed sections."
+}
