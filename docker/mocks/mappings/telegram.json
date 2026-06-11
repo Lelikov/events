@@ -1,0 +1,24 @@
+{
+  "mappings": [
+    {
+      "name": "Telegram Bot API: sendMessage",
+      "request": {
+        "method": "POST",
+        "urlPathPattern": "/telegram/bot[^/]+/sendMessage"
+      },
+      "response": {
+        "status": 200,
+        "headers": { "Content-Type": "application/json" },
+        "jsonBody": {
+          "ok": true,
+          "result": {
+            "message_id": 1001,
+            "chat": { "id": 1, "type": "private" },
+            "date": 1750000000,
+            "text": "mocked"
+          }
+        }
+      }
+    }
+  ]
+}
