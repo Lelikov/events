@@ -1,5 +1,13 @@
 # Architecture Audit Report
 
+> **⚠️ SUPERSEDED — historical document.** This report describes the **pre-audit-v2 state
+> (April 2026)**. A fresh full audit (audit-v2, 2026-06-10/11) re-audited all 9 services,
+> fixed or dispositioned every finding, and verified the result end-to-end on a real broker.
+> See **[`docs/audit/v2/AUDIT_REPORT_V2.md`](v2/AUDIT_REPORT_V2.md)** for the current state.
+> Most CRITICAL/HIGH items below (routing bug C-1, queue mismatches, auth bypass C-14,
+> SKIP LOCKED bug C-11, missing tests L-1, …) are resolved on the per-repo `audit-fixes`
+> branches.
+
 Generated: 2026-04-20
 
 ## Executive Summary
