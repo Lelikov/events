@@ -1,0 +1,25 @@
+{
+  "scope": "followups 4,7",
+  "fixed": [
+    {
+      "item": "#4 locale-aware notifications (language half): optional participant locale end-to-end — event-schemas 0.3.0 adds locale to EnvelopeParticipant/BookingParticipant/NotificationRecipient; event-receiver propagates cal.com language.locale (calcom translator, booking.created transform, users-list and notification-recipient normalizers); event-booking selects cal.com users.locale/Attendee.locale and emits recipients[].locale (controller + reminder scheduler); event-notifier resolves per-recipient locale (producer value first, envelope fallback), stores it in outbox template_context, restructures Jinja2 templates to templates/<locale>/telegram/ (existing Russian = 'ru', minimal 'en' added) and supports locale-keyed UNISENDER_TEMPLATE_IDS (legacy flat form = default locale); absent locale falls back to DEFAULT_LOCALE (ru)",
+      "commits": [
+        "event-schemas:469c0e0",
+        "event-receiver:fb82a87",
+        "events(root,event-booking):6a04cc9",
+        "event-notifier:4d3dfba"
+      ]
+    },
+    {
+      "item": "#7 Bearer scheme for admin-ingest API key: event-receiver ingest_admin accepts only 'Authorization: Bearer <key>' (constant-time compare of the token part; raw keys / wrong schemes / missing header rejected with 401); both /event/admin senders switched in the same change set — event-admin EventPublisherClient and event-notifier DeliveryResultPublisher (cross-repo grep confirmed no other posters)",
+      "commits": [
+        "event-receiver:14cc5ff",
+        "event-admin:7edc40e",
+        "event-notifier:490c311"
+      ]
+    }
+  ],
+  "skipped": [],
+  "testsPass": true,
+  "notes": "All touched services green: event-schemas 76 passed, event-receiver 111 passed, event-booking 91 passed, event-notifier 107 passed, event-admin 75 passed; ruff clean everywhere. Docs updated in the same commits: root MESSAGE_CONTRACTS.md envelope section (locale + Bearer), receiver API_CONTRACTS/EVENTS_DIGEST/PROJECT_CONTEXT, schemas API_CONTRACTS, booking API_CONTRACTS, notifier CLAUDE/SERVICE_OVERVIEW/API_CONTRACTS/DEPENDENCIES/.env.example/AUDIT (locale open item resolved), admin SERVICE_OVERVIEW/DEPENDENCIES/AUDIT (Bearer skipped item resolved). Backward compatibility: locale is optional everywhere (absent => notifier DEFAULT_LOCALE 'ru'); UNISENDER_TEMPLATE_IDS legacy flat form still read as the default-locale set. Breaking by design (coordinated): /event/admin no longer accepts a raw Authorization key — deploy receiver+admin+notifier together."
+}

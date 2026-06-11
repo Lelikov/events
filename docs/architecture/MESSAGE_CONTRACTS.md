@@ -62,10 +62,14 @@ startup; event-receiver declares the full topology.
 ### Canonical data envelope (audit-v2)
 
 Every CloudEvent published by event-receiver carries `data` as
-`{"original": <domain payload>, "normalized": {"participants": [{email, role, time_zone, user_id}]}}`.
+`{"original": <domain payload>, "normalized": {"participants": [{email, role, time_zone, locale, user_id}]}}`.
 Typed accessors: `event_schemas.envelope.EventEnvelope` / `unwrap_payload()`. Consumers MUST NOT
 read domain fields at the top level. `normalized.participants[].user_id` is the event-users UUID
-resolved by the receiver.
+resolved by the receiver. `locale` (optional, event-schemas ≥0.3.0) is the participant's preferred
+language tag (e.g. `"ru"`, `"en"`): the receiver fills it from cal.com `language.locale`
+(organizer/attendees) and from producer `recipients[].locale` / `users[].locale`; event-notifier
+uses it for per-recipient template language selection with a configured default-locale fallback
+(`ru`). Absent locale ⇒ default locale.
 
 ### Canonical CloudEvent attributes (audit-v2)
 
@@ -154,7 +158,7 @@ Routing keys come from `event_schemas.queues.ROUTING_RULES`; `events.booking.lif
 
 **Flow**:
 1. Admin вызывает `POST /api/users/id/{user_id}/change-email` в event-admin.
-2. event-admin публикует CloudEvent в event-receiver `POST /event/admin` (auth: static API key).
+2. event-admin публикует CloudEvent в event-receiver `POST /event/admin` (auth: `Authorization: Bearer <static API key>`).
 3. event-receiver маршрутизирует `admin` / `user.email.*` → `events.user.email`.
 4. event-users потребляет событие: обновляет `users.email`, создаёт запись в `user_email_changelog`, устанавливает `email_source='admin'`.
 5. Webhook outbox доставляет изменение в CRM; после успешной доставки сбрасывает `email_source='crm'`.
@@ -189,7 +193,7 @@ Routing keys come from `event_schemas.queues.ROUTING_RULES`; `events.booking.lif
 **Flow**:
 1. Admin вызывает `POST /bookings/{booking_uid}/reassign-client` в event-admin.
 2. event-admin проверяет, что booking существует (404 иначе) и что в event-users есть client с указанным email (lowercase, 404 иначе).
-3. event-admin публикует CloudEvent в event-receiver `POST /event/admin` (auth: static API key; ошибка публикации → 502, действие не применено).
+3. event-admin публикует CloudEvent в event-receiver `POST /event/admin` (auth: `Authorization: Bearer <static API key>`; ошибка публикации → 502, действие не применено).
 4. event-receiver маршрутизирует `admin` / `booking.client_reassigned` → `events.booking.lifecycle`.
 5. event-saver проецирует смену клиента в `bookings.client_user_id` и lifecycle-историю.
 
@@ -279,7 +283,7 @@ sequenceDiagram
     participant Email as UniSender Go API
     participant TG as Telegram Bot API
 
-    Src->>ER: POST /event/booking<br/>{type: notification.send_requested,<br/>recipients[{email, role}], template_data}
+    Src->>ER: POST /event/booking<br/>{type: notification.send_requested,<br/>recipients[{email, role, locale?}], template_data}
     ER->>ER: API-key auth, normalize recipients -><br/>normalized.participants (+user_id)
     ER->>ER: routing rules -><br/>"events.notification.commands"
     ER->>RMQ: publish(routing_key=<br/>"events.notification.commands")
