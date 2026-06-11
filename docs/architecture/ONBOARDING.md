@@ -35,6 +35,33 @@ event-notifier is the newest service. It has no migration framework (raw SQL boo
 
 ## How to Run the Full System Locally
 
+### Quick start: one command (recommended)
+
+The root `docker-compose.yml` starts everything — all 9 services, RabbitMQ,
+four PostgreSQL containers (saver/users/notifier/cal.com fixture) and a
+WireMock container mocking every external HTTP API (Shortify, UniSender Go,
+Telegram, GetStream):
+
+```bash
+docker compose up -d --build    # from the repo root; no .env required
+docker compose ps               # wait until everything is (healthy)
+docker compose down -v          # tear down, including volumes
+```
+
+Dev-grade defaults for every variable are baked into `docker-compose.yml`
+(mirrored in `.env.example`). Copy `.env.example` to `.env` and override only
+what you change — e.g. set `CALCOM_DATABASE_URL` to a real cal.com PostgreSQL
+DSN to integrate with an external cal.com instead of the seeded `pg-calcom`
+fixture, or swap the `mocks` endpoints (`SHORTENER_URL`, `UNISENDER_BASE_URL`,
+`TELEGRAM_BASE_URL`, `CHAT_BASE_URL`) for real APIs.
+
+Entry points: event-receiver `:8888`, event-users `:8001`, event-admin
+`:8002`, admin frontend `:3000`, jitsi-chat `:8080`, WireMock request journal
+`:8089/__admin/requests`, RabbitMQ management `:15672`.
+
+The manual per-service workflow below is still useful when iterating on a
+single service against the rest of the stack.
+
 ### Prerequisites
 
 - Python 3.14 with `uv` installed

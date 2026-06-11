@@ -49,6 +49,46 @@ cal.com webhooks / external clients     jitsi-chat SPA (Jitsi iframe events)
 - **Shared schemas**: `event-schemas` (v0.2.0) is a local pip package imported by `event-receiver`, `event-saver`, `event-booking`, and `event-notifier`. Its `queues.py` is the single source of truth for the RabbitMQ topology; `envelope.py` defines the mandatory `{original, normalized}` consumer unwrap.
 - **participants.user_id** in `event-saver`'s DB references the UUID PK from `event-users`; event-receiver resolves it at ingress into `normalized.participants`.
 
+## Quick Start (Docker Compose)
+
+The whole system — 9 services, RabbitMQ, 4 PostgreSQL instances, and WireMock
+stand-ins for all external HTTP APIs — runs with one command from the repo root:
+
+```bash
+docker compose up -d --build     # no .env needed: dev defaults are baked in
+cp .env.example .env             # optional: copy + edit only what you change
+docker compose down -v           # tear down (incl. volumes)
+```
+
+Host ports:
+
+| Port | Service |
+|---|---|
+| 8888 | event-receiver (ingress webhooks: `/event/calcom`, `/event/jitsi`, …) |
+| 8001 | event-users API |
+| 8002 | event-admin API |
+| 3000 | event-admin-frontend (nginx, same-origin proxy to event-admin) |
+| 8080 | jitsi-chat SPA |
+| 8089 | WireMock mocks (journal: `http://localhost:8089/__admin/requests`) |
+| 5672 / 15672 | RabbitMQ (AMQP / management UI) |
+
+Mock vs real external APIs: Shortify, UniSender Go, Telegram Bot API and
+GetStream all default to the WireMock container (`http://mocks:8080/<prefix>`,
+mappings in `docker/mocks/mappings/`). Point the corresponding `*_URL`/key
+variables in `.env` at real endpoints to integrate for real.
+
+External cal.com: by default `event-booking` reads the seeded `pg-calcom`
+fixture DB (`docker/calcom-init/`). Set `CALCOM_DATABASE_URL` in `.env` to a
+real cal.com PostgreSQL DSN to use an external instance (the fixture container
+keeps running but is unused).
+
+Notes:
+- `admin_users` (event-admin panel logins) is created by event-saver's alembic
+  but not seeded — seed rows manually if you need to log in to the admin UI.
+- event-receiver dedupes identical webhook payloads in-memory for 10 minutes
+  ("Duplicate event suppressed by idempotency cache") — restart it when
+  replaying the same payload during testing.
+
 ## Common Patterns Across Python Services
 
 All Python services share the same conventions:
