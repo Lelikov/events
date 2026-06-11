@@ -119,6 +119,7 @@ Payload contracts per type: `event_schemas.mapping.PAYLOAD_MODELS` and
 | `jitsi.suspend.detected` | jitsi-chat (via event-receiver) | event-saver | `events.jitsi` | 5 (NORMAL) | `JitsiEventPayload` |
 | `jitsi.toolbar.button_clicked` | jitsi-chat (via event-receiver) | event-saver | `events.jitsi` | 5 (NORMAL) | `JitsiEventPayload` |
 | `user.email.change_requested` | event-admin (via event-receiver `/event/admin`) | event-users | `events.user.email` | 10 (CRITICAL) | `UserEmailChangeRequestedPayload` |
+| `booking.client_reassigned` | event-admin (via event-receiver `/event/admin`) | event-saver | `events.booking.lifecycle` | 10 (CRITICAL) | `BookingClientReassignedPayload` |
 | _(unmatched)_ | event-receiver | event-saver (fallback) | `events.unrouted` | -- | raw payload |
 
 **Source:** `docs/audit/CONTRACT_MAP.md:46-71`, `event-schemas/event_schemas/types.py:8-43`
@@ -157,6 +158,38 @@ Payload contracts per type: `event_schemas.mapping.PAYLOAD_MODELS` and
 5. Webhook outbox доставляет изменение в CRM; после успешной доставки сбрасывает `email_source='crm'`.
 
 **CRM sync protection**: поле `email_source='admin'` блокирует перезапись email при следующей синхронизации с CRM до тех пор, пока outbox не доставит изменение.
+
+---
+
+## Event Detail: `booking.client_reassigned`
+
+Событие смены клиента в бронировании, инициируемое администратором через `event-admin`.
+
+| Атрибут | Значение |
+|---------|----------|
+| `ce-type` | `booking.client_reassigned` |
+| `ce-source` | `admin` |
+| Queue | `events.booking.lifecycle` |
+| Priority | 10 (CRITICAL) |
+| Producer | event-admin (через `POST /event/admin` в event-receiver) |
+| Consumer | event-saver (`LifecycleProjection`, маппинг `BOOKING_CLIENT_REASSIGNED`) |
+
+**Payload schema (`BookingClientReassignedPayload`,** `event-schemas/event_schemas/user.py`**)**:
+
+```json
+{
+  "booking_uid": "book-123",
+  "new_client_user_id": "uuid",
+  "requested_by": "admin@example.com"
+}
+```
+
+**Flow**:
+1. Admin вызывает `POST /bookings/{booking_uid}/reassign-client` в event-admin.
+2. event-admin проверяет, что booking существует (404 иначе) и что в event-users есть client с указанным email (lowercase, 404 иначе).
+3. event-admin публикует CloudEvent в event-receiver `POST /event/admin` (auth: static API key; ошибка публикации → 502, действие не применено).
+4. event-receiver маршрутизирует `admin` / `booking.client_reassigned` → `events.booking.lifecycle`.
+5. event-saver проецирует смену клиента в `bookings.client_user_id` и lifecycle-историю.
 
 ---
 
