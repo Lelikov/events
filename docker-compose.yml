@@ -39,9 +39,10 @@ services:
       POSTGRES_DB: ${PG_SAVER_DB:-event_saver}
     volumes:
       - pg-saver-data:/var/lib/postgresql/data
-      # admin_users is the only table owned by event-admin (panel logins);
-      # everything else in this DB is migrated by event-saver's alembic.
-      - ./event-admin/scripts/admin_users.sql:/docker-entrypoint-initdb.d/01-admin-users.sql:ro
+      # admin_users (event-admin panel logins) is created by event-saver's
+      # alembic branch ea_0001 — do NOT also mount event-admin/scripts/
+      # admin_users.sql as initdb, the migration fails on the existing table.
+      # Seed panel logins manually after first start if you need to log in.
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${PG_SAVER_USER:-postgres} -d ${PG_SAVER_DB:-event_saver}"]
       interval: 5s
@@ -340,7 +341,9 @@ services:
       event-admin:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO /dev/null http://localhost:80/"]
+      # 127.0.0.1, not localhost: nginx only listens on IPv4 and busybox
+      # wget resolves localhost to ::1 without falling back.
+      test: ["CMD-SHELL", "wget -qO /dev/null http://127.0.0.1:80/"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -362,7 +365,7 @@ services:
     ports:
       - "8080:80"
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO /dev/null http://localhost:80/"]
+      test: ["CMD-SHELL", "wget -qO /dev/null http://127.0.0.1:80/"]
       interval: 10s
       timeout: 5s
       retries: 5
