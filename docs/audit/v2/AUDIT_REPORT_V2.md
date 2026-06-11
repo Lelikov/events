@@ -171,20 +171,25 @@ commits).
 
 ### 5a. Follow-ups requiring code work
 
-| # | Item | Where | Source |
-|---|---|---|---|
-| 1 | **event-users hardcodes queue arguments** in `event_users/consumer.py` (byte-identical to canonical, but no `event-schemas` dependency in its pyproject — single-source-of-truth gap) | event-users | INTEGRATION_REPORT §2 / follow-up 1 |
-| 2 | **event-receiver still calls the deprecated** `GET /api/users/roles/{role}/emails/{email}` (verified present in `adapters/users_client.py:46`); migrate to `GET /api/users/by-identity`, then drop the deprecated route in event-users | event-receiver, then event-users | INTEGRATION_REPORT follow-up 2; event-users manifest |
-| 3 | **Absolute `file:///Users/...` event-schemas references** in event-saver / event-booking / event-notifier pyprojects (not portable to CI; event-receiver already uses relative `path = "../event-schemas"`) | event-saver, event-booking, event-notifier | INTEGRATION_REPORT follow-up 3 |
-| 4 | **Locale-aware notifications**: cal.com `language.locale` is dropped at receiver ingress; envelope/`EnvelopeParticipant` carry no locale field. Time-zone half is DONE (per-recipient `start_time_local` in notifier c276ebf); the language half needs event-schemas + event-receiver changes | event-schemas, event-receiver, event-notifier | notifier manifest skipped #1 |
-| 5 | **FCM push channel**: implemented and retry-classified but deliberately not wired in `ioc.py` — pending FCM credentials and an OAuth token provider | event-notifier | notifier manifest skipped #2 |
-| 6 | **Machine-readable error codes from event-admin** (`detail: {code: ...}`): frontend error translation is keyed on exact backend English strings (mitigated client-side, tracked as frontend AUDIT.md #13) | event-admin + frontend | frontend manifest skipped #1 |
-| 7 | **`Bearer` scheme for the admin-ingest API key**: requires a coordinated two-side change (event-admin sender + event-receiver `ingest_admin`); both sides currently use the raw header constant-time-compared | event-admin + event-receiver | admin manifest skipped #1 |
-| 8 | **DLQ consumer / alerting**: nothing consumes any `.dlq`, and dead letters expire after 24h (TTL is canonical, see 5b). Redrive runbook documented in receiver QUEUES_DIGEST; platform-level alerting still needed | platform/ops | saver + receiver manifests |
-| 9 | **user_id backfill/reconciliation**: when event-users is down at ingress, events publish with `user_id=None` permanently; a backfill job is event-saver/event-users scope | event-saver / event-users | receiver manifest notes |
-| 10 | **Per-recipient meeting-URL / product-level notification design** for multi-attendee and guest bookings: producers now emit the needed fields (time_zone, per-recipient URL events); the product flow itself is unbuilt | event-booking / event-notifier | contracts manifest skipped #7 |
-| 11 | `simulate_booking.py` still sends legacy users-list payloads for `meeting.url_*` (dev tool; receiver keeps a tolerant fallback) | event-receiver | contracts manifest skipped #2 |
-| 12 | `event-receiver/QUEUES_DIGEST.md` lacks a `booking.client_reassigned` row (verified missing; root MESSAGE_CONTRACTS.md has it) | event-receiver docs | admin manifest skipped #2 |
+**Update 2026-06-11 (follow-up wave):** items 1, 2, 3, 4, 6, 7, 9, 11, 12 are **DONE** — see
+manifests `fixes/followups-hygiene.json`, `fixes/followups-locale-bearer.json`,
+`fixes/followups-errorcodes-backfill.json`. Still open: 5, 8, 10 (blocked on credentials /
+ops scope / product decision respectively).
+
+| # | Status | Item | Where | Resolution / Source |
+|---|---|---|---|---|
+| 1 | ✅ DONE | event-users hardcoded queue arguments | event-users | event-schemas relative path dep, canonical `USER_EMAIL_QUEUE` imported (event-users:2218270) |
+| 2 | ✅ DONE | deprecated `GET /api/users/roles/{role}/emails/{email}` | event-receiver, event-users | receiver migrated to `/api/users/by-identity` (4aeb6f7); deprecated route deleted (event-users:2e96fcc) |
+| 3 | ✅ DONE | absolute `file:///Users/...` event-schemas references | event-saver, event-booking, event-notifier | relative `../event-schemas` via `tool.uv.sources` (saver:f1f5d11, notifier:7492fe6, root:adc3f65) |
+| 4 | ✅ DONE | locale-aware notifications (language half) | schemas, receiver, booking, notifier | optional `locale` end-to-end; `templates/<locale>/`, locale-keyed UniSender ids, `DEFAULT_LOCALE=ru` fallback (schemas v0.3.0; see followups-locale-bearer.json) |
+| 5 | ⏳ OPEN | **FCM push channel**: implemented but not wired in `ioc.py` — pending FCM credentials and an OAuth token provider | event-notifier | blocked on credentials |
+| 6 | ✅ DONE | machine-readable error codes from event-admin | event-admin + frontend | `detail = {code, message}` everywhere (admin:30ccb0d); frontend translates by code (46fc67f); frontend AUDIT.md #13 closed |
+| 7 | ✅ DONE | `Bearer` scheme for the admin-ingest API key | admin, receiver, notifier | coordinated switch: receiver 14cc5ff, admin 7edc40e, notifier 490c311 — **deploy together** |
+| 8 | ⏳ OPEN | **DLQ consumer / alerting**: nothing consumes `.dlq` queues; 24h TTL loss window. Redrive runbook in receiver QUEUES_DIGEST | platform/ops | ops scope — needs monitoring infra |
+| 9 | ✅ DONE | user_id backfill/reconciliation | event-saver | periodic lifespan backfill via `/api/users/by-identity` (saver:152372b; `USER_ID_BACKFILL_*` env) |
+| 10 | ⏳ OPEN | **Per-recipient meeting-URL / product-level notification design** for multi-attendee and guest bookings: producers emit the needed fields; the product flow itself is unbuilt | event-booking / event-notifier | needs product decision |
+| 11 | ✅ DONE | `simulate_booking.py` legacy payloads | event-receiver | canonical D5 payloads (0677811); legacy normalizer fallback removed |
+| 12 | ✅ DONE | `booking.client_reassigned` row missing in receiver QUEUES_DIGEST | event-receiver docs | added (1f770cc) |
 
 ### 5b. Accepted decisions / risks (no action planned)
 
