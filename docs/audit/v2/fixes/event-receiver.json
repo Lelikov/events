@@ -1,0 +1,36 @@
+{
+  "service": "event-receiver",
+  "branch": "audit-fixes",
+  "fixed": [
+    {"title": "No cal.com ingress path exists — /event/booking has no production producer; cal.com webhook format unsupported", "commit": "f194892"},
+    {"title": "No idempotency enforcement — duplicate webhook delivery produces duplicate RabbitMQ messages", "commit": "eb5b224"},
+    {"title": "Raw webhook bodies logged at INFO level in production (PII + UniSender auth signature)", "commit": "17ce141"},
+    {"title": "Malformed booking.created payload causes unhandled KeyError -> HTTP 500 instead of 400", "commit": "91a0dad"},
+    {"title": "RabbitMQ credentials logged in plain text at startup", "commit": "927b23f"},
+    {"title": "GetStream user-id 'encryption' uses AES-CBC with a fixed all-zero IV", "commit": "a65fdc5"},
+    {"title": "event-schemas pinned via developer-machine absolute file:// path", "commit": "7b5064b"},
+    {"title": "No tests for IngestController or CloudEventPublisher — the highest-risk paths are uncovered", "commit": "f194892"},
+    {"title": "Dead code: unused router method, unused payload digest, and dormant unverified-JWT-decode branch", "commit": "51d0b34"},
+    {"title": "API key comparison is not constant-time", "commit": "3a544f0"},
+    {"title": "Unhandled non-IngestError exceptions on authenticated-but-malformed input return raw 500", "commit": "c96b4d9"},
+    {"title": "Style violation: else branch in ingest_booking contradicts repo no-else convention", "commit": "91a0dad"},
+    {"title": "Doc drift: ce-booking_id documented but actual header is ce-bookingid; spec claims id/time may be omitted but SDK autogenerates them", "commit": "f38c247"},
+    {"title": "CLAUDE.md still documents non-existent /event/cloudevents endpoint and calls the service event-manager", "commit": "f38c247"},
+    {"title": "/event/admin endpoint is undocumented in API_CONTRACTS.md and PROJECT_CONTEXT.md", "commit": "f38c247"},
+    {"title": "Invalid LOG_LEVEL value crashes startup with obscure TypeError", "commit": "48db85a"},
+    {"title": "CORS origins and DEBUG middleware gating read os.environ directly, bypassing Settings/.env", "commit": "c0fce81"},
+    {"title": "StreamChat client constructed per request in ingest_getstream", "commit": "52e3e86"},
+    {"title": "Unroutable publishes are silently dropped: mandatory=True returns are ignored because on_return_raises is left False", "commit": "dce31dd"},
+    {"title": "No publish timeout: a blocked RabbitMQ connection makes every webhook request hang indefinitely waiting for publisher confirms", "commit": "dce31dd"},
+    {"title": "When event-users is unavailable, events are published with participants permanently missing user_id — no backfill or reconciliation exists downstream", "commit": "eb86636"},
+    {"title": "No secret-strength validation in any Settings class; weak/placeholder secrets are accepted at startup", "commit": "61450a0"},
+    {"title": "Ingress booking.created contract is hardwired to exactly one organizer + one client — guests and multi-attendee/seated bookings cannot be represented", "commit": "f4ed4ce"},
+    {"title": "No service consumes any DLQ, and DLQs have a 24h TTL — dead letters permanently deleted", "commit": "f38c247"}
+  ],
+  "skipped": [
+    {"title": "Publisher crashes with ValueError on any event type not in the shared EventType enum — 500 + lost message", "reason": "fixed by contracts wave (268d1f2: _coerce_event_type routes unknown types to events.unrouted); regression test for 'getstream.health.check' added in dce31dd"}
+  ],
+  "testsPass": true,
+  "lintPass": true,
+  "notes": "18 commits on event-receiver:audit-fixes (268d1f2..f38c247). Test suite grew 37 -> 103, ruff clean throughout. New endpoint POST /event/calcom (X-Cal-Signature-256 HMAC, validated against real samples in requests.jsonl); new required env CALCOM_WEBHOOK_SECRET (appended to local .env), new optional PUBLISH_TIMEOUT (10s) and CORS_ORIGINS settings. Outside DEBUG, secrets must be >=16 chars and non-placeholder (startup fails fast). stream-chat dependency removed. DLQ 24h loss window could not be changed locally (queue args canonical in event_schemas per CONTRACT_DECISIONS D2/D8) — documented with alerting/redrive runbook in QUEUES_DIGEST.md and AUDIT.md. Cross-service follow-ups: event-booking should switch its GetStream user-id encoder to the new AES-GCM encode_getstream_user_id (receiver decodes both GCM and legacy CBC); user_id backfill job remains event-saver/event-users scope; multi-participant booking.created now emits ALL clients/guests into normalized.participants (consumers already read the envelope)."
+}
