@@ -1,0 +1,20 @@
+{
+  "scope": "followups 6,9",
+  "fixed": [
+    {
+      "item": "#6 machine-readable error codes from event-admin: every error path now returns detail = {code, message} via errors.http_error() (login 401/429 lockout, booking_not_found, reassign validation, change-email validation, users-proxy passthrough as users_service_error, cache invalidate, auth deps, JWT middleware, 502 event_publish_failed). HTTP statuses unchanged; code catalog in event-admin docs/API_CONTRACTS.md",
+      "commits": ["event-admin:30ccb0d161fd007411a93ee748d1ebe792e93660"]
+    },
+    {
+      "item": "#6 frontend adoption: ApiError carries detail.code (legacy string detail tolerated); EmailChangeModal and LoginPage translate by code with fallback to backend message; exact-English-string matching removed; closes frontend AUDIT.md #13",
+      "commits": ["event-admin-frontend:46fc67f88981be6626bcfe415cf46267f7503148"]
+    },
+    {
+      "item": "#9 user_id backfill/reconciliation in event-saver: periodic lifespan task (USER_ID_BACKFILL_ENABLED, interval 300s, batch 100) selects bookings with NULL organizer/client_user_id, extracts the missing participant's email from the latest stored event payload (normalized.participants), resolves via event-users GET /api/users/by-identity (Bearer EVENT_USERS_API_TOKEN), updates rows transactionally, logs a cycle summary; transport errors skip the cycle (UsersServiceUnavailableError). New IUserResolver/IUserIdBackfillRunner protocols, UsersHttpResolver, UserIdBackfillService/Runner; tests for resolved/unresolved/missing-email/transport-error/runner-lifecycle; docs updated (CLAUDE.md, SERVICE_OVERVIEW.md, AUDIT.md)",
+      "commits": ["event-saver:152372bf17bb78320cae2fcba894c67e8c2557f8"]
+    }
+  ],
+  "skipped": [],
+  "testsPass": true,
+  "notes": "event-admin: 76 pytest + ruff green. event-admin-frontend: 29 vitest + eslint + tsc/vite build green. event-saver: 114 pytest (+14 new) + ruff green. Backfill ships disabled by default (USER_ID_BACKFILL_ENABLED=False) and fails fast at DI wiring if enabled without EVENT_USERS_API_URL; the bookings model stores participants as organizer_user_id/client_user_id columns (no participants table), so reconciliation operates per booking slot. Note: bookings whose events never carried a participant email are counted missing_email and re-scanned each cycle (bounded by batch ORDER BY id); acceptable at current volumes."
+}
