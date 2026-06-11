@@ -1,0 +1,27 @@
+{
+  "service": "jitsi-chat",
+  "branch": "audit-fixes",
+  "fixed": [
+    {"title": "Chat connect overwrites participant display name with encrypted user-id ciphertext", "commit": "9f164f5"},
+    {"title": "Uncaught URIError in decodeURIComponent crashes the app to a blank screen on malformed channel path", "commit": "60983d0"},
+    {"title": "sendWebhook ignores HTTP response status — 4xx/5xx telemetry loss is completely silent (contradicts docs)", "commit": "415b897"},
+    {"title": "Browser-to-event-receiver webhook depends on CORS_ORIGINS allow-list that defaults to localhost:5173 and is undocumented in jitsi-chat", "commit": "49f1534"},
+    {"title": "Auth tokens (jwt_video, jwt_chat) carried in URL query string with no Referrer-Policy mitigation", "commit": "1c4537e"},
+    {"title": "Expired/not-yet-valid tokens pass client-side validation — user gets infinite spinner instead of a clear error", "commit": "1b6b466"},
+    {"title": "Dead npm dependency 'cloudevents' — never imported; SERVICE_OVERVIEW claims it is used", "commit": "f0f2d4d"},
+    {"title": "Dead code: App.css and assets/react.svg unused; dead prevJwtChat state-sync logic in App", "commit": "512fe40"},
+    {"title": "else-if/else chain in ChatClientWrapper violates the no-elif convention and contains a redundant nested guard", "commit": "5ce1d27"},
+    {"title": "Unstable onError identity in ChatClientWrapper effect deps — latent disconnect/reconnect churn", "commit": "5ce1d27"},
+    {"title": "Webhook fetch lacks keepalive and relies on crypto.randomUUID (secure-context only)", "commit": "415b897"},
+    {"title": "No runtime validation of required env vars — missing config yields silent broken behavior", "commit": "4174e8d"},
+    {"title": "env.sh injects env values into JS without escaping — quotes/backslashes silently corrupt env-config.js", "commit": "f46f043"},
+    {"title": "Dockerfile uses 'npm install' instead of 'npm ci' — non-reproducible image builds", "commit": "f46f043"},
+    {"title": "Zero tests for critical client logic (token validation, event-type map, env resolution)", "commit": "f06747d"},
+    {"title": "README.md is the stock Vite template — describes nothing about the service", "commit": "3d77600"},
+    {"title": "1.6 MB single JS chunk — no code splitting between Jitsi SDK and Stream Chat UI", "commit": "486860e"}
+  ],
+  "skipped": [],
+  "testsPass": true,
+  "lintPass": true,
+  "notes": "17/17 fixed (all verified reproducible). Tokens stay in the URL query string by design (email-link contract with event-booking/Shortify); mitigated with Referrer-Policy no-referrer (meta + Caddy header) and short token lifetimes — documented as accepted risk in docs/AUDIT.md. JITSI_EVENT_TYPE_MAP verified against event-schemas EventType (exact match, now pinned by a unit test). Compatible with new event-booking scheme: encrypted GetStream user_id treated as opaque; connectUser now id-only so it cannot clobber the server-side display name; expired jwt_chat handled via exp validation + toast. vitest bootstrapped (21 tests). Main bundle 1626 kB -> 206 kB via lazy ChatOverlay. docs/AUDIT.md created; SERVICE_OVERVIEW/API_CONTRACTS/DEPENDENCIES/CLAUDE.md/README updated. Remaining: event-receiver deployers must add the SPA origin to CORS_ORIGINS (documented, cannot be fixed from this repo)."
+}
