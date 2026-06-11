@@ -1,0 +1,34 @@
+{
+  "service": "event-users",
+  "branch": "audit-fixes",
+  "fixed": [
+    {"title": "Test bootstrap: pytest suite with recording fakes (auth, controller, CRM decrypt)", "commit": "3686179"},
+    {"title": "Auth: single decode path, admin-gate all /api/users routes (PII reads included), constant-time static token, optional JWT aud/iss", "commit": "1c57be5"},
+    {"title": "update_user (email,role) uniqueness violation mapped to 409 Conflict instead of 500", "commit": "7e77bac"},
+    {"title": "PATCH email changes write changelog + CRM webhook outbox and arm email_source='admin' guard (parity with consumer path)", "commit": "48b42f3"},
+    {"title": "CRITICAL: CRM sync never committed — now commits per page (batch transactions)", "commit": "92530c6"},
+    {"title": "AES decryption errors classified (CrmDecryptError) with per-record quarantine and SyncReport error accounting", "commit": "92530c6"},
+    {"title": "Exponential backoff on repeated CRM sync failures (interval*2^n capped at CRM_SYNC_MAX_BACKOFF_SECONDS, last_success_at tracked)", "commit": "92530c6"},
+    {"title": "CRM sync per-user query reduction: one admin-guard query per cycle, RETURNING id upsert, batched unnest() contact upsert", "commit": "92530c6 + afa16ed"},
+    {"title": "Premature email_source='crm' reset on webhook delivery removed; guard disarms only on CRM export convergence (also unfreezes name/tz updates for admin-touched rows)", "commit": "afa16ed"},
+    {"title": "Webhook outbox poller: two-phase claim (status='processing' + visibility timeout, FOR UPDATE SKIP LOCKED) — no duplicate deliveries with >1 replica", "commit": "090f6a1"},
+    {"title": "Email-change consumer idempotent on CloudEvent ce-id (unique user_email_changelog.message_id, migration 0005)", "commit": "3a69f84"},
+    {"title": "Consumer declares the events topic exchange and binds events.user.email (no dependence on event-receiver startup order)", "commit": "8c6b031"},
+    {"title": "Cache invalidation to event-admin fires after the request transaction commits", "commit": "612d61a"},
+    {"title": "ILIKE wildcards (%,_,\\) escaped in list_users search; exact-match GET /api/users/by-identity added; path-segment lookup deprecated", "commit": "931c41a"},
+    {"title": "Dead code removed (NotFoundError, ISqlExecutorFactory, execute_in_transaction); unused deps dropped (cloudevents, colorama, rich, tenacity); .env.example completed", "commit": "5b482c5"},
+    {"title": "Docs: AUDIT.md rewritten for audit-v2 (2026-06-11); SERVICE_OVERVIEW/API_CONTRACTS/DATA_MODEL/CLAUDE.md made accurate", "commit": "b924911"}
+  ],
+  "skipped": [
+    {"title": "events.user.email consumer off by default (unbounded accumulation)", "reason": "already fixed before this session: IS_CONSUMER_ENABLED defaults to true in config.py"},
+    {"title": "Double bearer-token validation (middleware + dependency)", "reason": "fixed by 1c57be5: middleware deleted, single decode path verified"},
+    {"title": "Two independent Settings instances", "reason": "fixed earlier: lru_cache get_settings() is the single instance, also used by the DI provider; import-time .env requirement accepted and documented"},
+    {"title": "COALESCE silently ignoring CRM nulls", "reason": "intentional semantics (CRM null = not provided, not clear-field); documented in code and DATA_MODEL.md"},
+    {"title": "No index on user_contacts.channel", "reason": "no code performs channel-wide lookups; documented as unsupported, add with first consumer that needs it"},
+    {"title": "event-notifier contact resolution via ILIKE substring match returns wrong user", "reason": "root fix belongs to event-notifier: it must call the new exact-match GET /api/users/by-identity; event-users side (escaping + endpoint) done in 931c41a"},
+    {"title": "PATCH semantics on PUT", "reason": "not applicable to current code: the update endpoint is PATCH /api/users/id/{user_id} with patch semantics; no PUT route exists"}
+  ],
+  "testsPass": true,
+  "lintPass": true,
+  "notes": "55 tests green, ruff clean, pre-commit hooks pass. New migration 0005 (user_email_changelog.message_id unique) must be applied on deploy. Contract notes for other fixers: (1) event-notifier should switch recipient lookup to GET /api/users/by-identity?email=&role= — the path-segment endpoint is deprecated and the list_users substring search is unsafe for resolution; (2) JWT_AUDIENCE/JWT_ISSUER are optional here — event-admin must mint matching aud/iss claims before ops enables them (unset = tolerant, tokens with extra claims still pass); (3) all /api/users routes now require role=admin — any caller using a role=user JWT will start getting 403; (4) webhook outbox now uses status='processing' with WEBHOOK_VISIBILITY_TIMEOUT_SECONDS (default 120s)."
+}
