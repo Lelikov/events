@@ -1,0 +1,63 @@
+{
+  "service": "event-notifier",
+  "branch": "audit-fixes",
+  "fixed": [
+    {
+      "title": "Envelope unwrap, NotificationCommandPayload validation, recipient user_id resolution, canonical queue spec (contracts wave)",
+      "commit": "7a45e38"
+    },
+    {
+      "title": "Single APP-scoped AsyncSession shared across tasks -> per-operation sessions via async_sessionmaker; transaction() for atomic units",
+      "commit": "0b534ae"
+    },
+    {
+      "title": "Outbox schema redesign: trigger_event/recipient_email/last_error columns, status CHECK, processing index, max_retries=10, drop dead routing_rules/event_type; atomic processed_events claim + outbox insert (fixes non-atomic is_processed duplicate fan-out); processed_events TTL",
+      "commit": "33ea49d"
+    },
+    {
+      "title": "Command path: trigger_event from payload (not DOMAIN_EVENT_TO_TRIGGER lookup); UsersClient GET /api/users/id/{user_id} with 404-vs-transport distinction (transport -> retry, not ack); explicit no_contacts outcome; routing-rules dead code deleted; get_contacts_by_email removed",
+      "commit": "c69ee2c"
+    },
+    {
+      "title": "Consumer: FastStream-valid handler via Context (verified with TestRabbitBroker), explicit ack policy (poison -> DLQ, transient -> backoff + NACK requeue), prefetch QoS, idempotent DLX/DLQ declaration per CONTRACT_DECISIONS, ce-bookingid/payload booking_id fallback",
+      "commit": "9a844f9"
+    },
+    {
+      "title": "Channels: UniSender template UUIDs from UNISENDER_TEMPLATE_IDS config, flat scalar global_substitutions, API key only in X-API-KEY header; Telegram Russian text moved to Jinja2 templates/ (no raw trigger leaked to users); 4xx-permanent vs 408/429/5xx/transport-transient classification in all channels",
+      "commit": "a5fb36e"
+    },
+    {
+      "title": "Delivery results: DeliveryResultPublisher POSTs notification.*.message_sent binary CloudEvents to event-receiver (deterministic UUIDv5 ids, fire-and-forget, optional EVENTS_ENDPOINT_URL)",
+      "commit": "6bec0ea"
+    },
+    {
+      "title": "Outbox sender: 'processing' reaper (crash recovery), permanent/transient retry split, capped exponential backoff (10s doubling, 30min cap, budget ~hours), idle-poll backoff to 30s, result-event publishing on success",
+      "commit": "7dd47aa"
+    },
+    {
+      "title": "Boot: httpx.Timeout pool kwarg (DI crash) with container-resolution regression test; broker graceful_timeout; deep /health (consumer/sender/DB, 503 when degraded); hourly processed_events cleanup loop; .env.example rewritten (asyncpg DSN, no phantom queue)",
+      "commit": "e040e4a"
+    },
+    {
+      "title": "Per-recipient time localization: start_time_local/end_time_local/time_zone from normalized.participants[].time_zone (notifier-side part of the flow-e2e localization finding)",
+      "commit": "c276ebf"
+    },
+    {
+      "title": "Docs rewrite: AUDIT.md audit-v2 ledger, SERVICE_OVERVIEW/API_CONTRACTS/DEPENDENCIES/CLAUDE.md accurate; stale NOTIFICATION_SERVICE_ARCHITECTURE.md deleted",
+      "commit": "ce3ed85"
+    }
+  ],
+  "skipped": [
+    {
+      "title": "Locale/language localization (flow-e2e, part of the localization finding)",
+      "reason": "Cross-service: cal.com language.locale is dropped at event-receiver ingress and the envelope/NormalizedParticipant carry no locale field. Requires event-schemas + event-receiver changes (other repos, out of scope). Time-zone half fixed in c276ebf."
+    },
+    {
+      "title": "PushChannel registration",
+      "reason": "Implemented and aligned with the retryable-classification contract, but deliberately not wired in ioc.py: FCM credentials and an OAuth access-token provider do not exist yet."
+    }
+  ],
+  "testsPass": true,
+  "lintPass": true,
+  "notes": "Predecessor's large uncommitted redesign reviewed, finished (3 result-publisher tests were constructed without endpoint_url and silently no-oped; fixed) and committed in 10 atomic chunks (0b534ae..ce3ed85 on top of 7a45e38). 80 tests pass, ruff check/format clean. Alembic migration 002 verified consistent with db/models.py. QUEUES/EVENTS digests do not exist in this repo (canonical topology lives in event_schemas.queues, documented in docs/API_CONTRACTS.md)."
+}
