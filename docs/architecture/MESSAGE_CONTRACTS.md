@@ -28,37 +28,53 @@ Reformatted from `docs/audit/CONTRACT_MAP.md`.
 
 | Exchange | Type | Durable | Declared by | Purpose |
 |----------|------|---------|-------------|---------|
-| `events` | topic | yes | event-receiver (`RabbitTopologyManager.ensure_topology`), event-saver (`RabbitTopologyManager.ensure_topology`) | Primary message exchange for all CloudEvents |
-| `events.dlx` | topic | yes | event-receiver only | Dead-letter exchange for failed messages |
+| `events` | topic | yes | every service (idempotent; full topology by event-receiver) | Primary message exchange for all CloudEvents |
+| `events.dlx` | topic | yes | event-receiver AND every consumer (idempotent) | Dead-letter exchange for failed messages |
 
-**Note:** event-saver's topology manager does NOT create the DLX exchange or DLQ queues. event-notifier does not call `ensure_topology` at all -- it subscribes with `declare=False`.
+### Queues (canonical, from `event_schemas.queues.ALL_QUEUES`)
 
-### Queues
+**Single source of truth:** `event-schemas/event_schemas/queues.py`. One queue per consumer
+service; fan-out is achieved by binding several queues to the same routing key. Canonical
+arguments for every queue (verbatim): `x-max-priority=10`, `x-dead-letter-exchange=events.dlx`,
+`x-dead-letter-routing-key=<queue>.dlq`. Every queue has a `<queue>.dlq` companion
+(`x-message-ttl=86400000`) bound to `events.dlx`. Consumers declare their own queues + DLQs at
+startup; event-receiver declares the full topology.
 
-All main queues bind to the `events` exchange with routing key = queue name.
+| Queue | Binding (routing key) | Consumer | Purpose |
+|-------|----------------------|----------|---------|
+| `events.booking.lifecycle.saver` | `events.booking.lifecycle` | event-saver | Persist booking lifecycle events |
+| `events.booking.lifecycle.booking` | `events.booking.lifecycle` | event-booking | Orchestrate chat/meeting/notifications |
+| `events.chat.lifecycle` | `events.chat.lifecycle` | event-saver | Chat created/deleted |
+| `events.chat.activity` | `events.chat.activity` | event-saver | Chat messages |
+| `events.chat` | `events.chat` | event-saver | GetStream webhook events |
+| `events.meeting.lifecycle` | `events.meeting.lifecycle` | event-saver | Meeting URL created/deleted |
+| `events.notification.commands` | `events.notification.commands` | event-notifier | notification.send_requested commands |
+| `events.notification.delivery` | `events.notification.delivery` | event-saver | Delivery result events |
+| `events.jitsi` | `events.jitsi` | event-saver | Jitsi meeting events |
+| `events.mail` | `events.mail` | event-saver | UniSender status callbacks |
+| `events.user.email` | `events.user.email` | event-users | Email change requests |
+| `events.unrouted` | `events.unrouted` | event-saver | Unmatched / unknown-type events |
 
-| Queue | Consumer | DLQ? | Priority? | Purpose |
-|-------|----------|------|-----------|---------|
-| `events.booking.lifecycle` | event-saver | yes (receiver) / no (saver) | 10 | Booking created/cancelled/reassigned/rescheduled |
-| `events.booking.reminder` | event-saver | yes / no | 10 | Booking reminder events |
-| `events.chat.lifecycle` | event-saver | yes / no | 10 | Chat created/deleted |
-| `events.chat.activity` | event-saver | yes / no | 10 | Chat messages |
-| `events.meeting.lifecycle` | event-saver | yes / no | 10 | Meeting URL created/deleted |
-| `events.notification.delivery` | event-saver | yes / no | 10 | Notification delivery confirmations |
-| `events.notification.commands` | event-notifier (intended) | yes / no | 10 | Notification send commands |
-| `events.notifications` | none (orphaned) | yes / no | 10 | Phantom queue, previously event-notifier's incorrect default; no longer consumed |
-| `events.jitsi` | event-saver | yes / no | 10 | Jitsi meeting events |
-| `events.mail` | event-saver | yes / no | 10 | UniSender status callbacks |
-| `events.chat` | event-saver | yes / no | 10 | GetStream webhook events |
-| `events.user.email` | event-users | yes / no | 10 | Email change requests |
-| `events.unrouted` | event-saver (fallback) | yes / no | 10 | Unmatched events |
-| `*.dlq` variants | none (dead-letter storage) | -- | -- | 24h TTL dead-letter storage |
+**Removed (audit-v2):** `events.booking.reminder` (no producer, no consumer — reminders go via
+`notification.send_requested` with `trigger_event=BOOKING_REMINDER`); `events.notifications`
+(legacy phantom queue).
 
-**Inconsistency:** event-receiver creates queues with `x-max-priority=10` and `x-dead-letter-exchange=events.dlx`. event-saver creates plain durable queues without those arguments. If both declare the same queue with different arguments, RabbitMQ rejects the second declaration (audit IC-4).
+### Canonical data envelope (audit-v2)
 
-**Source:** `docs/audit/CONTRACT_MAP.md:22-40`
+Every CloudEvent published by event-receiver carries `data` as
+`{"original": <domain payload>, "normalized": {"participants": [{email, role, time_zone, user_id}]}}`.
+Typed accessors: `event_schemas.envelope.EventEnvelope` / `unwrap_payload()`. Consumers MUST NOT
+read domain fields at the top level. `normalized.participants[].user_id` is the event-users UUID
+resolved by the receiver.
 
----
+### Canonical CloudEvent attributes (audit-v2)
+
+Extension attribute names come from `event_schemas.attributes`: booking identifier is
+**`bookingid`** (`ce-bookingid` header) — never `booking_id`/`ce-booking_id`. Also `traceid`,
+`spanid`, `idempotencykey`. Unknown event types are published to `events.unrouted` (never a 500).
+
+Payload contracts per type: `event_schemas.mapping.PAYLOAD_MODELS` and
+`docs/audit/v2/CONTRACT_DECISIONS.md`.
 
 ## Complete Message Type Registry
 
@@ -291,7 +307,7 @@ All 25 event types are version `"v1"`. No consumer reads or validates the `datas
 
 ## Known Inconsistencies
 
-### IC-1: Booking lifecycle events routed to wrong queue [CRITICAL]
+### IC-1: Booking lifecycle events routed to wrong queue [RESOLVED]
 
 First-match routing in `event-receiver/event_receiver/config.py:9-34` sends `booking.created`, `booking.cancelled`, `booking.rescheduled`, `booking.reassigned`, `booking.reminder_sent` to `events.notifications` instead of `events.booking.lifecycle`.
 
@@ -299,19 +315,19 @@ First-match routing in `event-receiver/event_receiver/config.py:9-34` sends `boo
 
 `event-notifier/event_notifier/config.py:18` now correctly defaults to `events.notification.commands`, which matches the routing key event-receiver uses for `notification.send_requested` events. The previous default of `events.notifications` caused messages to pile up unconsumed.
 
-### IC-3: Dual EventType enums [CRITICAL]
+### IC-3: Dual EventType enums [RESOLVED]
 
 `event-schemas` defines `EventType.BOOKING_CREATED = "booking.created"` while `event-saver` defines `EventType.BOOKING_CREATED = "booking.events.v1.booking.created.create"` (`event-saver/event_saver/event_types.py:29`). The shared library is not used by its largest consumer.
 
-### IC-4: Queue declaration argument mismatch
+### IC-4: Queue declaration argument mismatch [RESOLVED — audit-v2]
 
-event-receiver creates queues with `x-max-priority=10` and DLX; event-saver creates plain durable queues. Same queue with different arguments causes RabbitMQ declaration conflict.
+Resolved by audit-v2 contracts fix: all services declare queues from `event_schemas.queues.QueueSpec` with identical arguments, and event-saver/event-booking/event-notifier declare `events.dlx` and their own DLQs idempotently.
 
 ### IC-5: Missing delivery result pipeline
 
 event-notifier's architecture describes publishing `notification.*.message_sent` events back to event-receiver. No publisher implementation exists. The `events.notification.delivery` queue is permanently empty.
 
-### IC-6: Orphaned queues
+### IC-6: Orphaned queues [RESOLVED — audit-v2]
 
 | Queue | Why Orphaned |
 |-------|-------------|
