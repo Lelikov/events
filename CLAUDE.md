@@ -71,6 +71,18 @@ Host ports:
 | 8080 | jitsi-chat SPA |
 | 8089 | WireMock mocks (journal: `http://localhost:8089/__admin/requests`) |
 | 5672 / 15672 | RabbitMQ (AMQP / management UI) |
+| 5433 | pg-calcom (fixture cal.com DB, used by `scripts/calcom_sim.py`) |
+
+### Симуляция событий cal.com
+
+`scripts/calcom_sim.py` генерирует реалистичные подписанные вебхуки cal.com
+(по образцу `event-booking/requests.jsonl`) и пишет фикстурные строки в pg-calcom:
+
+```bash
+uv run scripts/calcom_sim.py create [--starts-in 1h] [--locale en] [--dry-run]
+uv run scripts/calcom_sim.py lifecycle          # created -> rescheduled -> cancelled
+uv run scripts/calcom_sim.py cancel <uid>; uv run scripts/calcom_sim.py reschedule <uid>
+```
 
 Mock vs real external APIs: Shortify, UniSender Go, Telegram Bot API and
 GetStream all default to the WireMock container (`http://mocks:8080/<prefix>`,
