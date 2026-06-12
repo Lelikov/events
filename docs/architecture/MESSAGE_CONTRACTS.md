@@ -201,7 +201,7 @@ Routing keys come from `event_schemas.queues.ROUTING_RULES`; `events.booking.lif
 
 ## Event Detail: `booking.rejected`
 
-Событие отказа в бронировании, инициируемое service event-booking при нарушении constraint (когда enabled).
+Событие отказа в бронировании, инициируемое service event-booking при нарушении constraint (когда enabled) или при совпадении клиента с записью чёрного списка (`rejection_type='blacklisted'`).
 
 | Атрибут | Значение |
 |---------|----------|
@@ -217,18 +217,22 @@ Routing keys come from `event_schemas.queues.ROUTING_RULES`; `events.booking.lif
 ```json
 {
   "booking_uid": "uuid",
+  "client_email": "client@example.com",
+  "rejection_type": "blacklisted | month_limit | year_limit | min_interval | null",
   "rejection_reasons": ["string", ...]
 }
 ```
 
 **Flow**:
 1. event-booking consumes `booking.created` from `events.booking.lifecycle`.
-2. Constraint analyzer determines violation (if `IS_ENABLE_BOOKING_CONSTRAINTS=true`).
+2. Blacklist check first (active set from event-admin `GET /api/blacklist/active`, static `BLACKLIST_SERVICE_TOKEN`, in-memory TTL cache, fail-open). Match → `rejection_type='blacklisted'`. Otherwise constraint analyzer determines violation (if `IS_ENABLE_BOOKING_CONSTRAINTS=true`).
 3. event-booking publishes CloudEvent to event-receiver `POST /event/cloudevents` (auth: Bearer token).
 4. event-receiver маршрутизирует `booking` / `booking.rejected` → `events.booking.lifecycle`.
 5. event-saver потребляет и сохраняет в audit table; event-notifier отправляет rejection notification client.
 
-**Intended flow**: This event integrates with event-notifier's routing rules to notify the client that their booking was rejected due to constraints.
+**Intended flow**: This event integrates with event-notifier's routing rules to notify the client that their booking was rejected due to constraints or the blacklist.
+
+**Notification trigger**: alongside `booking.rejected` event-booking publishes `notification.send_requested`; constraint rejections use `trigger_event=BOOKING_REJECTED`, blacklist rejections use the dedicated `trigger_event=BOOKING_REJECTED_BLACKLISTED` (separate neutral templates — client-facing text never mentions the blacklist).
 
 ---
 
