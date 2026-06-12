@@ -346,7 +346,7 @@ services:
     healthcheck:
       # 127.0.0.1, not localhost: nginx only listens on IPv4 and busybox
       # wget resolves localhost to ::1 without falling back.
-      test: ["CMD-SHELL", "wget -qO /dev/null http://127.0.0.1:80/"]
+      test: ["CMD-SHELL", "wget -qO /dev/null http://127.0.0.1:80/health"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -368,7 +368,7 @@ services:
     ports:
       - "${JITSI_CHAT_PORT:-8080}:80"
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO /dev/null http://127.0.0.1:80/"]
+      test: ["CMD-SHELL", "wget -qO /dev/null http://127.0.0.1:80/health"]
       interval: 10s
       timeout: 5s
       retries: 5

@@ -79,6 +79,33 @@ from these vars inside `docker-compose.yml`, and `scripts/calcom_sim.py`
 reads `RECEIVER_PORT` / `PG_CALCOM_PORT` from `.env` — overriding a port in
 `.env` keeps the whole stack (and the simulator) consistent.
 
+### Health probes (k8s liveness / readiness / startup)
+
+Every service follows one convention, designed to map 1:1 onto Kubernetes
+probes:
+
+| Probe | Endpoint | Semantics |
+|---|---|---|
+| `livenessProbe` | `GET /health` | Process is up and serving HTTP. **Never** calls dependencies; always a cheap `200 {"status": "ok"}`. |
+| `readinessProbe` | `GET /ready` | Checks critical dependencies. `200 {"status": "ready", "checks": {...}}` or `503 {"status": "not_ready", "checks": {...}}` with a per-check boolean map. |
+| `startupProbe` | — | In compose, modeled by the healthcheck `start_period` (no failures counted while the service boots). The compose healthchecks hit `/health`. |
+
+Per-service endpoints and what `/ready` verifies:
+
+| Service | `/health` | `/ready` checks |
+|---|---|---|
+| event-receiver | shallow 200 | `rabbitmq` (broker ping) |
+| event-saver | shallow 200 | `database` (PostgreSQL `SELECT 1`) |
+| event-booking | shallow 200 | `database` (cal.com PostgreSQL), `rabbitmq` (broker ping) |
+| event-users | shallow 200 | `database` (PostgreSQL `SELECT 1`) |
+| event-admin | shallow 200 | `database` (PostgreSQL `SELECT 1`) |
+| event-notifier | shallow 200 | `consumer` (started), `outbox_sender` (task alive), `database` |
+| event-admin-frontend | nginx returns `200 "ok"` | — (static SPA; no readiness deps) |
+| jitsi-chat | Caddy returns `200 "ok"` | — (static SPA; no readiness deps) |
+
+All `/health` and `/ready` endpoints are unauthenticated by design (probes
+cannot carry tokens).
+
 The manual per-service workflow below is still useful when iterating on a
 single service against the rest of the stack.
 
