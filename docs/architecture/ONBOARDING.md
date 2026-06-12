@@ -57,7 +57,8 @@ fixture, or swap the `mocks` endpoints (`SHORTENER_URL`, `UNISENDER_BASE_URL`,
 
 Entry points (defaults): event-receiver `:8888`, event-users `:8001`,
 event-admin `:8002`, admin frontend `:3000`, jitsi-chat `:8080`, WireMock
-request journal `:8089/__admin/requests`, RabbitMQ management `:15672`.
+request journal `:8089/__admin/requests`, RabbitMQ management `:15672`,
+Prometheus `:9090` (127.0.0.1 only), Grafana `:3001` (admin/admin).
 
 Every published host port is an env var with the default above — override in
 `.env` (or inline) without touching the compose file:
@@ -73,6 +74,8 @@ Every published host port is an env var with the default above — override in
 | `RABBITMQ_MGMT_PORT` | 15672 | rabbitmq management (127.0.0.1 only) |
 | `PG_CALCOM_PORT` | 5433 | pg-calcom fixture DB (127.0.0.1 only) |
 | `MOCKS_PORT` | 8089 | WireMock (127.0.0.1 only) |
+| `PROMETHEUS_PORT` | 9090 | prometheus (127.0.0.1 only) |
+| `GRAFANA_PORT` | 3001 | grafana (login `GRAFANA_ADMIN_USER`/`GRAFANA_ADMIN_PASSWORD`, default admin/admin) |
 
 CORS origins, `MEETING_HOST_URL` and `VITE_WEBHOOK_URL` defaults are derived
 from these vars inside `docker-compose.yml`, and `scripts/calcom_sim.py`
@@ -190,6 +193,58 @@ Each service needs its own `.env`. Copy from `.env.example` where available. Key
 | event-admin-frontend | `VITE_API_BASE_URL`, `VITE_USERS_API_BASE_URL` |
 
 ---
+
+## Observability (Prometheus + Grafana)
+
+The compose stack ships a full metrics pipeline (design spec:
+`docs/superpowers/specs/2026-06-13-prometheus-grafana-metrics-design.md`).
+
+### What is collected
+
+- **HTTP RED** (every FastAPI service): `http_requests_total{method, route, status}`
+  and `http_request_duration_seconds` — `route` is always the route template,
+  never the raw path (cardinality). `/health` and `/metrics` are excluded.
+- **Consumer RED** (saver / booking / notifier / users):
+  `messages_processed_total{queue, event_type, outcome}` (outcome ok/retried/rejected)
+  and `message_processing_seconds{queue}`. Services share metric names and are
+  distinguished by the Prometheus `job` label.
+- **Business counters** (service-prefixed): `receiver_webhooks_total{source,result}`,
+  `saver_events_total{event_type}`, `saver_booking_lifecycle_total{action}`,
+  `booking_rejections_total{rejection_type}`, `booking_blacklist_checks_total{result}`,
+  `notifier_deliveries_total{channel,trigger,outcome}`, `notifier_outbox_depth{status}`
+  (+ oldest-pending-age gauge), `users_crm_sync_*`, `admin_logins_total{outcome}`,
+  `admin_blacklist_ops_total{op}`, and more — see each service's `*/metrics.py`.
+- **Infrastructure**: RabbitMQ via the `rabbitmq_prometheus` plugin
+  (`rabbitmq_queue_messages{queue}` incl. `*.dlq` depths; per-object metrics
+  enabled in `docker/rabbitmq/20-prometheus.conf`) and the four PostgreSQL DBs
+  via one `postgres_exporter` container each (`db` label: saver/users/notifier/calcom).
+
+Every Python service serves `GET /metrics` on the same port as `/health` (8888
+in-container). Scrape config: `docker/prometheus/prometheus.yml` (15s interval).
+
+### Dashboards
+
+Grafana provisions a `Prometheus` datasource (uid `prometheus`) and two
+dashboards from `docker/grafana/dashboards/` into the **Events** folder:
+
+| Dashboard | uid | Contents |
+|---|---|---|
+| Events — System Overview | `events-system-overview` | per-target up, HTTP RED, consumer RED, queue + DLQ depths, PostgreSQL connections |
+| Events — Booking Flow | `events-booking-flow` | funnel webhooks → events → bookings created/rejected → notifications, blacklist checks, outbox depth/age, processing p95 |
+
+Open http://localhost:3001 (admin/admin), or query Prometheus directly at
+http://localhost:9090. Dashboard JSON edits in the repo are picked up within
+~30s (file provider); UI edits are not written back — export and commit them.
+
+### How to add a metric
+
+1. Define it in the service's `metrics.py` (module-level `prometheus_client`
+   `Counter`/`Gauge`/`Histogram`; business metrics get a `<service>_` prefix,
+   bounded label values only — never raw paths, emails or ids).
+2. Increment it where the event happens; add a unit test that the counter moves.
+3. Chart it: edit the dashboard JSON in `docker/grafana/dashboards/` (or edit in
+   the Grafana UI and export back into the repo).
+4. New service? Add a scrape job in `docker/prometheus/prometheus.yml`.
 
 ## Minimum Viable Setup
 

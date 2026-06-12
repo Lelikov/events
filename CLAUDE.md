@@ -72,6 +72,15 @@ Host ports:
 | 8089 | WireMock mocks (journal: `http://localhost:8089/__admin/requests`) |
 | 5672 / 15672 | RabbitMQ (AMQP / management UI) |
 | 5433 | pg-calcom (fixture cal.com DB, used by `scripts/calcom_sim.py`) |
+| 9090 | Prometheus (127.0.0.1 only; scrapes all services + RabbitMQ + postgres exporters) |
+| 3001 | Grafana (admin/admin; provisioned dashboards: System Overview, Booking Flow) |
+
+Observability: every Python service serves `GET /metrics` (prometheus-client);
+Prometheus config lives in `docker/prometheus/prometheus.yml`, the two
+provisioned dashboards in `docker/grafana/dashboards/` (uids
+`events-system-overview`, `events-booking-flow`). See
+`docs/architecture/ONBOARDING.md` § Observability for what's collected and how
+to add a metric.
 
 ### Симуляция событий cal.com
 
