@@ -36,7 +36,6 @@ import httpx
 
 ROOT = Path(__file__).resolve().parent.parent
 SIGNATURE_HEADER = "X-Cal-Signature-256"
-DEFAULT_URL = "http://localhost:8888/event/calcom"
 DEFAULT_SECRET = "dev-calcom-webhook-9d2c4f7a1e6b8350"
 DEFAULT_DSN = "postgresql://calcom:calcom@localhost:5433/calcom"
 
@@ -93,11 +92,17 @@ def load_env_defaults() -> dict[str, str]:
     return {}
 
 
+def default_url(env: dict[str, str]) -> str:
+    """event-receiver cal.com endpoint on the published host port (RECEIVER_PORT)."""
+    return f"http://localhost:{env.get('RECEIVER_PORT', '8888')}/event/calcom"
+
+
 def default_dsn(env: dict[str, str]) -> str:
-    """Map the docker-internal CALCOM_DATABASE_URL onto the published host port."""
-    dsn = env.get("CALCOM_DATABASE_URL", DEFAULT_DSN)
+    """Map the docker-internal CALCOM_DATABASE_URL onto the published host port (PG_CALCOM_PORT)."""
+    host_port = env.get("PG_CALCOM_PORT", "5433")
+    dsn = env.get("CALCOM_DATABASE_URL", DEFAULT_DSN.replace(":5433/", f":{host_port}/"))
     dsn = dsn.replace("postgresql+asyncpg://", "postgresql://")
-    return dsn.replace("@pg-calcom:5432", "@localhost:5433")
+    return dsn.replace("@pg-calcom:5432", f"@localhost:{host_port}")
 
 
 def parse_starts_in(value: str) -> timedelta:
@@ -574,7 +579,7 @@ async def cmd_lifecycle(args: argparse.Namespace) -> str:
 
 def build_parser(env: dict[str, str]) -> argparse.ArgumentParser:
     common = argparse.ArgumentParser(add_help=False)
-    common.add_argument("--url", default=DEFAULT_URL, help="event-receiver cal.com endpoint")
+    common.add_argument("--url", default=default_url(env), help="event-receiver cal.com endpoint")
     common.add_argument(
         "--secret",
         default=env.get("CALCOM_WEBHOOK_SECRET", DEFAULT_SECRET),

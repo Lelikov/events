@@ -22,8 +22,8 @@ services:
       RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-events}
       RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:-dev-rabbit-password-01}
     ports:
-      - "127.0.0.1:5672:5672"
-      - "127.0.0.1:15672:15672"
+      - "127.0.0.1:${RABBITMQ_AMQP_PORT:-5672}:5672"
+      - "127.0.0.1:${RABBITMQ_MGMT_PORT:-15672}:15672"
     healthcheck:
       test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
       interval: 10s
@@ -94,7 +94,7 @@ services:
       - ./docker/calcom-init:/docker-entrypoint-initdb.d:ro
     ports:
       # Published for scripts/calcom_sim.py (writes fixture Booking/Attendee rows from the host).
-      - "127.0.0.1:5433:5432"
+      - "127.0.0.1:${PG_CALCOM_PORT:-5433}:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${PG_CALCOM_USER:-calcom} -d ${PG_CALCOM_DB:-calcom}"]
       interval: 5s
@@ -111,7 +111,7 @@ services:
     volumes:
       - ./docker/mocks/mappings:/home/wiremock/mappings:ro
     ports:
-      - "127.0.0.1:8089:8080"
+      - "127.0.0.1:${MOCKS_PORT:-8089}:8080"
     healthcheck:
       test: ["CMD-SHELL", "bash -c '</dev/tcp/localhost/8080'"]
       interval: 5s
@@ -130,7 +130,7 @@ services:
       DEBUG: "false"
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       RABBIT_URL: amqp://${RABBITMQ_USER:-events}:${RABBITMQ_PASSWORD:-dev-rabbit-password-01}@rabbitmq:5672/
-      CORS_ORIGINS: http://localhost:3000,http://localhost:8080
+      CORS_ORIGINS: http://localhost:${ADMIN_FRONTEND_PORT:-3000},http://localhost:${JITSI_CHAT_PORT:-8080}
       # Jitsi webhook JWTs are minted by event-booking — keys/claims must match.
       AUTHORIZATION_JWT_VERIFY_KEY: ${JITSI_JWT_SECRET:-dev-jitsi-jwt-5b8e2d9c4f7a1360}
       AUTHORIZATION_JWT_ALGORITHM: HS256
@@ -146,7 +146,7 @@ services:
       EVENT_USERS_API_URL: http://event-users:8888
       EVENT_USERS_API_TOKEN: ${USERS_API_BEARER_TOKEN:-dev-users-bearer-2a7d9e4f8c1b6350}
     ports:
-      - "8888:8888"
+      - "${RECEIVER_PORT:-8888}:8888"
     depends_on:
       rabbitmq:
         condition: service_healthy
@@ -198,7 +198,7 @@ services:
       JITSI_JWT_AUD: ${JITSI_JWT_AUD:-jitsi}
       JITSI_JWT_ISS: ${JITSI_JWT_ISS:-event-booking}
       JITSI_JWT_SUB: ${JITSI_JWT_SUB:-meet.jit.si}
-      MEETING_HOST_URL: ${MEETING_HOST_URL:-http://localhost:8080}
+      MEETING_HOST_URL: ${MEETING_HOST_URL:-http://localhost:${JITSI_CHAT_PORT:-8080}}
       CHAT_API_KEY: ${CHAT_API_KEY:-devgetstreamkey0123456789}
       CHAT_API_SECRET: ${CHAT_API_SECRET:-devgetstreamapisecret0123456789}
       CHAT_USER_ID_ENCRYPTION_KEY: ${CHAT_USER_ID_ENCRYPTION_KEY:-devchatencryption6b2e9d4c8f1a7350}
@@ -233,7 +233,7 @@ services:
       POSTGRES_DSN: postgresql+asyncpg://${PG_USERS_USER:-postgres}:${PG_USERS_PASSWORD:-postgres}@pg-users:5432/${PG_USERS_DB:-event_users}
       JWT_SECRET_KEY: ${ADMIN_JWT_SECRET:-dev-admin-jwt-8f2c6a1d9e4b7350a3c5d7e9}
       API_BEARER_TOKEN: ${USERS_API_BEARER_TOKEN:-dev-users-bearer-2a7d9e4f8c1b6350}
-      CORS_ORIGINS: '["http://localhost:3000"]'
+      CORS_ORIGINS: '["http://localhost:${ADMIN_FRONTEND_PORT:-3000}"]'
       RABBIT_URL: amqp://${RABBITMQ_USER:-events}:${RABBITMQ_PASSWORD:-dev-rabbit-password-01}@rabbitmq:5672/
       IS_CONSUMER_ENABLED: "true"
       # CRM sync/webhook stay off in the local stack (no CRM mock by design).
@@ -245,7 +245,7 @@ services:
       EVENT_ADMIN_URL: http://event-admin:8888
       EVENT_ADMIN_CACHE_TOKEN: ${CACHE_INVALIDATION_TOKEN:-dev-cache-invalidation-3e9f1c7b4a82d650}
     ports:
-      - "8001:8888"
+      - "${USERS_PORT:-8001}:8888"
     depends_on:
       rabbitmq:
         condition: service_healthy
@@ -269,14 +269,14 @@ services:
       # Read-only view over event-saver's database (+ its own admin_users table).
       POSTGRES_DSN: postgresql+asyncpg://${PG_SAVER_USER:-postgres}:${PG_SAVER_PASSWORD:-postgres}@pg-saver:5432/${PG_SAVER_DB:-event_saver}
       JWT_SECRET_KEY: ${ADMIN_JWT_SECRET:-dev-admin-jwt-8f2c6a1d9e4b7350a3c5d7e9}
-      CORS_ORIGINS: '["http://localhost:3000"]'
+      CORS_ORIGINS: '["http://localhost:${ADMIN_FRONTEND_PORT:-3000}"]'
       USERS_SERVICE_URL: http://event-users:8888
       USERS_SERVICE_API_TOKEN: ${USERS_API_BEARER_TOKEN:-dev-users-bearer-2a7d9e4f8c1b6350}
       CACHE_INVALIDATION_TOKEN: ${CACHE_INVALIDATION_TOKEN:-dev-cache-invalidation-3e9f1c7b4a82d650}
       EVENT_RECEIVER_URL: http://event-receiver:8888
       EVENT_RECEIVER_API_KEY: ${ADMIN_API_KEY:-dev-admin-api-key-4e8b2f6a91c73d50}
     ports:
-      - "8002:8888"
+      - "${ADMIN_PORT:-8002}:8888"
     depends_on:
       pg-saver:
         condition: service_healthy
@@ -339,7 +339,7 @@ services:
         # /api, /auth, /bookings and /health to event-admin:8888.
         VITE_API_BASE_URL: ${VITE_API_BASE_URL:-}
     ports:
-      - "3000:80"
+      - "${ADMIN_FRONTEND_PORT:-3000}:80"
     depends_on:
       event-admin:
         condition: service_healthy
@@ -360,13 +360,13 @@ services:
     environment:
       # Injected at container start by env.sh (runtime, not build time).
       VITE_JITSI_DOMAIN: ${VITE_JITSI_DOMAIN:-meet.jit.si}
-      VITE_WEBHOOK_URL: ${VITE_WEBHOOK_URL:-http://localhost:8888/event/jitsi}
+      VITE_WEBHOOK_URL: ${VITE_WEBHOOK_URL:-http://localhost:${RECEIVER_PORT:-8888}/event/jitsi}
       VITE_STREAM_CHAT_API_KEY: ${CHAT_API_KEY:-devgetstreamkey0123456789}
       # Browser-side: cannot reach the in-network mock, so the real endpoint is
       # the default (chat simply stays disconnected with dev credentials).
       VITE_STREAM_CHAT_BASE_URL: ${VITE_STREAM_CHAT_BASE_URL:-https://chat.stream-io-api.com}
     ports:
-      - "8080:80"
+      - "${JITSI_CHAT_PORT:-8080}:80"
     healthcheck:
       test: ["CMD-SHELL", "wget -qO /dev/null http://127.0.0.1:80/"]
       interval: 10s

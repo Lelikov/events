@@ -55,9 +55,29 @@ DSN to integrate with an external cal.com instead of the seeded `pg-calcom`
 fixture, or swap the `mocks` endpoints (`SHORTENER_URL`, `UNISENDER_BASE_URL`,
 `TELEGRAM_BASE_URL`, `CHAT_BASE_URL`) for real APIs.
 
-Entry points: event-receiver `:8888`, event-users `:8001`, event-admin
-`:8002`, admin frontend `:3000`, jitsi-chat `:8080`, WireMock request journal
-`:8089/__admin/requests`, RabbitMQ management `:15672`.
+Entry points (defaults): event-receiver `:8888`, event-users `:8001`,
+event-admin `:8002`, admin frontend `:3000`, jitsi-chat `:8080`, WireMock
+request journal `:8089/__admin/requests`, RabbitMQ management `:15672`.
+
+Every published host port is an env var with the default above — override in
+`.env` (or inline) without touching the compose file:
+
+| Variable | Default | Service |
+|---|---|---|
+| `RECEIVER_PORT` | 8888 | event-receiver |
+| `USERS_PORT` | 8001 | event-users |
+| `ADMIN_PORT` | 8002 | event-admin |
+| `ADMIN_FRONTEND_PORT` | 3000 | event-admin-frontend |
+| `JITSI_CHAT_PORT` | 8080 | jitsi-chat |
+| `RABBITMQ_AMQP_PORT` | 5672 | rabbitmq (127.0.0.1 only) |
+| `RABBITMQ_MGMT_PORT` | 15672 | rabbitmq management (127.0.0.1 only) |
+| `PG_CALCOM_PORT` | 5433 | pg-calcom fixture DB (127.0.0.1 only) |
+| `MOCKS_PORT` | 8089 | WireMock (127.0.0.1 only) |
+
+CORS origins, `MEETING_HOST_URL` and `VITE_WEBHOOK_URL` defaults are derived
+from these vars inside `docker-compose.yml`, and `scripts/calcom_sim.py`
+reads `RECEIVER_PORT` / `PG_CALCOM_PORT` from `.env` — overriding a port in
+`.env` keeps the whole stack (and the simulator) consistent.
 
 The manual per-service workflow below is still useful when iterating on a
 single service against the rest of the stack.
