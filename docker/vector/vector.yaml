@@ -34,26 +34,28 @@ transforms:
 
       # Try to parse the raw line as JSON (the 7 Python services emit structlog
       # JSON when DEBUG=false). On failure, keep the raw line as `_msg`.
+      raw_msg = to_string(.message) ?? ""
       parsed, err = parse_json(.message)
       if err == null && is_object(parsed) {
           # Merge structured fields, then normalise the message/level fields.
           obj = object!(parsed)
           . = merge(., obj)
-          ._msg = string(obj.event) ?? string(obj.message) ?? string(.message)
+          msg = to_string(obj.event) ?? to_string(obj.message) ?? raw_msg
+          ._msg = msg
           if exists(obj.level) {
-              .level = downcase(string!(obj.level))
+              .level = downcase(to_string(obj.level) ?? "")
           }
           # structlog carries its own ISO timestamp; prefer it when present so
           # log time matches the application clock rather than capture time.
           if exists(obj.timestamp) {
-              ts, tserr = parse_timestamp(string!(obj.timestamp), "%+")
+              ts, tserr = parse_timestamp(to_string(obj.timestamp) ?? "", "%+")
               if tserr == null {
                   .timestamp = ts
               }
           }
       } else {
           # Plain-text infra logs (Postgres, RabbitMQ, nginx, Caddy, WireMock).
-          ._msg = .message
+          ._msg = raw_msg
       }
 
       # Drop the now-redundant raw fields the sink doesn't need.
