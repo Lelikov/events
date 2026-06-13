@@ -54,7 +54,7 @@ flowchart TD
         RECEIVER[event-receiver\nPort 8888]
         SAVER[event-saver\nBackground consumer]
         BOOKING[event-booking\nOrchestrator consumer\nPort 8990 health]
-        ADMIN[event-admin\nPort 8000]
+        ADMIN[event-admin\nPort 8002]
         FRONTEND[event-admin-frontend\nVite SPA]
         USERS[event-users\nPort 8001]
         NOTIFIER[event-notifier\nBackground consumer]
