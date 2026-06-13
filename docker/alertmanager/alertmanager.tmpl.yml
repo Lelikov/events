@@ -1,0 +1,53 @@
+# Alertmanager config TEMPLATE.
+#
+# Alertmanager does NOT interpolate environment variables in its YAML, so this
+# file is rendered by docker/alertmanager/entrypoint.sh (envsubst) into
+# /tmp/alertmanager.yml at container start. The only substituted vars are:
+#   ALERT_TELEGRAM_BOT_TOKEN  ALERT_TELEGRAM_CHAT_ID  GRAFANA_PORT
+# Everything else is a literal $$ to survive envsubst (none currently used).
+#
+# Graceful degrade: with the placeholder token/chat the config still loads and
+# the container stays up; failed Telegram sends are logged by Alertmanager
+# (same philosophy as the WireMock-mocked external APIs). Real delivery needs
+# ALERT_TELEGRAM_BOT_TOKEN + ALERT_TELEGRAM_CHAT_ID set in .env.
+
+route:
+  # Group related alerts so a single notification carries the whole incident.
+  group_by: ["alertname", "job"]
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+  receiver: telegram
+  routes:
+    # Critical alerts notify fast and renotify more often.
+    - matchers:
+        - severity = critical
+      receiver: telegram
+      group_wait: 10s
+      group_interval: 5m
+      repeat_interval: 1h
+    # Warnings batch up and renotify slowly to limit noise.
+    - matchers:
+        - severity = warning
+      receiver: telegram
+      group_wait: 1m
+      group_interval: 10m
+      repeat_interval: 12h
+
+receivers:
+  - name: telegram
+    telegram_configs:
+      - send_resolved: true
+        bot_token: "${ALERT_TELEGRAM_BOT_TOKEN}"
+        chat_id: ${ALERT_TELEGRAM_CHAT_ID}
+        parse_mode: HTML
+        api_url: https://api.telegram.org
+        message: |
+          {{ if eq .Status "firing" }}{{ if eq .CommonLabels.severity "critical" }}🔴{{ else }}🟠{{ end }}{{ else }}✅{{ end }} <b>[{{ .Status | toUpper }}{{ if eq .Status "firing" }}:{{ .Alerts.Firing | len }}{{ end }}] {{ .CommonLabels.alertname }}</b>
+          {{ range .Alerts }}
+          <b>severity:</b> {{ .Labels.severity }}
+          <b>job:</b> {{ .Labels.job }}{{ if .Labels.instance }} ({{ .Labels.instance }}){{ end }}
+          <b>summary:</b> {{ .Annotations.summary }}
+          {{ .Annotations.description }}
+          {{ end }}
+          <a href="http://localhost:${GRAFANA_PORT}">Open Grafana</a>

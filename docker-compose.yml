@@ -170,6 +170,7 @@ services:
     image: prom/prometheus:v3.4.1
     volumes:
       - ./docker/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./docker/prometheus/rules:/etc/prometheus/rules:ro
       - prometheus-data:/prometheus
     ports:
       - "127.0.0.1:${PROMETHEUS_PORT:-9090}:9090"
@@ -205,6 +206,34 @@ services:
       timeout: 5s
       retries: 5
       start_period: 15s
+    restart: unless-stopped
+
+  alertmanager:
+    image: prom/alertmanager:v0.28.0
+    # The image does no env interpolation in its YAML, so entrypoint.sh renders
+    # alertmanager.tmpl.yml -> /tmp/alertmanager.yml (sed substitution of the
+    # ops Telegram token/chat + Grafana port) then execs alertmanager.
+    entrypoint: ["/bin/sh", "/etc/alertmanager/entrypoint.sh"]
+    environment:
+      # Empty/placeholder values => graceful degrade: AM loads and stays up,
+      # failed Telegram sends only appear in its log. Set both in .env for
+      # real delivery.
+      ALERT_TELEGRAM_BOT_TOKEN: ${ALERT_TELEGRAM_BOT_TOKEN:-}
+      ALERT_TELEGRAM_CHAT_ID: ${ALERT_TELEGRAM_CHAT_ID:-}
+      GRAFANA_PORT: ${GRAFANA_PORT:-3001}
+    volumes:
+      - ./docker/alertmanager/alertmanager.tmpl.yml:/etc/alertmanager/alertmanager.tmpl.yml:ro
+      - ./docker/alertmanager/entrypoint.sh:/etc/alertmanager/entrypoint.sh:ro
+      - alertmanager-data:/alertmanager
+    ports:
+      # Loopback-only, same as Prometheus/Grafana ops endpoints.
+      - "127.0.0.1:${ALERTMANAGER_PORT:-9093}:9093"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO /dev/null http://127.0.0.1:9093/-/healthy"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
     restart: unless-stopped
 
   # --------------------------------------------------------------------------
@@ -476,3 +505,4 @@ volumes:
   pg-notifier-data:
   pg-calcom-data:
   prometheus-data:
+  alertmanager-data:

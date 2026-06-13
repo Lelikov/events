@@ -1,0 +1,16 @@
+apiVersion: 1
+
+# Alertmanager datasource for viewing/searching active alerts inside Grafana
+# (Alerting -> Alertmanager). Separate file so the existing Prometheus
+# datasource (prometheus.yml, uid `prometheus`) is untouched.
+datasources:
+  - name: Alertmanager
+    uid: alertmanager
+    type: alertmanager
+    access: proxy
+    url: http://alertmanager:9093
+    editable: false
+    jsonData:
+      # Tell Grafana this is a vanilla Prometheus Alertmanager (not Mimir/Cortex).
+      implementation: prometheus
+      handleGrafanaManagedAlerts: false

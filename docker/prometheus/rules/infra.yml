@@ -1,0 +1,117 @@
+# Infrastructure / technical alert rules.
+#
+# Metric & label names verified against each service's metrics.py and
+# docker/rabbitmq/20-prometheus.conf (per-object queue metrics) — do not
+# rename labels without re-checking those sources.
+#
+# Threshold rationale is documented inline per rule. `for:` durations are
+# chosen relative to the 15s scrape/eval interval so a single bad scrape
+# never pages.
+
+groups:
+  - name: infra
+    rules:
+      # A scrape target has been down for a full minute. `up` is emitted by
+      # Prometheus for every scrape job; ==0 means the target is unreachable.
+      # 1m absorbs deploy restarts / single missed scrapes before paging.
+      - alert: ServiceDown
+        expr: up == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Target {{ $labels.job }} is down"
+          description: "Prometheus target {{ $labels.job }} ({{ $labels.instance }}) has been unreachable for over 1m."
+
+      # >5% of HTTP responses are 5xx over the last 5m. Per-job ratio of 5xx
+      # to all requests; rate windows are 5m (>= 2x scrape interval). The
+      # `> 0` denominator guard keeps the expression from going NaN when a
+      # job is idle.
+      - alert: HighErrorRate
+        expr: |
+          (
+            sum by (job) (rate(http_requests_total{status=~"5.."}[5m]))
+            /
+            sum by (job) (rate(http_requests_total[5m]))
+          ) > 0.05
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High 5xx error rate on {{ $labels.job }}"
+          description: "{{ $labels.job }} is serving {{ $value | humanizePercentage }} 5xx responses (>5%) over the last 5m."
+
+      # p95 HTTP latency above 1s for 10m. Quantile over the duration
+      # histogram, aggregated per job+route. 1s is generous for these
+      # internal JSON APIs; 10m avoids paging on transient spikes.
+      - alert: HighLatencyP95
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum by (job, route, le) (rate(http_request_duration_seconds_bucket[5m]))
+          ) > 1
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High p95 latency on {{ $labels.job }} {{ $labels.route }}"
+          description: "p95 latency for {{ $labels.job }} route {{ $labels.route }} is {{ $value | humanizeDuration }} (>1s) over 5m."
+
+      # Any dead-letter queue is non-empty. DLQ queues match `*.dlq`
+      # (event_schemas.queues DLQ_SUFFIX). Messages here are poison/failed and
+      # never drain on their own, so a sustained non-zero depth needs eyes.
+      - alert: DLQGrowing
+        expr: rabbitmq_queue_messages{queue=~".*\\.dlq"} > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Dead-letter queue {{ $labels.queue }} is non-empty"
+          description: "DLQ {{ $labels.queue }} holds {{ $value }} message(s) for over 5m — investigate poison messages."
+
+      # event-notifier outbox has a large backlog of pending rows. The gauge
+      # is refreshed by the outbox poll loop; status label is the row state.
+      # >100 pending for 10m means the sender is not keeping up.
+      - alert: OutboxBacklog
+        expr: notifier_outbox_depth{status="pending"} > 100
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Notifier outbox backlog is high"
+          description: "event-notifier has {{ $value }} pending outbox rows (>100) for over 10m — delivery is falling behind."
+
+      # The oldest pending outbox row has aged past 5m, i.e. notifications are
+      # stalled (sender stuck / external API down) even if the depth is low.
+      - alert: OutboxStalled
+        expr: notifier_outbox_oldest_pending_age_seconds > 300
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Notifier outbox is stalled"
+          description: "Oldest pending outbox row is {{ $value | humanizeDuration }} old (>5m) — the outbox sender appears stuck."
+
+      # RabbitMQ Prometheus endpoint is unreachable for 1m. Covers both a
+      # crashed broker and a broken metrics plugin; the whole event pipeline
+      # depends on it.
+      - alert: RabbitMQDown
+        expr: up{job="rabbitmq"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "RabbitMQ is down"
+          description: "RabbitMQ metrics endpoint (job rabbitmq) has been unreachable for over 1m."
+
+      # A PostgreSQL instance is unreachable. `pg_up` is exported by each
+      # postgres_exporter; the `db` label (saver/users/notifier/calcom) is
+      # attached in prometheus.yml. ==0 means the exporter cannot reach its DB.
+      - alert: PostgresDown
+        expr: pg_up == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "PostgreSQL ({{ $labels.db }}) is down"
+          description: "postgres_exporter for db={{ $labels.db }} reports pg_up=0 for over 1m — the database is unreachable."

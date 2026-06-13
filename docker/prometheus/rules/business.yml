@@ -1,0 +1,37 @@
+# Business-level alert rules.
+#
+# Metric & label names verified against event-booking/event_booking/metrics.py
+# (booking_rejections_total{rejection_type}) and
+# event-notifier/event_notifier/metrics.py
+# (notifier_deliveries_total{channel,trigger,outcome}).
+#
+# These are signal rules, not infrastructure faults: they catch product-level
+# regressions (a flood of rejected bookings, notifications failing to send).
+
+groups:
+  - name: business
+    rules:
+      # Sustained spike in rejected bookings. booking_rejections_total is
+      # incremented per rejection_type (constraint types or 'blacklisted').
+      # >0.2 rejections/s (~12/min) summed over all types for 10m indicates a
+      # misconfiguration or abuse rather than the occasional legitimate reject.
+      - alert: BookingRejectionSpike
+        expr: sum by (rejection_type) (rate(booking_rejections_total[10m])) > 0.2
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Booking rejection spike ({{ $labels.rejection_type }})"
+          description: "Bookings are being rejected at {{ $value | humanize }}/s for type '{{ $labels.rejection_type }}' over 10m."
+
+      # Notifications are failing to deliver. notifier_deliveries_total carries
+      # outcome=failed for permanent failures. Any failed deliveries sustained
+      # over 5m (per channel) means recipients are not being reached.
+      - alert: NotificationDeliveryFailures
+        expr: sum by (channel) (rate(notifier_deliveries_total{outcome="failed"}[5m])) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Notification delivery failures on {{ $labels.channel }}"
+          description: "event-notifier is failing {{ $value | humanize }}/s deliveries on channel '{{ $labels.channel }}' over 5m."
