@@ -55,10 +55,16 @@ The whole system — 9 services, RabbitMQ, 4 PostgreSQL instances, and WireMock
 stand-ins for all external HTTP APIs — runs with one command from the repo root:
 
 ```bash
-docker compose up -d --build     # no .env needed: dev defaults are baked in
+docker compose up -d --build     # 9 services + infra; no .env needed (dev defaults baked in)
+docker compose --profile observability up -d --build   # + Prometheus/Grafana/Alertmanager/exporters
 cp .env.example .env             # optional: copy + edit only what you change
-docker compose down -v           # tear down (incl. volumes)
+docker compose down -v           # tear down (incl. volumes; add --profile observability to also stop it)
 ```
+
+The observability stack lives in the **`observability` compose profile** and is OFF
+by default — the bare `up` starts only the 14 app/infra containers. Enable it per the
+second command above, or set `COMPOSE_PROFILES=observability` in `.env` to make it part
+of the default `up`.
 
 Host ports:
 
@@ -72,11 +78,11 @@ Host ports:
 | 8089 | WireMock mocks (journal: `http://localhost:8089/__admin/requests`) |
 | 5672 / 15672 | RabbitMQ (AMQP / management UI) |
 | 5433 | pg-calcom (fixture cal.com DB, used by `scripts/calcom_sim.py`) |
-| 9090 | Prometheus (127.0.0.1 only; scrapes all services + RabbitMQ + postgres exporters) |
-| 3001 | Grafana (admin/admin; provisioned dashboards: System Overview, Booking Flow) |
-| 9093 | Alertmanager (127.0.0.1 only; routes Prometheus alerts → ops Telegram) |
+| 9090 | Prometheus *(observability profile; 127.0.0.1 only; scrapes services + RabbitMQ + postgres exporters)* |
+| 3001 | Grafana *(observability profile; admin/admin; dashboards: System Overview, Booking Flow)* |
+| 9093 | Alertmanager *(observability profile; 127.0.0.1 only; routes Prometheus alerts → ops Telegram)* |
 
-Observability: every Python service serves `GET /metrics` (prometheus-client);
+Observability (in the `observability` profile): every Python service serves `GET /metrics` (prometheus-client);
 Prometheus config lives in `docker/prometheus/prometheus.yml`, the two
 provisioned dashboards in `docker/grafana/dashboards/` (uids
 `events-system-overview`, `events-booking-flow`). Alert rules live in

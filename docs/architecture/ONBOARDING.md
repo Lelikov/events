@@ -43,10 +43,17 @@ WireMock container mocking every external HTTP API (Shortify, UniSender Go,
 Telegram, GetStream):
 
 ```bash
-docker compose up -d --build    # from the repo root; no .env required
+docker compose up -d --build    # 9 services + infra (14 containers); no .env required
+docker compose --profile observability up -d --build   # + monitoring stack (see below)
 docker compose ps               # wait until everything is (healthy)
 docker compose down -v          # tear down, including volumes
 ```
+
+The monitoring stack (Prometheus, Grafana, Alertmanager, postgres exporters) is
+in the **`observability` compose profile**, OFF by default. Start it with the
+second command, or set `COMPOSE_PROFILES=observability` in `.env` so the bare
+`up` includes it. RabbitMQ always exposes its `/metrics` plugin on `:15692`
+regardless of the profile (nothing scrapes it until Prometheus is up).
 
 Dev-grade defaults for every variable are baked into `docker-compose.yml`
 (mirrored in `.env.example`). Copy `.env.example` to `.env` and override only
@@ -59,7 +66,8 @@ Entry points (defaults): event-receiver `:8888`, event-users `:8001`,
 event-admin `:8002`, admin frontend `:3000`, jitsi-chat `:8080`, WireMock
 request journal `:8089/__admin/requests`, RabbitMQ management `:15672`,
 Prometheus `:9090` (127.0.0.1 only), Grafana `:3001` (admin/admin),
-Alertmanager `:9093` (127.0.0.1 only).
+Alertmanager `:9093` (127.0.0.1 only) — the last three only with the
+`observability` profile enabled.
 
 Every published host port is an env var with the default above — override in
 `.env` (or inline) without touching the compose file:
@@ -199,7 +207,12 @@ Each service needs its own `.env`. Copy from `.env.example` where available. Key
 ## Observability (Prometheus + Grafana)
 
 The compose stack ships a full metrics pipeline (design spec:
-`docs/superpowers/specs/2026-06-13-prometheus-grafana-metrics-design.md`).
+`docs/superpowers/specs/2026-06-13-prometheus-grafana-metrics-design.md`),
+bundled in the **`observability` compose profile** (Prometheus, Grafana,
+Alertmanager, and the four postgres exporters). It is off by default; start it
+with `docker compose --profile observability up -d` or set
+`COMPOSE_PROFILES=observability` in `.env`. The app services always expose
+`/metrics`, so enabling the profile later needs no rebuild of them.
 
 ### What is collected
 

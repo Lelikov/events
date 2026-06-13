@@ -132,6 +132,7 @@ services:
   # by prometheus in-network on :9187 (no host ports).
   pg-exporter-saver:
     image: quay.io/prometheuscommunity/postgres-exporter:v0.17.1
+    profiles: ["observability"]
     environment:
       DATA_SOURCE_NAME: postgresql://${PG_SAVER_USER:-postgres}:${PG_SAVER_PASSWORD:-postgres}@pg-saver:5432/${PG_SAVER_DB:-event_saver}?sslmode=disable
     depends_on:
@@ -141,6 +142,7 @@ services:
 
   pg-exporter-users:
     image: quay.io/prometheuscommunity/postgres-exporter:v0.17.1
+    profiles: ["observability"]
     environment:
       DATA_SOURCE_NAME: postgresql://${PG_USERS_USER:-postgres}:${PG_USERS_PASSWORD:-postgres}@pg-users:5432/${PG_USERS_DB:-event_users}?sslmode=disable
     depends_on:
@@ -150,6 +152,7 @@ services:
 
   pg-exporter-notifier:
     image: quay.io/prometheuscommunity/postgres-exporter:v0.17.1
+    profiles: ["observability"]
     environment:
       DATA_SOURCE_NAME: postgresql://${PG_NOTIFIER_USER:-postgres}:${PG_NOTIFIER_PASSWORD:-postgres}@pg-notifier:5432/${PG_NOTIFIER_DB:-event_notifier}?sslmode=disable
     depends_on:
@@ -159,6 +162,7 @@ services:
 
   pg-exporter-calcom:
     image: quay.io/prometheuscommunity/postgres-exporter:v0.17.1
+    profiles: ["observability"]
     environment:
       DATA_SOURCE_NAME: postgresql://${PG_CALCOM_USER:-calcom}:${PG_CALCOM_PASSWORD:-calcom}@pg-calcom:5432/${PG_CALCOM_DB:-calcom}?sslmode=disable
     depends_on:
@@ -168,6 +172,7 @@ services:
 
   prometheus:
     image: prom/prometheus:v3.4.1
+    profiles: ["observability"]
     volumes:
       - ./docker/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - ./docker/prometheus/rules:/etc/prometheus/rules:ro
@@ -186,6 +191,7 @@ services:
 
   grafana:
     image: grafana/grafana:11.6.3
+    profiles: ["observability"]
     environment:
       GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
       GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
@@ -210,6 +216,7 @@ services:
 
   alertmanager:
     image: prom/alertmanager:v0.28.0
+    profiles: ["observability"]
     # The image does no env interpolation in its YAML, so entrypoint.sh renders
     # alertmanager.tmpl.yml -> /tmp/alertmanager.yml (sed substitution of the
     # ops Telegram token/chat + Grafana port) then execs alertmanager.
