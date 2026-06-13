@@ -85,14 +85,18 @@ Host ports:
 | 9090 | Prometheus *(observability profile; 127.0.0.1 only; scrapes services + RabbitMQ + postgres exporters)* |
 | 3001 | Grafana *(observability profile; admin/admin; dashboards: System Overview, Booking Flow)* |
 | 9093 | Alertmanager *(observability profile; 127.0.0.1 only; routes Prometheus alerts → ops Telegram)* |
+| 9428 | VictoriaLogs *(observability profile; 127.0.0.1 only; container logs collected by Vector; LogsQL UI + API)* |
 
 Observability (in the `observability` profile): every Python service serves `GET /metrics` (prometheus-client);
-Prometheus config lives in `docker/prometheus/prometheus.yml`, the two
+Prometheus config lives in `docker/prometheus/prometheus.yml`, the
 provisioned dashboards in `docker/grafana/dashboards/` (uids
-`events-system-overview`, `events-booking-flow`). Alert rules live in
+`events-system-overview`, `events-booking-flow`, `events-logs`). Alert rules live in
 `docker/prometheus/rules/` (infra + business) and route through Alertmanager
 (`docker/alertmanager/`) to a dedicated ops Telegram chat — set
 `ALERT_TELEGRAM_BOT_TOKEN`/`ALERT_TELEGRAM_CHAT_ID` in `.env` for real delivery.
+Logs: **Vector** collects every container's stdout via the Docker socket into
+**VictoriaLogs** (7d retention), queryable in Grafana via the `victorialogs`
+datasource and the Logs dashboard; config in `docker/vector/vector.yaml`.
 See `docs/architecture/ONBOARDING.md` § Observability for what's collected, the
 alert set, and how to add a metric or rule.
 

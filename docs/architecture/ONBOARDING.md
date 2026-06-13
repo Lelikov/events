@@ -68,8 +68,8 @@ event-admin `:8002`, event-shortener `:8000`, admin frontend `:3000`,
 jitsi-chat `:8080`, WireMock
 request journal `:8089/__admin/requests`, RabbitMQ management `:15672`,
 Prometheus `:9090` (127.0.0.1 only), Grafana `:3001` (admin/admin),
-Alertmanager `:9093` (127.0.0.1 only) — the last three only with the
-`observability` profile enabled.
+Alertmanager `:9093` (127.0.0.1 only), VictoriaLogs `:9428` (127.0.0.1 only) —
+the last four only with the `observability` profile enabled.
 
 Every published host port is an env var with the default above — override in
 `.env` (or inline) without touching the compose file:
@@ -89,6 +89,8 @@ Every published host port is an env var with the default above — override in
 | `PROMETHEUS_PORT` | 9090 | prometheus (127.0.0.1 only) |
 | `GRAFANA_PORT` | 3001 | grafana (login `GRAFANA_ADMIN_USER`/`GRAFANA_ADMIN_PASSWORD`, default admin/admin) |
 | `ALERTMANAGER_PORT` | 9093 | alertmanager (127.0.0.1 only) |
+| `VICTORIALOGS_PORT` | 9428 | victorialogs (127.0.0.1 only; logs UI + LogsQL API) |
+| `LOGS_RETENTION_PERIOD` | 7d | victorialogs log retention |
 
 CORS origins, `MEETING_HOST_URL` and `VITE_WEBHOOK_URL` defaults are derived
 from these vars inside `docker-compose.yml`, and `scripts/calcom_sim.py`
@@ -212,8 +214,10 @@ Each service needs its own `.env`. Copy from `.env.example` where available. Key
 The compose stack ships a full metrics pipeline (design spec:
 `docs/superpowers/specs/2026-06-13-prometheus-grafana-metrics-design.md`),
 bundled in the **`observability` compose profile** (Prometheus, Grafana,
-Alertmanager, and the four postgres exporters). It is off by default; start it
-with `docker compose --profile observability up -d` or set
+Alertmanager, and the five postgres exporters). The same profile also ships
+centralized **logging** — Vector + VictoriaLogs (see the *Logging* subsection
+below). It is off by default; start it with
+`docker compose --profile observability up -d` or set
 `COMPOSE_PROFILES=observability` in `.env`. The app services always expose
 `/metrics`, so enabling the profile later needs no rebuild of them.
 
@@ -300,6 +304,41 @@ routes them to a dedicated **ops** Telegram chat. Design spec:
   prom/prometheus promtool check rules /rules/*.yml`; Prometheus reloads on
   restart (or `POST /-/reload`). Verify in Prometheus → Alerts and at
   http://localhost:9093.
+
+### Logging (Vector + VictoriaLogs)
+
+In the same `observability` profile, **Vector** tails every container's
+stdout/stderr via the Docker socket and ships the lines to **VictoriaLogs**,
+which you query in Grafana alongside the metrics (design spec:
+`docs/superpowers/specs/2026-06-13-log-aggregation-vector-victorialogs-design.md`).
+No application changes — the seven Python services already emit structlog JSON
+when `DEBUG=false`.
+
+- **What's collected**: all 16 default containers. Vector's `docker_logs`
+  source reads the lot (it excludes only itself to avoid a feedback loop). The
+  Python services' JSON is parsed into structured fields (`level`, `_msg` from
+  the structlog `event`, the structlog `timestamp`, plus callsite fields);
+  plain-text infra logs (Postgres, RabbitMQ, nginx, Caddy, WireMock) pass
+  through with the raw line as `_msg`. Vector also tags each line with
+  `service` (from the compose service label), `container`, and `stream`.
+- **Storage / retention**: VictoriaLogs keeps logs for `LOGS_RETENTION_PERIOD`
+  (default **7d**) in the `victorialogs-data` volume. Built-in UI + LogsQL API
+  at http://localhost:9428 (127.0.0.1 only). Config:
+  `docker/vector/vector.yaml`.
+- **Querying in Grafana**: the **VictoriaLogs** datasource (uid `victorialogs`,
+  plugin `victoriametrics-logs-datasource` installed via `GF_INSTALL_PLUGINS`)
+  powers the **Events — Logs** dashboard (uid `events-logs`: a `service`
+  template variable, log volume by level, and a live logs panel) and Grafana
+  **Explore**. Example LogsQL:
+  - `service:event-booking level:error` — booking errors only
+  - `service:event-saver _msg:~"projection"` — saver lines mentioning projection
+  - `level:error` — every error across the stack
+  - direct API: `curl -s 'http://127.0.0.1:9428/select/logsql/query'
+    --data-urlencode 'query=service:event-receiver' --data-urlencode 'limit=5'`
+- **Security note**: Vector mounts `/var/run/docker.sock` **read-only**, and
+  VictoriaLogs is loopback-only with no auth. Fine for this dev/integration
+  stack; for production, harden both (least-privilege socket proxy or a
+  log-driver instead of the raw socket, and auth/TLS in front of VictoriaLogs).
 
 ## Minimum Viable Setup
 
