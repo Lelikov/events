@@ -107,10 +107,11 @@ uv run scripts/calcom_sim.py lifecycle          # created -> rescheduled -> canc
 uv run scripts/calcom_sim.py cancel <uid>; uv run scripts/calcom_sim.py reschedule <uid>
 ```
 
-Mock vs real external APIs: Shortify, UniSender Go, Telegram Bot API and
-GetStream all default to the WireMock container (`http://mocks:8080/<prefix>`,
-mappings in `docker/mocks/mappings/`). Point the corresponding `*_URL`/key
-variables in `.env` at real endpoints to integrate for real.
+Mock vs real external APIs: UniSender Go, Telegram Bot API and GetStream default
+to the WireMock container (`http://mocks:8080/<prefix>`, mappings in
+`docker/mocks/mappings/`). Point the corresponding `*_URL`/key variables in
+`.env` at real endpoints to integrate for real. (URL shortening is now the real
+in-contour `event-shortener` service, not a mock.)
 
 External cal.com: by default `event-booking` reads the seeded `pg-calcom`
 fixture DB (`docker/calcom-init/`). Set `CALCOM_DATABASE_URL` in `.env` to a
