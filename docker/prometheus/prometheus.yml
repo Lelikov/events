@@ -47,6 +47,10 @@ scrape_configs:
     static_configs:
       - targets: ["event-admin:8888"]
 
+  - job_name: event-shortener
+    static_configs:
+      - targets: ["event-shortener:8888"]
+
   # ---- Infrastructure -------------------------------------------------------
   # rabbitmq_prometheus plugin; per-object metrics enabled via
   # docker/rabbitmq/20-prometheus.conf so rabbitmq_queue_messages carries
@@ -70,3 +74,6 @@ scrape_configs:
       - targets: ["pg-exporter-calcom:9187"]
         labels:
           db: calcom
+      - targets: ["pg-exporter-shortener:9187"]
+        labels:
+          db: shortener
