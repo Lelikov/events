@@ -35,6 +35,93 @@ event-notifier is the newest service. It has no migration framework (raw SQL boo
 
 ## How to Run the Full System Locally
 
+### Quick start: one command (recommended)
+
+The root `docker-compose.yml` starts everything — all 9 services, RabbitMQ,
+four PostgreSQL containers (saver/users/notifier/cal.com fixture) and a
+WireMock container mocking every external HTTP API (Shortify, UniSender Go,
+Telegram, GetStream):
+
+```bash
+docker compose up -d --build    # 9 services + infra (14 containers); no .env required
+docker compose --profile observability up -d --build   # + monitoring stack (see below)
+docker compose ps               # wait until everything is (healthy)
+docker compose down -v          # tear down, including volumes
+```
+
+The monitoring stack (Prometheus, Grafana, Alertmanager, postgres exporters) is
+in the **`observability` compose profile**, OFF by default. Start it with the
+second command, or set `COMPOSE_PROFILES=observability` in `.env` so the bare
+`up` includes it. RabbitMQ always exposes its `/metrics` plugin on `:15692`
+regardless of the profile (nothing scrapes it until Prometheus is up).
+
+Dev-grade defaults for every variable are baked into `docker-compose.yml`
+(mirrored in `.env.example`). Copy `.env.example` to `.env` and override only
+what you change — e.g. set `CALCOM_DATABASE_URL` to a real cal.com PostgreSQL
+DSN to integrate with an external cal.com instead of the seeded `pg-calcom`
+fixture, or swap the `mocks` endpoints (`SHORTENER_URL`, `UNISENDER_BASE_URL`,
+`TELEGRAM_BASE_URL`, `CHAT_BASE_URL`) for real APIs.
+
+Entry points (defaults): event-receiver `:8888`, event-users `:8001`,
+event-admin `:8002`, admin frontend `:3000`, jitsi-chat `:8080`, WireMock
+request journal `:8089/__admin/requests`, RabbitMQ management `:15672`,
+Prometheus `:9090` (127.0.0.1 only), Grafana `:3001` (admin/admin),
+Alertmanager `:9093` (127.0.0.1 only) — the last three only with the
+`observability` profile enabled.
+
+Every published host port is an env var with the default above — override in
+`.env` (or inline) without touching the compose file:
+
+| Variable | Default | Service |
+|---|---|---|
+| `RECEIVER_PORT` | 8888 | event-receiver |
+| `USERS_PORT` | 8001 | event-users |
+| `ADMIN_PORT` | 8002 | event-admin |
+| `ADMIN_FRONTEND_PORT` | 3000 | event-admin-frontend |
+| `JITSI_CHAT_PORT` | 8080 | jitsi-chat |
+| `RABBITMQ_AMQP_PORT` | 5672 | rabbitmq (127.0.0.1 only) |
+| `RABBITMQ_MGMT_PORT` | 15672 | rabbitmq management (127.0.0.1 only) |
+| `PG_CALCOM_PORT` | 5433 | pg-calcom fixture DB (127.0.0.1 only) |
+| `MOCKS_PORT` | 8089 | WireMock (127.0.0.1 only) |
+| `PROMETHEUS_PORT` | 9090 | prometheus (127.0.0.1 only) |
+| `GRAFANA_PORT` | 3001 | grafana (login `GRAFANA_ADMIN_USER`/`GRAFANA_ADMIN_PASSWORD`, default admin/admin) |
+| `ALERTMANAGER_PORT` | 9093 | alertmanager (127.0.0.1 only) |
+
+CORS origins, `MEETING_HOST_URL` and `VITE_WEBHOOK_URL` defaults are derived
+from these vars inside `docker-compose.yml`, and `scripts/calcom_sim.py`
+reads `RECEIVER_PORT` / `PG_CALCOM_PORT` from `.env` — overriding a port in
+`.env` keeps the whole stack (and the simulator) consistent.
+
+### Health probes (k8s liveness / readiness / startup)
+
+Every service follows one convention, designed to map 1:1 onto Kubernetes
+probes:
+
+| Probe | Endpoint | Semantics |
+|---|---|---|
+| `livenessProbe` | `GET /health` | Process is up and serving HTTP. **Never** calls dependencies; always a cheap `200 {"status": "ok"}`. |
+| `readinessProbe` | `GET /ready` | Checks critical dependencies. `200 {"status": "ready", "checks": {...}}` or `503 {"status": "not_ready", "checks": {...}}` with a per-check boolean map. |
+| `startupProbe` | — | In compose, modeled by the healthcheck `start_period` (no failures counted while the service boots). The compose healthchecks hit `/health`. |
+
+Per-service endpoints and what `/ready` verifies:
+
+| Service | `/health` | `/ready` checks |
+|---|---|---|
+| event-receiver | shallow 200 | `rabbitmq` (broker ping) |
+| event-saver | shallow 200 | `database` (PostgreSQL `SELECT 1`) |
+| event-booking | shallow 200 | `database` (cal.com PostgreSQL), `rabbitmq` (broker ping) |
+| event-users | shallow 200 | `database` (PostgreSQL `SELECT 1`) |
+| event-admin | shallow 200 | `database` (PostgreSQL `SELECT 1`) |
+| event-notifier | shallow 200 | `consumer` (started), `outbox_sender` (task alive), `database` |
+| event-admin-frontend | nginx returns `200 "ok"` | — (static SPA; no readiness deps) |
+| jitsi-chat | Caddy returns `200 "ok"` | — (static SPA; no readiness deps) |
+
+All `/health` and `/ready` endpoints are unauthenticated by design (probes
+cannot carry tokens).
+
+The manual per-service workflow below is still useful when iterating on a
+single service against the rest of the stack.
+
 ### Prerequisites
 
 - Python 3.14 with `uv` installed
@@ -116,6 +203,99 @@ Each service needs its own `.env`. Copy from `.env.example` where available. Key
 | event-admin-frontend | `VITE_API_BASE_URL`, `VITE_USERS_API_BASE_URL` |
 
 ---
+
+## Observability (Prometheus + Grafana)
+
+The compose stack ships a full metrics pipeline (design spec:
+`docs/superpowers/specs/2026-06-13-prometheus-grafana-metrics-design.md`),
+bundled in the **`observability` compose profile** (Prometheus, Grafana,
+Alertmanager, and the four postgres exporters). It is off by default; start it
+with `docker compose --profile observability up -d` or set
+`COMPOSE_PROFILES=observability` in `.env`. The app services always expose
+`/metrics`, so enabling the profile later needs no rebuild of them.
+
+### What is collected
+
+- **HTTP RED** (every FastAPI service): `http_requests_total{method, route, status}`
+  and `http_request_duration_seconds` — `route` is always the route template,
+  never the raw path (cardinality). `/health` and `/metrics` are excluded.
+- **Consumer RED** (saver / booking / notifier / users):
+  `messages_processed_total{queue, event_type, outcome}` (outcome ok/retried/rejected)
+  and `message_processing_seconds{queue}`. Services share metric names and are
+  distinguished by the Prometheus `job` label.
+- **Business counters** (service-prefixed): `receiver_webhooks_total{source,result}`,
+  `saver_events_total{event_type}`, `saver_booking_lifecycle_total{action}`,
+  `booking_rejections_total{rejection_type}`, `booking_blacklist_checks_total{result}`,
+  `notifier_deliveries_total{channel,trigger,outcome}`, `notifier_outbox_depth{status}`
+  (+ oldest-pending-age gauge), `users_crm_sync_*`, `admin_logins_total{outcome}`,
+  `admin_blacklist_ops_total{op}`, and more — see each service's `*/metrics.py`.
+- **Infrastructure**: RabbitMQ via the `rabbitmq_prometheus` plugin
+  (`rabbitmq_queue_messages{queue}` incl. `*.dlq` depths; per-object metrics
+  enabled in `docker/rabbitmq/20-prometheus.conf`) and the four PostgreSQL DBs
+  via one `postgres_exporter` container each (`db` label: saver/users/notifier/calcom).
+
+Every Python service serves `GET /metrics` on the same port as `/health` (8888
+in-container). Scrape config: `docker/prometheus/prometheus.yml` (15s interval).
+
+### Dashboards
+
+Grafana provisions a `Prometheus` datasource (uid `prometheus`) and two
+dashboards from `docker/grafana/dashboards/` into the **Events** folder:
+
+| Dashboard | uid | Contents |
+|---|---|---|
+| Events — System Overview | `events-system-overview` | per-target up, HTTP RED, consumer RED, queue + DLQ depths, PostgreSQL connections |
+| Events — Booking Flow | `events-booking-flow` | funnel webhooks → events → bookings created/rejected → notifications, blacklist checks, outbox depth/age, processing p95 |
+
+Open http://localhost:3001 (admin/admin), or query Prometheus directly at
+http://localhost:9090. Dashboard JSON edits in the repo are picked up within
+~30s (file provider); UI edits are not written back — export and commit them.
+
+### How to add a metric
+
+1. Define it in the service's `metrics.py` (module-level `prometheus_client`
+   `Counter`/`Gauge`/`Histogram`; business metrics get a `<service>_` prefix,
+   bounded label values only — never raw paths, emails or ids).
+2. Increment it where the event happens; add a unit test that the counter moves.
+3. Chart it: edit the dashboard JSON in `docker/grafana/dashboards/` (or edit in
+   the Grafana UI and export back into the repo).
+4. New service? Add a scrape job in `docker/prometheus/prometheus.yml`.
+
+### Alerting (Alertmanager + Telegram)
+
+Prometheus evaluates alert rules and pushes firing alerts to **Alertmanager**
+(`alertmanager:9093`, exposed loopback-only at http://localhost:9093), which
+routes them to a dedicated **ops** Telegram chat. Design spec:
+`docs/superpowers/specs/2026-06-13-alertmanager-telegram-design.md`.
+
+- **Where rules live**: `docker/prometheus/rules/` (mounted read-only into
+  Prometheus; `rule_files: /etc/prometheus/rules/*.yml`).
+  - `infra.yml` — `ServiceDown` (up==0, 1m, crit), `HighErrorRate` (5xx >5% /5m,
+    warn), `HighLatencyP95` (p95 >1s /10m, warn), `DLQGrowing` (`*.dlq` >0 /5m,
+    warn), `OutboxBacklog` (pending >100 /10m, warn), `OutboxStalled` (oldest
+    pending >5m, crit), `RabbitMQDown`/`PostgresDown` (1m, crit).
+  - `business.yml` — `BookingRejectionSpike` (rejections >0.2/s /10m, warn),
+    `NotificationDeliveryFailures` (failed deliveries >0 /5m, warn).
+- **Routing / severity**: alerts group by `alertname`+`job`. `severity=critical`
+  notifies fast (`group_wait` 10s, `repeat_interval` 1h); `severity=warning`
+  batches (`group_wait` 1m, `repeat_interval` 12h). Single Telegram receiver,
+  HTML message with a severity emoji and a Grafana link. Config template:
+  `docker/alertmanager/alertmanager.tmpl.yml` (rendered at container start by
+  `docker/alertmanager/entrypoint.sh`, which `sed`-substitutes the env vars —
+  Alertmanager does no env interpolation in its YAML).
+- **Set the ops bot token + chat** (real delivery): create a dedicated bot via
+  @BotFather (separate from event-notifier's client-facing `TELEGRAM_BOT_TOKEN`),
+  then set `ALERT_TELEGRAM_BOT_TOKEN` and `ALERT_TELEGRAM_CHAT_ID` in `.env`.
+  **Left blank → graceful degrade**: Alertmanager still starts and alerts still
+  fire and route, but Telegram sends fail with a logged `401` (visible via
+  `docker compose logs alertmanager`).
+- **How to add a rule**: drop it in the right `docker/prometheus/rules/*.yml`
+  with a `severity: warning|critical` label and `summary`/`description`
+  annotations (use `{{ $labels.* }}` / `{{ $value }}`). Validate with
+  `docker run --rm --entrypoint promtool -v $PWD/docker/prometheus/rules:/rules
+  prom/prometheus promtool check rules /rules/*.yml`; Prometheus reloads on
+  restart (or `POST /-/reload`). Verify in Prometheus → Alerts and at
+  http://localhost:9093.
 
 ## Minimum Viable Setup
 

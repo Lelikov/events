@@ -1,0 +1,61 @@
+{
+  "service": "contracts",
+  "fixed": [
+    {
+      "title": "Competing consumers on events.booking.lifecycle: per-consumer queues (events.booking.lifecycle.saver / .booking) bound to the same routing key; constants defined once in event-schemas",
+      "commits": ["event-schemas:681cf2e", "event-receiver:268d1f2", "event-saver:f61f098", "root:3def0f7"]
+    },
+    {
+      "title": "Queue declaration mismatches (DLX args, x-max-priority): canonical QueueSpec in event_schemas.queues; all services declare identical args; events.dlx + DLQs declared by every consumer idempotently",
+      "commits": ["event-schemas:681cf2e", "event-receiver:268d1f2", "event-saver:f61f098", "event-notifier:7a45e38", "root:3def0f7"]
+    },
+    {
+      "title": "Canonical envelope {original, normalized} typed in event_schemas.envelope; event-booking, event-notifier and event-saver consumers unwrap it instead of reading top-level fields",
+      "commits": ["event-schemas:681cf2e", "root:3def0f7", "event-notifier:7a45e38", "event-saver:f61f098"]
+    },
+    {
+      "title": "notification.send_requested chain: NotificationCommandPayload (recipients email+role, template_data, trigger_event) is canonical; receiver normalizer case added (participants + user_id enrichment); notifier parses envelope, validates payload and resolves user_id from normalized.participants by email",
+      "commits": ["event-receiver:268d1f2", "event-notifier:7a45e38"]
+    },
+    {
+      "title": "meeting.url_created/url_deleted and chat.created/deleted payload drift: schemas = consumer needs ({email, recipient_role[, meeting_url]} / {channel_id}); event-booking producer fixed; receiver normalizer maps recipient to participants so saver resolves user_id",
+      "commits": ["event-schemas:681cf2e", "root:3def0f7", "event-receiver:268d1f2"]
+    },
+    {
+      "title": "booking.rejected payload aligned: event-booking now publishes full BookingRejectedPayload (client_email, rejection_type, rejection_reasons, available_from, has_active_booking, active_booking_start); receiver extracts client participant",
+      "commits": ["root:3def0f7", "event-receiver:268d1f2"]
+    },
+    {
+      "title": "EventType policy: receiver no longer 500s on unknown types (routed to events.unrouted, payload preserved); PAYLOAD_MODELS mapping covers every EventType; dead EmailRejectionNotificationPayload and normalized.py TypedDicts deleted; lifecycle wire format (users[]) modeled",
+      "commits": ["event-schemas:681cf2e", "event-receiver:268d1f2"]
+    },
+    {
+      "title": "CloudEvent booking attribute centralized as bookingid/ce-bookingid in event_schemas.attributes; all readers (saver, booking, notifier), writer (receiver) and docs fixed",
+      "commits": ["event-schemas:681cf2e", "event-receiver:268d1f2", "event-saver:f61f098", "event-notifier:7a45e38", "root:3def0f7"]
+    },
+    {
+      "title": "booking.rescheduled identity: previous_booking_uid (cal.com rescheduleUid) + previous_start_time/rescheduled_by added to BookingRescheduledPayload; saver lifecycle projection persists the linkage in details",
+      "commits": ["event-schemas:681cf2e", "event-saver:f61f098"]
+    },
+    {
+      "title": "events.booking.reminder queue removed (no producer/consumer); booking.reminder_sent routes to events.booking.lifecycle; reminders flow via notification.send_requested (BOOKING_REMINDER)",
+      "commits": ["event-schemas:681cf2e", "event-receiver:268d1f2", "event-saver:f61f098"]
+    },
+    {
+      "title": "Cross-service docs: CONTRACT_DECISIONS.md written; MESSAGE_CONTRACTS.md queue registry/envelope/attributes updated; per-service QUEUES_DIGEST/API_CONTRACTS updated in the same commits",
+      "commits": ["root:3def0f7", "event-schemas:fa9ad06"]
+    }
+  ],
+  "skipped": [
+    {"title": "No cal.com ingress path (/event/booking has no production producer; raw cal.com webhook normalization)", "reason": "event-receiver-local: receiver fixer must build the cal.com webhook normalizer using requests.jsonl samples against the now-canonical payload models"},
+    {"title": "simulate_booking.py still sends legacy users-list payloads for meeting.url_*", "reason": "dev tool; receiver normalizer keeps a tolerant fallback; modernization left to receiver fixer"},
+    {"title": "Notifier delivery bugs (UsersClient GET /users/{id} 404, ILIKE contact match, template_id slugs, missing notification.*.message_sent publisher)", "reason": "explicitly left to event-notifier fixer per task scope (parsing only)"},
+    {"title": "booking.rejected not reflected in saver status/lifecycle projection", "reason": "event-saver-local projection logic; saver fixer"},
+    {"title": "event-admin / event-users bypass event-schemas (hardcoded type strings)", "reason": "service-local; their fixers should import EventType/payload models from event-schemas 0.2.0"},
+    {"title": "No consumer prefetch (QoS) and graceful_timeout in any service", "reason": "service-local runtime tuning, not a contract; flagged for per-service fixers"},
+    {"title": "Client receives organizer's personal meeting URL in notifications; no per-recipient localization; multi-attendee/guest bookings unsupported", "reason": "product-level notification/ingress design beyond contract scope; producers/consumers now have the fields (time_zone, per-recipient url events) to implement it"},
+    {"title": "events.user.email consumer off by default in event-users", "reason": "event-users-local configuration; queue + spec retained in event-schemas"}
+  ],
+  "testsPass": true,
+  "notes": "All suites green after fixes: event-schemas 19 (new suite), event-receiver 37, event-saver 39, event-booking 38, event-notifier 37. Ruff clean in all touched repos except event-saver which has 26 pre-existing errors (unchanged from baseline; none added). event-schemas bumped to 0.2.0; uv.lock refreshed in all four dependent services. Canonical decisions in docs/audit/v2/CONTRACT_DECISIONS.md: per-service fixers must not reintroduce shared queues, top-level payload reads, or ce-booking_id."
+}

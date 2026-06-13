@@ -1,0 +1,224 @@
+{
+  "findings": [
+    {
+      "service": "event-notifier",
+      "severity": "CRITICAL",
+      "title": "Service cannot start: httpx.Timeout(connect=, read=, write=) without 'pool' raises ValueError during DI resolution",
+      "file": "event-notifier/event_notifier/ioc.py:72",
+      "detail": "provide_users_client (ioc.py:72), provide_email_channel (ioc.py:80) and provide_telegram_channel (ioc.py:93) all call httpx.Timeout(connect=5.0, read=15.0, write=5.0). httpx requires either a default or all four parameters (pool is missing) and raises ValueError('httpx.Timeout must either include a default, or set all four parameters explicitly'). Verified by reproduction in the project venv (httpx 0.28). main.py lifespan resolves NotificationConsumer -> ProcessDomainEventUseCase -> UsersClient, so the container raises on the very first startup and the app never boots. This was introduced by the fix for the April 'no HTTP timeouts' finding (H-23): the fix itself is broken and was never executed (no test constructs the providers).",
+      "fix_hint": "Use httpx.Timeout(5.0, connect=5.0, read=15.0, write=5.0) or add pool=5.0. Add a smoke test that resolves the full Dishka container (or at least constructs each provider) so startup-path errors fail CI.",
+      "cross_service": false,
+      "origin": "new"
+    },
+    {
+      "service": "event-notifier",
+      "severity": "CRITICAL",
+      "title": "FastStream handler signature (body: bytes, headers: dict) makes every message fail pydantic validation — handler body never executes",
+      "file": "event-notifier/event_notifier/adapters/consumer.py:43",
+      "detail": "The subscriber is declared as `async def handle(body: bytes, headers: dict)`. FastStream (0.6.7) treats multiple un-annotated parameters as fields of the decoded message body, not as raw body + AMQP headers. Verified by reproduction with TestRabbitBroker: every published message raises pydantic ValidationError ('2 validation errors for handle: body Field required, headers Field required') before _handle is ever called. Consequence: the consumer can never process ANY message; every notification command is rejected to the DLX (or dropped if events.dlx does not exist). Combined with no DLQ consumer, all notifications are silently lost. There is no consumer test, so 31 unit tests pass while the entry point is 100% broken.",
+      "fix_hint": "Use `msg: RabbitMessage` (faststream.rabbit.RabbitMessage) and read msg.body / msg.headers, or annotate headers with Context: `headers: Annotated[dict, Context(\"message.headers\")]` and body as the lone positional payload. Add an integration test with TestRabbitBroker that publishes a binary-mode CloudEvent and asserts the use case is invoked.",
+      "cross_service": false,
+      "origin": "new"
+    },
+    {
+      "service": "event-notifier",
+      "severity": "CRITICAL",
+      "title": "notification.send_requested payload read at wrong level: event-receiver wraps data as {original, normalized} but notifier reads top-level 'recipients'",
+      "file": "event-notifier/event_notifier/application/use_cases/process_domain_event.py:44",
+      "detail": "_execute_notification_command reads event.data.get('recipients') and event.data.get('template_data') from the top level. But event-receiver (adapters/publisher.py:92-131, normalizers.py:53) republishes every CloudEvent with data = {\"original\": <producer payload>, \"normalized\": {\"participants\": [...]}}. The actual recipients/template_data live under data['original']. Result: raw_recipients is always empty, the handler logs 'no recipients, skipping' and returns normally, the message is ACKed, and the notification is silently lost — for 100% of real notification.send_requested events. (The unit tests pass because their fixtures use the unwrapped producer format, not the on-the-wire format.)",
+      "fix_hint": "Read data.get('original', data) for recipients/trigger_event/template_data (or better: validate against event_schemas.NotificationCommandPayload applied to data['original']), and/or use data['normalized']['participants']. Add a contract test using an actual event-receiver-shaped payload.",
+      "cross_service": true,
+      "origin": "new"
+    },
+    {
+      "service": "event-notifier",
+      "severity": "CRITICAL",
+      "title": "Recipient contract mismatch: notifier requires recipient.user_id but producer (event-booking) sends {email, role} — every recipient skipped, notification lost",
+      "file": "event-notifier/event_notifier/application/use_cases/process_domain_event.py:66",
+      "detail": "_execute_notification_command requires recipient['user_id'] (line 66-70: 'Recipient missing user_id, skipping') and then calls users_client.get_contacts_by_id (GET /users/{user_id}). But the published contract is email-based: event_schemas.NotificationCommandPayload.NotificationRecipient has only {email, role} (event-schemas/event_schemas/notification.py:86-99), and event-booking builds recipients as {'email': ..., 'role': ...} in controllers/booking.py:178-182 and scheduler.py:41-45. event-receiver's normalizer has NO case for NOTIFICATION_SEND_REQUESTED in _extract_participants (normalizers.py:63-105), so normalized.participants is empty and no user_id enrichment happens anywhere. Even after fixing the original/normalized unwrap, every recipient would be skipped with 'missing user_id', no outbox records written, message ACKed, notification silently lost. UsersClient.get_contacts_by_email exists but is never called.",
+      "fix_hint": "Either resolve recipients by email (call get_contacts_by_email, which already exists) when user_id is absent, or add a NOTIFICATION_SEND_REQUESTED participant-extraction case in event-receiver's normalizer so user_id is enriched and read normalized.participants. Align with event_schemas.NotificationCommandPayload as the single contract.",
+      "cross_service": true,
+      "origin": "new"
+    },
+    {
+      "service": "event-notifier",
+      "severity": "CRITICAL",
+      "title": "OutboxSender cannot deliver notification.send_requested records: DOMAIN_EVENT_TO_TRIGGER lookup fails and record is marked failed; payload trigger_event is ignored",
+      "file": "event-notifier/event_notifier/adapters/outbox_sender.py:68",
+      "detail": "_process_record resolves the channel template via DOMAIN_EVENT_TO_TRIGGER.get(record.event_type). For records written by _execute_notification_command, event_type is 'notification.send_requested' (process_domain_event.py:91), which is not in DOMAIN_EVENT_TO_TRIGGER (event_types.py:8-15) — so .get() returns None and the record is immediately marked failed (outbox_sender.py:69-74), with zero delivery attempts and no retries. The trigger_event field carried in the command payload (BOOKING_REMINDER, BOOKING_REJECTED, etc. — exactly what the producer intends to select the template) is never read by the use case and never stored in the outbox. So even if the recipient/wrapping bugs were fixed, every command-path notification would be written to the outbox and then instantly marked failed. The new BOOKING_REJECTED handling (commit 7cef9bb) is therefore unreachable end-to-end.",
+      "fix_hint": "Store the payload's trigger_event in the outbox row (new column or reuse event_type) when processing notification.send_requested, and have OutboxSender prefer the stored trigger over the DOMAIN_EVENT_TO_TRIGGER mapping. Add an OutboxSender test with event_type='notification.send_requested'.",
+      "cross_service": false,
+      "origin": "new"
+    },
+    {
+      "service": "event-notifier",
+      "severity": "CRITICAL",
+      "title": "Single APP-scoped AsyncSession shared by consumer, OutboxSender loop and cleanup task — concurrent use is unsafe and cross-task commits destroy outbox atomicity",
+      "file": "event-notifier/event_notifier/ioc.py:44",
+      "detail": "provide_session/provide_sql_executor/provide_repository are all Scope.APP, so one SQLAlchemy AsyncSession instance is shared by three concurrent asyncio tasks: the FastStream consumer handler, the OutboxSender 1-second poll loop, and the hourly processed_events cleanup loop. AsyncSession is explicitly not safe for concurrent use — overlapping execute() calls raise InvalidRequestError/IllegalStateChangeError ('concurrent operations are not permitted'), crashing message processing. Worse, SqlExecutor.commit() commits the whole session: if OutboxSender commits (repository.py:96,119,133,140) while the consumer is midway through write_outbox_atomically (repository.py:48-75), the 'atomic' processed_events insert + outbox inserts are committed partially — an exception after that point leaves the event marked processed with missing outbox records (notification silently lost), or conversely interleaving breaks idempotency guarantees. The replacement of asyncpg pool-per-call with one shared session (commit 0616c41) introduced this.",
+      "fix_hint": "Create a session per unit of work: inject async_sessionmaker into the repository (or use Dishka REQUEST scope per message/poll iteration) and wrap each repository method or use-case in `async with sessionmaker() as session, session.begin():`. Never share an AsyncSession across tasks.",
+      "cross_service": false,
+      "origin": "new"
+    },
+    {
+      "service": "event-notifier",
+      "severity": "CRITICAL",
+      "title": "Queue declaration argument mismatch with event-receiver topology — PRECONDITION_FAILED startup crash for whichever service declares events.notification.commands second",
+      "file": "event-notifier/event_notifier/adapters/consumer.py:33",
+      "detail": "The consumer now declares events.notification.commands with declare=True and arguments={'x-dead-letter-exchange': 'events.dlx'} (consumer.py:33-39). event-receiver's RabbitTopologyManager declares the SAME queue (topology_queues defaults to all routing destinations, including events.notification.commands — event-receiver/config.py:148-155) with arguments {'x-max-priority': 10, 'x-dead-letter-exchange': 'events.dlx', 'x-dead-letter-routing-key': 'events.notification.commands.dlq'} (event-receiver/adapters/publisher.py:197-210). RabbitMQ rejects redeclaration of an existing queue with inequivalent arguments (PRECONDITION_FAILED, channel 406). In the default deployment (receiver starts first), event-notifier's broker.start() crashes; in the reverse order, event-receiver's ensure_topology crashes. The April 'declare=False undocumented' finding was 'fixed' by flipping to declare=True with mismatched arguments.",
+      "fix_hint": "Match the receiver's exact queue arguments (x-max-priority=10, x-dead-letter-exchange, x-dead-letter-routing-key=<queue>.dlq), or revert to declare=True only via a single topology owner. Document queue ownership in MESSAGE_CONTRACTS.md.",
+      "cross_service": true,
+      "origin": "new"
+    },
+    {
+      "service": "event-notifier",
+      "severity": "HIGH",
+      "title": "Outbox rows stuck in status='processing' are never recovered — crash mid-delivery silently loses the notification forever",
+      "file": "event-notifier/event_notifier/db/repository.py:78",
+      "detail": "fetch_pending_outbox now correctly claims rows by setting status='processing' inside one committed UPDATE...FOR UPDATE SKIP LOCKED (this fixes April C-11, no double-send window anymore). But nothing ever transitions 'processing' back: if the process crashes (or the shared-session bug raises) between claiming and mark_delivered/mark_retry/mark_failed, the row stays 'processing' permanently. The pending partial index and the WHERE status='pending' filter exclude it forever, there is no reaper, no last_attempted_at column, and no monitoring distinction. Also note: the migration's status column has no CHECK constraint at all, so the schema accepts 'processing', but docs/AUDIT.md and older schema docs claim a ('pending','delivered','failed') constraint — schema docs are stale.",
+      "fix_hint": "Add a reaper query in the OutboxSender loop: UPDATE notification_outbox SET status='pending' WHERE status='processing' AND updated_at < NOW() - INTERVAL '5 minutes'. Optionally add a CHECK constraint including 'processing' and a stuck-rows metric.",
+      "cross_service": false,
+      "origin": "new"
+    },
+    {
+      "service": "event-notifier",
+      "severity": "HIGH",
+      "title": "Consumer exceptions reject-without-requeue to a DLX nobody declares or consumes — transient event-users outages permanently lose notifications",
+      "file": "event-notifier/event_notifier/adapters/consumer.py:38",
+      "detail": "April H-21/H-22 were partially addressed: get_contacts_by_id now raises on 5xx/timeout/connect errors (users_client.py:86-94) and the queue has x-dead-letter-exchange=events.dlx. But there is still no explicit ack_policy (TODO at consumer.py:40); FastStream's default on handler exception is reject (requeue=False), so the message dead-letters on the FIRST transient failure — there is no redelivery/retry at all. The DLQs (declared only by event-receiver with 24h TTL) have no consumer and no re-shovel job, and event-notifier itself never declares the events.dlx exchange, so on a fresh broker where receiver topology has not run, dead-lettered messages are silently dropped by RabbitMQ. Net effect: any event-users blip converts notifications into silent loss after at most 24h. Note also a residual silent-loss path: when ALL recipients return 404/no contacts, the handler returns normally without marking processed — message ACKed, notification gone with only a warning log.",
+      "fix_hint": "Set an explicit ack policy: nack+requeue (or delayed retry queue) for transient infrastructure errors, reject-to-DLQ only for poison messages; declare events.dlx and the .dlq queue alongside the consumer queue; add DLQ alerting/redrive.",
+      "cross_service": true,
+      "origin": "april"
+    },
+    {
+      "service": "event-notifier",
+      "severity": "HIGH",
+      "title": "No delivery-result events published (notification.*.message_sent) — downstream contract still unimplemented",
+      "file": "event-notifier/event_notifier/adapters/outbox_sender.py:98",
+      "detail": "April H-19 still real: after a successful send, _process_record only logs and marks delivered; the promised notification.email.message_sent / notification.telegram.message_sent / notification.push.message_sent CloudEvents back to event-receiver are reduced to a TODO comment (outbox_sender.py:98-99). event-receiver still has routing rules sending those types to events.notification.delivery (event-receiver/config.py:69-83), and CLAUDE.md still documents the publisher and an event-receiver dependency table entry — neither exists in code. event-saver's delivery projections receive nothing.",
+      "fix_hint": "Implement a ResultEventPublisher (HTTP POST binary CloudEvent to event-receiver /event/cloudevents) and call it after mark_delivered/mark_failed; or delete the contract from CLAUDE.md, event_types constants and receiver routing if no consumer needs it.",
+      "cross_service": true,
+      "origin": "april"
+    },
+    {
+      "service": "event-notifier",
+      "severity": "HIGH",
+      "title": "UniSender template_id uses slug strings and global_substitutions would carry the raw {original, normalized} wrapper — emails likely rejected or rendered empty",
+      "file": "event-notifier/event_notifier/infrastructure/channels/email.py:14",
+      "detail": "Two contract problems against the UniSender Go hard invariant (POST /ru/transactional/api/v1/email/send.json): (1) _TEMPLATE_MAP maps triggers to slugs like 'booking_created', but UniSender Go's template_id field expects the UUID of a template created in their system; no provisioning/config exists for real template IDs, so sends will fail with invalid template errors (or the slugs are placeholders that were never validated — there is no integration evidence either way). (2) template_context stored in the outbox is event.data, which on the wire is the receiver wrapper {'original': ..., 'normalized': ...} (and for the command path merged_context spreads the wrapper, including the full recipients list) — global_substitutions would contain nested objects and PII rather than the flat key/value pairs (booking_start, organizer_name, ...) that templates reference, so substitutions cannot resolve. Every email path failure consumes all 5 retries then marks failed.",
+      "fix_hint": "Make template IDs configuration (env/DB mapping TriggerEvent -> UniSender template UUID); store only the producer's template_data (flat, str values) as template_context; add a respx test asserting the exact UniSender payload shape.",
+      "cross_service": true,
+      "origin": "new"
+    },
+    {
+      "service": "event-notifier",
+      "severity": "MEDIUM",
+      "title": "Domain-event routing path (routing_rules, booking.* triggers, BOOKING_REJECTED mapping) is unreachable dead code — notifier's queue only ever receives notification.send_requested",
+      "file": "event-notifier/event_notifier/event_types.py:8",
+      "detail": "April C-3's queue-name mismatch is fixed (config default is now events.notification.commands and it matches receiver routing). But event-receiver routes only type=notification.send_requested to that queue; all booking.* domain events go to events.booking.lifecycle / events.booking.reminder, which event-notifier does not consume. Therefore the entire _execute_domain_event path — DOMAIN_EVENT_TO_TRIGGER consumer filter, routing_rules table, the alembic seed rows (001_initial_schema.py:107-121), apply_routing_rules — can never execute in production. The branch's headline change 'handle BOOKING_REJECTED' (event_types.py:14) is doubly dead: booking.rejected never reaches this queue, AND the seed has no booking.rejected routing rule anyway. Booking lifecycle notifications actually arrive via event-booking's send_notification_command, i.e. the (currently broken) command path.",
+      "fix_hint": "Decide one mechanism: either bind the consumer to events.booking.lifecycle/reminder as well (then add the booking.rejected seed), or delete the routing-rules machinery and keep only the command path. Update CLAUDE.md request-flow diagram which still shows 'booking.created / booking.cancelled' arriving on this queue.",
+      "cross_service": true,
+      "origin": "new"
+    },
+    {
+      "service": "event-notifier",
+      "severity": "MEDIUM",
+      "title": "booking_id always empty: receiver publishes extension 'bookingid' (ce-bookingid) but consumer reads 'booking_id', and the data fallback is defeated by the original/normalized wrapper",
+      "file": "event-notifier/event_notifier/adapters/consumer.py:69",
+      "detail": "event-receiver sets the CloudEvents extension attribute 'bookingid' (publisher.py:128-129; CloudEvents 2.0 SDK forbids underscores in extension names), producing header ce-bookingid. The consumer reads ce.get('booking_id') — always None — and falls back to (ce.data or {}).get('booking_id'), but booking_id sits under data['original'], so the fallback also yields ''. Every outbox record is written with booking_id='' (the column is NOT NULL but accepts empty string), destroying booking traceability for delivered notifications. The monorepo CLAUDE.md also documents the header as ce-booking_id — stale against the receiver's actual 'bookingid'.",
+      "fix_hint": "Read ce.get('bookingid') first, then data.get('original', {}).get('booking_id'). Fix the DomainEvent docstring and the root CLAUDE.md header table.",
+      "cross_service": true,
+      "origin": "new"
+    },
+    {
+      "service": "event-notifier",
+      "severity": "MEDIUM",
+      "title": ".env.example still points at legacy queue events.notifications and a non-async DATABASE_URL — copying it silently disables or crashes the service",
+      "file": "event-notifier/.env.example:4",
+      "detail": "Residue of April C-3: config.py default is now correct (events.notification.commands), but .env.example still says NOTIFICATIONS_QUEUE=events.notifications — a queue that no receiver routing rule targets anymore, so a deployment based on the example consumes silence forever. Additionally DATABASE_URL=postgresql://... lacks the +asyncpg driver; create_async_engine('postgresql://...') attempts the sync psycopg2 dialect (not installed) and crashes at startup, while CLAUDE.md explicitly documents postgresql+asyncpg://. FCM vars are also listed without the 'optional' note (they are now optional — April C-10 is fixed in config.py:31-32).",
+      "fix_hint": "Update .env.example: NOTIFICATIONS_QUEUE=events.notification.commands, DATABASE_URL=postgresql+asyncpg://..., mark FCM vars optional.",
+      "cross_service": false,
+      "origin": "april"
+    },
+    {
+      "service": "event-notifier",
+      "severity": "MEDIUM",
+      "title": "Test suite validates a contract that does not exist on the wire — 31 green tests while the end-to-end pipeline is fully broken; consumer and IoC have zero coverage",
+      "file": "event-notifier/tests/application/test_process_domain_event.py:102",
+      "detail": "The notification.send_requested fixtures use recipients=[{'user_id': ..., 'role': ...}] and an unwrapped top-level payload — neither matches event-booking's {email, role} recipients nor event-receiver's {original, normalized} envelope, so the tests certify the exact bugs shipped (findings on recipients/wrapping). tests/infrastructure/test_outbox_sender.py only uses event_type='booking.created', missing the mark_failed path for command records. There is still no test for NotificationConsumer (April gap) — which would have caught the fatal handler-signature bug — and none for the ioc providers — which would have caught the httpx.Timeout crash.",
+      "fix_hint": "Add contract fixtures generated from event_schemas.NotificationCommandPayload wrapped exactly as event-receiver publishes; add a TestRabbitBroker consumer test and a container smoke test.",
+      "cross_service": false,
+      "origin": "april"
+    },
+    {
+      "service": "event-notifier",
+      "severity": "MEDIUM",
+      "title": "Telegram channel sends raw internal trigger string to end users for unknown triggers instead of failing",
+      "file": "event-notifier/event_notifier/infrastructure/channels/telegram.py:35",
+      "detail": "Still real from April: _MESSAGE_TEMPLATES.get(trigger_event, f'Уведомление: {trigger_event}') leaks the technical enum repr into the user-facing message body for any unmapped trigger, while EmailChannel correctly returns DeliveryResult(success=False). CLAUDE.md ('Unknown trigger_event values return DeliveryResult(success=False)') contradicts the Telegram implementation. Messages are also hardcoded Russian one-liners that ignore template_data entirely — recipients get 'Встреча отменена.' with no booking details.",
+      "fix_hint": "Return DeliveryResult(success=False) for unknown triggers; render booking details from template_data; move texts to config/templates.",
+      "cross_service": false,
+      "origin": "april"
+    },
+    {
+      "service": "event-notifier",
+      "severity": "MEDIUM",
+      "title": "is_processed check is not atomic with outbox write — concurrent duplicate deliveries cause duplicate HTTP fan-out (DB stays consistent)",
+      "file": "event-notifier/event_notifier/application/use_cases/process_domain_event.py:28",
+      "detail": "Still as in April: two instances (or redelivered duplicates with prefetch>1) can both pass is_processed before either commits, each performing the full event-users HTTP fan-out; ON CONFLICT DO NOTHING on processed_events and the idempotency_key unique constraint prevent duplicate outbox rows, so no double-send. Acceptable at the stated 20-30/min load but still undocumented, and the shared-session finding makes the window worse in practice.",
+      "fix_hint": "Use INSERT INTO processed_events ... ON CONFLICT DO NOTHING RETURNING as the first statement of the write transaction for early exit; document at-least-once semantics in SERVICE_OVERVIEW.",
+      "cross_service": false,
+      "origin": "april"
+    },
+    {
+      "service": "event-notifier",
+      "severity": "LOW",
+      "title": "Outbox polling remains a fixed 1-second loop with no backoff on empty batches",
+      "file": "event-notifier/event_notifier/adapters/outbox_sender.py:49",
+      "detail": "Still as in April: start() sleeps poll_interval=1.0 unconditionally, one claiming UPDATE per second against PostgreSQL during idle periods. Low operational cost at this scale; downgraded from April MEDIUM since the claiming query is index-assisted.",
+      "fix_hint": "Exponential backoff on empty polls (cap ~30s, reset on hit) or LISTEN/NOTIFY wake-up.",
+      "cross_service": false,
+      "origin": "april"
+    },
+    {
+      "service": "event-notifier",
+      "severity": "LOW",
+      "title": "get_contacts_by_email is dead code with email-as-user_id idempotency caveat and a swallow-all error fallback",
+      "file": "event-notifier/event_notifier/infrastructure/users_client.py:22",
+      "detail": "Still never called from any use case (only tests). It uses email as user_id ('legacy'), which would collapse idempotency keys {event_id}:{user_id}:{channel} if ever combined with UUID-based records, and unlike get_contacts_by_id it swallows ALL errors into an email-only fallback (contradicting the nack-and-retry strategy). Ironically the email-based command contract (CRITICAL finding above) is exactly what this method supports — it should either become the command path's resolver (with the error handling fixed) or be deleted together with its interface entry and tests.",
+      "fix_hint": "Either wire it into _execute_notification_command with raise-on-5xx semantics and role/channel-safe idempotency keys, or delete method+protocol+tests.",
+      "cross_service": false,
+      "origin": "april"
+    },
+    {
+      "service": "event-notifier",
+      "severity": "LOW",
+      "title": "UniSender api_key passed in JSON body — latent credential-logging risk",
+      "file": "event-notifier/event_notifier/infrastructure/channels/email.py:56",
+      "detail": "Still as in April: the api_key is embedded in the request payload dict; any future debug logging of `payload` leaks the key. UniSender Go supports the X-API-KEY header.",
+      "fix_hint": "Send the key via X-API-KEY header on the AsyncClient (set once in ioc.py) and drop it from the body.",
+      "cross_service": false,
+      "origin": "april"
+    },
+    {
+      "service": "event-notifier",
+      "severity": "LOW",
+      "title": "Documentation drift: CLAUDE.md promises result-event publishing and email-only fallback; docs/AUDIT.md lists already-fixed items as open; API_CONTRACTS assumes a working DLQ",
+      "file": "event-notifier/CLAUDE.md:22",
+      "detail": "CLAUDE.md states the service 'publishes notification.*.message_sent result events back to event-receiver' and lists an event-receiver dependency with 'fire-and-forget' — no publisher exists. It claims event-users failures 'return email-only contacts' — get_contacts_by_id raises instead. The request-flow diagram shows booking.* CloudEvents arriving on events.notification.commands — only notification.send_requested is routed there. docs/AUDIT.md (April) still reports C-10 (FCM vars), C-11 (FOR UPDATE outside transaction), H-20 (no processed_events cleanup) and H-23 (no timeouts) as open although all four were addressed on this branch (the timeout fix being itself broken), and its 'NO-GO' rationale predates the new send_requested path entirely. docs/API_CONTRACTS.md:13,175 describes dead-lettering to events.dlx as a working recovery path though the exchange is never declared by this service and DLQs have no consumer. NOTIFICATION_SERVICE_ARCHITECTURE.md is now properly marked ARCHIVED (April LOW resolved), but it points to 'docs/architecture/services/event-notifier/SERVICE_OVERVIEW.md', a path that does not exist.",
+      "fix_hint": "Refresh CLAUDE.md flow/dependencies, regenerate docs/AUDIT.md from this v2 audit, correct the archived-doc pointer, and qualify the DLQ description in API_CONTRACTS.md.",
+      "cross_service": false,
+      "origin": "april"
+    },
+    {
+      "service": "event-notifier",
+      "severity": "LOW",
+      "title": "/health always returns ok — no liveness signal for dead consumer, outbox sender task, DB or broker",
+      "file": "event-notifier/event_notifier/main.py:81",
+      "detail": "The health endpoint is static. If the broker connection drops, the OutboxSender task dies, or the DB is unreachable (every iteration logging exceptions), orchestrators still see healthy. Given how many of this service's failure modes are silent (see CRITICAL findings), a meaningful readiness check matters more than usual here.",
+      "fix_hint": "Check broker connectedness, sender task .done() status, and a SELECT 1 in /health (or a separate /ready).",
+      "cross_service": false,
+      "origin": "new"
+    }
+  ]
+}

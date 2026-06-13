@@ -1,0 +1,194 @@
+{
+  "findings": [
+    {
+      "service": "event-receiver",
+      "severity": "HIGH",
+      "title": "Publisher crashes with ValueError on any event type not in the shared EventType enum — 500 + lost message",
+      "file": "event-receiver/event_receiver/adapters/publisher.py:87",
+      "detail": "publish() executes `EventType(event_type_str) if isinstance(event_type, str) else event_type`. Any type string not in event_schemas.types.EventType raises ValueError, which is not an IngestError, so routes.py returns HTTP 500 and the message is never published. This is a realistic path: ingest_getstream builds `f\"getstream.{data.get('type', 'unknown')}\"` from arbitrary GetStream webhook types — GetStream sends `health.check` when the webhook is configured/tested, plus types like `member.added`, `channel.updated`, `reaction.new`, none of which are in the enum. ingest_jitsi and ingest_admin similarly pass arbitrary `incoming.type` strings. The routing config itself expects open-ended types (`getstream.*`, `jitsi*`/`*`), contradicting the closed-enum assumption. EVENT_SCHEMA_VERSIONS/EVENT_PRIORITIES already use .get() with defaults, so the only hard dependency on the enum here is this constructor call.",
+      "fix_hint": "Replace the enum constructor with a tolerant lookup: try/except ValueError falling back to a sentinel (schema_version='v1', priority NORMAL, participants=[]), or make normalize_event_payload accept the raw string and match on it. Add a test publishing 'getstream.health.check'.",
+      "cross_service": false,
+      "origin": "new"
+    },
+    {
+      "service": "event-receiver",
+      "severity": "HIGH",
+      "title": "No cal.com ingress path exists — /event/booking has no production producer; cal.com webhook format unsupported",
+      "file": "event-receiver/event_receiver/routes.py:15",
+      "detail": "Real cal.com webhooks (samples in requests.jsonl: top-level `triggerEvent`/`createdAt`/`payload` with `organizer`, `attendees[]`, `startTime`/`endTime`, `uid`, signed with `x-cal-signature-256` HMAC-SHA256) cannot be accepted by event-receiver: /event/booking requires CloudEvents binary headers, a static Authorization API key, and a flat `{booking_uid, users[{role,email}], start_time, end_time}` payload. Grep across the events monorepo finds no service that translates cal.com format into this contract — the only producer of booking.* CloudEvents is the dev script simulate_booking.py; event-booking only consumes booking.* from RabbitMQ. The only cal.com receiver is the legacy calendar-bot repo, which never forwards to event-receiver. So the documented system data flow (external webhooks -> event-receiver -> event-saver) is broken for the core booking domain: real bookings never enter the pipeline.",
+      "fix_hint": "Add a /event/calcom endpoint to event-receiver that verifies x-cal-signature-256 and normalizes triggerEvent/payload (organizer+attendees -> users[], startTime/endTime -> start_time/end_time, uid -> booking_uid), or build the translation into the service that owns cal.com. Validate against real samples in requests.jsonl.",
+      "cross_service": true,
+      "origin": "new"
+    },
+    {
+      "service": "event-receiver",
+      "severity": "HIGH",
+      "title": "No idempotency enforcement — duplicate webhook delivery produces duplicate RabbitMQ messages",
+      "file": "event-receiver/event_receiver/adapters/publisher.py:80",
+      "detail": "Still open from April (H-6). generate_idempotency_key() is computed and attached as the `idempotencykey` CloudEvent extension, but event-receiver never stores or checks it; a retried webhook (e.g. caller timed out before receiving 202) republishes the same event. Deduplication is delegated entirely to event-saver's DB constraint (booking_id, event_type, source, md5(payload)). Related amplifier: ingest_unisender_go publishes batch events one-by-one in a loop (controllers/ingest.py:195-210) — a failure mid-batch returns 500 and UniSender retries the whole batch, republishing the already-published prefix.",
+      "fix_hint": "Either document explicitly that dedup is owned by event-saver and verify its constraint covers all retry shapes, or add a short-TTL in-memory/Redis seen-set keyed on idempotencykey in the publisher.",
+      "cross_service": true,
+      "origin": "april"
+    },
+    {
+      "service": "event-receiver",
+      "severity": "MEDIUM",
+      "title": "Raw webhook bodies logged at INFO level in production (PII + UniSender auth signature)",
+      "file": "event-receiver/event_receiver/controllers/ingest.py:48",
+      "detail": "ingest_jitsi (line 48), ingest_booking (line 97) and ingest_unisender_go (line 176) call logger.info(..., body=body) unconditionally. In production (JSON logs) every request body — participant emails, booking data, and the UniSender `auth` signature field — is persisted into the log pipeline. The April fix gated the RequestLoggerMiddleware file dump behind DEBUG, but these structlog calls reintroduce the same exposure through the standard log stream.",
+      "fix_hint": "Drop body= from INFO logs or move to logger.debug; log only derived identifiers (source, type, booking_uid, trace_id).",
+      "cross_service": false,
+      "origin": "new"
+    },
+    {
+      "service": "event-receiver",
+      "severity": "MEDIUM",
+      "title": "Malformed booking.created payload causes unhandled KeyError -> HTTP 500 instead of 400",
+      "file": "event-receiver/event_receiver/controllers/ingest.py:164",
+      "detail": "_transform_booking_created_payload accesses organizer[\"email\"], client[\"email\"], data[\"start_time\"], data[\"end_time\"] with direct subscripts. A booking.created payload that has users with roles but a missing email/start_time/end_time raises KeyError before BookingCreatedPayload validation runs. KeyError is not an IngestError, so routes.py returns a raw 500 ('unexpected internal error') instead of 400 with a validation message. Non-dict entries in users[] similarly raise AttributeError.",
+      "fix_hint": "Validate the raw incoming payload with a Pydantic model first (or wrap transform in try/except KeyError/TypeError raising BadRequestError).",
+      "cross_service": false,
+      "origin": "new"
+    },
+    {
+      "service": "event-receiver",
+      "severity": "MEDIUM",
+      "title": "RabbitMQ credentials logged in plain text at startup",
+      "file": "event-receiver/event_receiver/ioc.py:40",
+      "detail": "provide_faststream_router logs `rabbit_url=settings.rabbit_url`. AmqpDsn serializes with userinfo included, so the broker password appears in every startup log line (INFO level). Log aggregation systems will retain it.",
+      "fix_hint": "Log host/vhost only, e.g. settings.rabbit_url.host, or a redacted DSN.",
+      "cross_service": false,
+      "origin": "new"
+    },
+    {
+      "service": "event-receiver",
+      "severity": "MEDIUM",
+      "title": "GetStream user-id 'encryption' uses AES-CBC with a fixed all-zero IV",
+      "file": "event-receiver/event_receiver/utils.py:114",
+      "detail": "decode_getstream_user_id decrypts emails encrypted with AES-CBC and a static IV of 16 zero bytes (the matching encoder lives in event-booking/event_booking/adapters/get_stream.py and legacy services). A fixed IV makes the scheme deterministic and leaks common plaintext prefixes across user IDs; there is also no integrity (no MAC), so crafted GetStream user ids decrypt to attacker-controlled 'emails' that are then sent to event-users resolve_or_create (only padding validity limits this). Pre-production is the right time to switch.",
+      "fix_hint": "Use AES-GCM (or Fernet) with a random nonce prepended to the ciphertext; change encoder and decoder together (event-booking + event-receiver + any other GetStream user-id producer).",
+      "cross_service": true,
+      "origin": "new"
+    },
+    {
+      "service": "event-receiver",
+      "severity": "MEDIUM",
+      "title": "event-schemas pinned via developer-machine absolute file:// path",
+      "file": "event-receiver/pyproject.toml:11",
+      "detail": "Still open from April: `event-schemas @ file:///Users/alexandrlelikov/PycharmProjects/events/event-schemas` breaks uv sync/Docker builds on any other machine or CI; the git+https alternative remains commented out (line 12).",
+      "fix_hint": "Use a relative path source via uv ([tool.uv.sources] event-schemas = { path = \"../event-schemas\", editable = true }) or the git URL for non-local installs.",
+      "cross_service": false,
+      "origin": "april"
+    },
+    {
+      "service": "event-receiver",
+      "severity": "MEDIUM",
+      "title": "No tests for IngestController or CloudEventPublisher — the highest-risk paths are uncovered",
+      "file": "event-receiver/tests",
+      "detail": "Tests now exist for security (JWT), routing and normalizers (31 tests), but there are zero tests for: the five ingest controller methods (API-key auth, signature checks, booking transform, error mapping to 400/401/500) and the publisher publish path. The publisher EventType ValueError crash and the booking transform KeyError->500 found in this audit would both have been caught by a single test each.",
+      "fix_hint": "Add controller tests with fake publisher/verifier (happy + unauthorized + malformed payload per endpoint) and a publisher test with an unknown event type string.",
+      "cross_service": false,
+      "origin": "new"
+    },
+    {
+      "service": "event-receiver",
+      "severity": "LOW",
+      "title": "Dead code: unused router method, unused payload digest, and dormant unverified-JWT-decode branch",
+      "file": "event-receiver/event_receiver/routing.py:37",
+      "detail": "Pre-production policy is to delete legacy. (1) EventRouter.resolve_routing_key(event) and its cloudevents.v1.pydantic import have no callers (only resolve_routing_key_by_fields is used). (2) AuthorizationJWTVerifier._payload_digest (security.py:44-47) has no callers. (3) AuthorizationJWTVerifier.verify()'s token branch (security.py:62-75) decodes a JWT with verify_signature=False; production code always passes pre-verified claims (ingest.py:69), so the branch is exercised only by tests — it is a dormant signature-bypass path if a future caller passes token instead of claims.",
+      "fix_hint": "Delete resolve_routing_key + CloudEvent import, _payload_digest, and the token=... branch of verify (make claims required); update interfaces/security.py and tests accordingly.",
+      "cross_service": false,
+      "origin": "new"
+    },
+    {
+      "service": "event-receiver",
+      "severity": "LOW",
+      "title": "API key comparison is not constant-time",
+      "file": "event-receiver/event_receiver/controllers/ingest.py:98",
+      "detail": "ingest_booking (line 98) and ingest_admin (line 238) compare static API keys with `!=` on the Authorization header. Python string comparison short-circuits, theoretically enabling remote timing probes. The UniSender path already uses hmac.compare_digest, so the codebase is inconsistent.",
+      "fix_hint": "Use hmac.compare_digest(self._settings.booking_api_key, headers.get(\"Authorization\", \"\")) for both endpoints.",
+      "cross_service": false,
+      "origin": "new"
+    },
+    {
+      "service": "event-receiver",
+      "severity": "LOW",
+      "title": "Unhandled non-IngestError exceptions on authenticated-but-malformed input return raw 500",
+      "file": "event-receiver/event_receiver/controllers/ingest.py:82",
+      "detail": "Several paths raise non-domain exceptions that bypass the routes.py error mapper: (1) ingest_jitsi `{**incoming.data, **claims}` and ingest_booking `dict(incoming.data)` raise TypeError when a CloudEvent arrives with empty/absent data; (2) ujson.loads(body) in ingest_unisender_go:195 and ingest_getstream:224 raises ValueError on non-JSON bodies after signature checks pass. All surface as unlogged-context 500s instead of 400s.",
+      "fix_hint": "Guard incoming.data is None -> BadRequestError; wrap ujson.loads in try/except ValueError -> BadRequestError.",
+      "cross_service": false,
+      "origin": "new"
+    },
+    {
+      "service": "event-receiver",
+      "severity": "LOW",
+      "title": "Style violation: else branch in ingest_booking contradicts repo no-else convention",
+      "file": "event-receiver/event_receiver/controllers/ingest.py:132",
+      "detail": "The if/else around payload_dict in ingest_booking violates the monorepo coding standard (no elif, avoid else; prefer early returns/guard clauses). Initialize `payload_dict = data` then overwrite inside the `if incoming.type == EventType.BOOKING_CREATED` guard, or extract a helper.",
+      "fix_hint": "payload_dict = data; if incoming.type == EventType.BOOKING_CREATED: payload_dict = self._transform...; (validation stays inside the guard).",
+      "cross_service": false,
+      "origin": "new"
+    },
+    {
+      "service": "event-receiver",
+      "severity": "LOW",
+      "title": "Doc drift: ce-booking_id documented but actual header is ce-bookingid; spec claims id/time may be omitted but SDK autogenerates them",
+      "file": "event-receiver/RABBITMQ_MESSAGES_SPEC.md:29",
+      "detail": "publisher.py sets attribute `bookingid` -> AMQP header `ce-bookingid`, and event-saver reads event.get(\"bookingid\") — code agrees. But RABBITMQ_MESSAGES_SPEC.md, root CLAUDE.md, event-saver QUEUES_DIGEST.md/CLAUDE.md/docs all document `ce-booking_id`. The spec also states ce-id/ce-time are 'not passed if absent', but cloudevents 2.0 to_binary autogenerates id (uuid4) and time for every message (verified against installed SDK), so they are always present.",
+      "fix_hint": "Update RABBITMQ_MESSAGES_SPEC.md, root docs/architecture/MESSAGE_CONTRACTS.md and event-saver digests to ce-bookingid (or rename the attribute once, consistently, across receiver+saver).",
+      "cross_service": true,
+      "origin": "new"
+    },
+    {
+      "service": "event-receiver",
+      "severity": "LOW",
+      "title": "CLAUDE.md still documents non-existent /event/cloudevents endpoint and calls the service event-manager",
+      "file": "event-receiver/CLAUDE.md:98",
+      "detail": "Residual from April findings (PROJECT_CONTEXT.md was fixed, CLAUDE.md was not): lines 89 and 98 describe a `POST /event/cloudevents` endpoint with JWT auth that does not exist in routes.py/IIngestController, and line 7 still names the service `event-manager` while the package, Docker image and FastAPI title are event-receiver.",
+      "fix_hint": "Remove the /event/cloudevents references, add /event/admin to the endpoint list, and standardize the name to event-receiver.",
+      "cross_service": false,
+      "origin": "april"
+    },
+    {
+      "service": "event-receiver",
+      "severity": "LOW",
+      "title": "/event/admin endpoint is undocumented in API_CONTRACTS.md and PROJECT_CONTEXT.md",
+      "file": "event-receiver/docs/API_CONTRACTS.md:9",
+      "detail": "routes.py registers /event/admin (static admin_api_key auth, routes user.email.* and booking.client_reassigned), and QUEUES_DIGEST.md mentions it, but docs/API_CONTRACTS.md documents only booking/jitsi/unisender-go/getstream and PROJECT_CONTEXT.md/CLAUDE.md omit it entirely — violating the service's own documentation requirements.",
+      "fix_hint": "Add a POST /event/admin section (auth header, accepted types, payload) to docs/API_CONTRACTS.md and PROJECT_CONTEXT.md.",
+      "cross_service": false,
+      "origin": "new"
+    },
+    {
+      "service": "event-receiver",
+      "severity": "LOW",
+      "title": "Invalid LOG_LEVEL value crashes startup with obscure TypeError",
+      "file": "event-receiver/event_receiver/main.py:67",
+      "detail": "`getLevelNamesMapping().get(settings.log_level)` returns None for any value not exactly matching an upper-case level name (e.g. LOG_LEVEL=info). setup_logger then calls root_logger.setLevel(None), raising TypeError during lifespan — a config typo becomes a crash loop with no clear message. Settings.log_level has no validation or normalization.",
+      "fix_hint": "Normalize with settings.log_level.upper() and validate in Settings (Literal or field_validator), defaulting to INFO with a warning.",
+      "cross_service": false,
+      "origin": "new"
+    },
+    {
+      "service": "event-receiver",
+      "severity": "LOW",
+      "title": "CORS origins and DEBUG middleware gating read os.environ directly, bypassing Settings/.env",
+      "file": "event-receiver/event_receiver/main.py:112",
+      "detail": "main.py reads CORS_ORIGINS (line 112) and DEBUG (line 117) via os.environ at import time, while everything else flows through pydantic Settings which also loads the .env file. Setting DEBUG=true only in .env enables publisher debug-file logging (settings.debug) but not the RequestLoggerMiddleware, and CORS_ORIGINS in .env is ignored entirely — two sources of truth for the same flags.",
+      "fix_hint": "Add cors_origins to Settings and gate both middlewares from a Settings() instance (module-level Settings() construction is acceptable, or attach middleware conditionally in an app factory).",
+      "cross_service": false,
+      "origin": "new"
+    },
+    {
+      "service": "event-receiver",
+      "severity": "LOW",
+      "title": "StreamChat client constructed per request in ingest_getstream",
+      "file": "event-receiver/event_receiver/controllers/ingest.py:217",
+      "detail": "A new StreamChat(api_key, api_secret) is instantiated on every GetStream webhook solely to call verify_webhook (a pure HMAC check). It should be a singleton via Dishka, or replaced with a direct hmac.new(api_secret, body, sha256) comparison, removing the stream-chat dependency from the hot path.",
+      "fix_hint": "Provide the StreamChat client (or a verify callable) at Scope.APP in ioc.py, or inline the HMAC-SHA256 check.",
+      "cross_service": false,
+      "origin": "new"
+    }
+  ]
+}

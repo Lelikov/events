@@ -1,0 +1,174 @@
+{
+ "findings": [
+  {
+   "service": "jitsi-chat",
+   "severity": "HIGH",
+   "title": "Chat connect overwrites participant display name with encrypted user-id ciphertext",
+   "file": "jitsi-chat/src/components/ChatRoom.tsx:109",
+   "detail": "ChatRoom builds userData as { id: payload.user_id, name: payload.name || payload.user_id, image: getstream random_png } from the jwt_chat token (ChatRoom.tsx:109-114) and passes it to chatClient.connectUser(userData, jwt) (ChatRoom.tsx:42/47). The jwt_chat token is produced by event-booking via StreamChat.create_token (event-booking/event_booking/adapters/get_stream.py:51-54), which only puts user_id (the AES-encrypted email, e.g. base64 blob) and exp/iat into the JWT — there is never a name claim. So payload.name is always undefined and the fallback sets name = encrypted user_id. Stream's connectUser updates the user object server-side, clobbering the human-readable name that event-booking sets via upsert_users({id: encoded, name: participant_name}) (get_stream.py:53). Result: every participant who opens the meeting page has their chat display name replaced with ciphertext, and all their messages render with that gibberish name for both parties.",
+   "cross_service": true,
+   "origin": "new",
+   "fix_hint": "Connect with { id: payload.user_id } only (omit name/image) so the server-side name set by event-booking's upsert_users is preserved; or pass the display name explicitly (e.g. extra URL param or Stream token via a name claim is not supported — prefer omitting the field)."
+  },
+  {
+   "service": "jitsi-chat",
+   "severity": "MEDIUM",
+   "title": "Uncaught URIError in decodeURIComponent crashes the app to a blank screen on malformed channel path",
+   "file": "jitsi-chat/src/App.tsx:48",
+   "detail": "App.tsx:47-48 does rawChannelId = path.split('/')[1]; channelId = decodeURIComponent(rawChannelId). decodeURIComponent throws URIError on malformed percent-encoding (e.g. URL path '/%' or '/%E0'). The throw happens inside useMemo during render, there is no try/catch and no React ErrorBoundary anywhere (main.tsx renders <App/> bare), so the whole SPA white-screens instead of showing the existing 'Неверная ссылка' stub. A mistyped or truncated meeting link (short URLs are forwarded by Shortify and can be mangled by mail clients) reproduces this.",
+   "cross_service": false,
+   "origin": "new",
+   "fix_hint": "Wrap decodeURIComponent in try/catch and fall back to the 'invalid link' stub; optionally add an ErrorBoundary around App."
+  },
+  {
+   "service": "jitsi-chat",
+   "severity": "MEDIUM",
+   "title": "sendWebhook ignores HTTP response status — 4xx/5xx telemetry loss is completely silent (contradicts docs)",
+   "file": "jitsi-chat/src/components/VideoRoom.tsx:103",
+   "detail": "VideoRoom.sendWebhook (VideoRoom.tsx:97-119) awaits fetch() but never checks response.ok. fetch only rejects on network/CORS failure, so any HTTP error from event-receiver — 401 (JWT signature/exp rejected by ingest_jitsi, event-receiver/event_receiver/controllers/ingest.py:50-52), 400 (CloudEvent parse failure), 500 — is treated as success with zero logging. docs/DEPENDENCIES.md:21 claims 'Webhook sends fail silently (console.error)', which is only true for network errors; HTTP-level rejections produce no console output at all. All meeting telemetry (conference joined/left, errors) is silently dropped in these cases with no way to diagnose.",
+   "cross_service": false,
+   "origin": "new",
+   "fix_hint": "Add `if (!response.ok) console.error(...)` (and optionally a single retry); update DEPENDENCIES.md failure-mode table."
+  },
+  {
+   "service": "jitsi-chat",
+   "severity": "MEDIUM",
+   "title": "Browser-to-event-receiver webhook depends on CORS_ORIGINS allow-list that defaults to localhost:5173 and is undocumented in jitsi-chat",
+   "file": "jitsi-chat/src/components/VideoRoom.tsx:103",
+   "detail": "sendWebhook sends custom ce-* headers and Authorization, which always triggers a CORS preflight from the browser. event-receiver only allows origins from CORS_ORIGINS, defaulting to 'http://localhost:5173' (event-receiver/event_receiver/main.py:110-115). If the deployed jitsi-chat origin is not added to CORS_ORIGINS, every webhook preflight fails and 100% of Jitsi telemetry is lost (only a console.error per event). Neither jitsi-chat docs (docs/DEPENDENCIES.md, docs/API_CONTRACTS.md) nor CLAUDE.md mention this required event-receiver configuration, making the coupling invisible to deployers.",
+   "cross_service": true,
+   "origin": "new",
+   "fix_hint": "Document the CORS_ORIGINS requirement in jitsi-chat/docs/DEPENDENCIES.md and event-receiver docs; consider a startup-time health probe (OPTIONS) that surfaces misconfiguration."
+  },
+  {
+   "service": "jitsi-chat",
+   "severity": "MEDIUM",
+   "title": "Auth tokens (jwt_video, jwt_chat) carried in URL query string with no Referrer-Policy mitigation",
+   "file": "jitsi-chat/src/App.tsx:51",
+   "detail": "App.tsx:50-52 reads jwt_video and jwt_chat from the query string (links generated by event-booking, event-booking/event_booking/controllers/meeting.py:89, and stored in Shortify). Tokens therefore persist in browser history, Caddy/proxy access logs, the Shortify database, and are exposed to any Referer leakage — index.html sets no <meta name=\"referrer\"> and the Caddyfile (jitsi-chat/Caddyfile:1-6) sets no Referrer-Policy header. The jwt_video token grants meeting access and is also accepted as the Authorization credential by event-receiver's /event/jitsi; jwt_chat grants Stream Chat write access until exp (meeting end + 5 min). Pre-production: acceptable trade-off for email-link delivery, but the missing referrer-policy hardening and the unbounded log exposure should be addressed.",
+   "cross_service": true,
+   "origin": "new",
+   "fix_hint": "Add Referrer-Policy: no-referrer (Caddy header + meta tag); consider moving tokens to the URL fragment (#) so they never reach server logs, and strip them from location via history.replaceState after parsing."
+  },
+  {
+   "service": "jitsi-chat",
+   "severity": "LOW",
+   "title": "Expired/not-yet-valid tokens pass client-side validation — user gets infinite spinner instead of a clear error",
+   "file": "jitsi-chat/src/App.tsx:12",
+   "detail": "validateToken (App.tsx:12-24) only checks that jwtDecode succeeds (and user_id presence for chat); it never checks exp/nbf claims. Jitsi JWTs are time-boxed to booking window +/- 5 min (event-booking/event_booking/controllers/meeting.py:62-64). Opening an expired link renders VideoRoom, which shows the 'Загрузка встречи...' spinner indefinitely while the Jitsi server rejects the token, instead of the existing 'Нет доступа к встрече' stub. Easily reproducible: every link is expired a few minutes after the meeting ends.",
+   "cross_service": false,
+   "origin": "new",
+   "fix_hint": "Check exp (and nbf with some slack) in validateToken and show a dedicated 'meeting link expired / not started yet' stub."
+  },
+  {
+   "service": "jitsi-chat",
+   "severity": "LOW",
+   "title": "Dead npm dependency 'cloudevents' — never imported; SERVICE_OVERVIEW claims it is used",
+   "file": "jitsi-chat/package.json:14",
+   "detail": "package.json declares \"cloudevents\": \"^10.0.0\" as a runtime dependency but no file in src/ imports it (grep over src/ finds zero references); CloudEvent headers are built by hand in VideoRoom.tsx:104-113. docs/SERVICE_OVERVIEW.md:16 lists 'cloudevents -- CloudEvent construction for webhooks' in the tech-stack table, which is doc/code drift. Pre-production policy: delete the dependency and fix the doc.",
+   "cross_service": false,
+   "origin": "new",
+   "fix_hint": "npm uninstall cloudevents; remove the row from docs/SERVICE_OVERVIEW.md."
+  },
+  {
+   "service": "jitsi-chat",
+   "severity": "LOW",
+   "title": "Dead code: App.css and assets/react.svg unused; dead prevJwtChat state-sync logic in App",
+   "file": "jitsi-chat/src/App.tsx:59",
+   "detail": "(1) src/App.css (42 lines) and src/assets/react.svg are leftovers from the Vite template and are imported nowhere (grep over src/ and index.html finds no references). (2) App.tsx:59-65 implements the 'adjust state when props change' pattern for jwtChat (prevJwtChat + setState during render), but jwtChat is computed in a useMemo with an empty dependency array from window.location (App.tsx:45-55) and can never change during the component's lifetime — the entire block is unreachable dead code. Pre-production policy: delete.",
+   "cross_service": false,
+   "origin": "new",
+   "fix_hint": "Delete src/App.css, src/assets/react.svg, and the prevJwtChat block in App.tsx."
+  },
+  {
+   "service": "jitsi-chat",
+   "severity": "LOW",
+   "title": "else-if/else chain in ChatClientWrapper violates the no-elif convention and contains a redundant nested guard",
+   "file": "jitsi-chat/src/components/ChatRoom.tsx:43",
+   "detail": "ChatRoom.tsx:41-50 uses `if (!chatClient.userID) {...} else if (chatClient.userID !== userData.id) {...} else {...}`, violating the explicit convention in jitsi-chat/CLAUDE.md ('No else if — use early returns, guard clauses, or mapping objects') and the monorepo-wide rule. Additionally the nested `if (chatClient.userID)` at ChatRoom.tsx:44 is inside the `else if (chatClient.userID !== userData.id)` branch where userID is already known truthy — it is always true and thus redundant.",
+   "cross_service": false,
+   "origin": "new",
+   "fix_hint": "Restructure with early returns/guard clauses inside init(); drop the redundant inner check."
+  },
+  {
+   "service": "jitsi-chat",
+   "severity": "LOW",
+   "title": "Unstable onError identity in ChatClientWrapper effect deps — latent disconnect/reconnect churn",
+   "file": "jitsi-chat/src/components/ChatRoom.tsx:72",
+   "detail": "ChatClientWrapper's connection effect lists onError in its dependency array (ChatRoom.tsx:72), and App passes an inline arrow `() => setChatConnectionError(true)` (App.tsx:97) that gets a new identity on every App render. Today App happens not to re-render while the chat is mounted (toast paths unmount the chat first), so this is latent rather than active, but any future App state addition will cause the chat to disconnect and reconnect on every render. Fragile coupling.",
+   "cross_service": false,
+   "origin": "new",
+   "fix_hint": "Wrap the handler in useCallback in App, or drop onError from the effect deps via a ref."
+  },
+  {
+   "service": "jitsi-chat",
+   "severity": "LOW",
+   "title": "Webhook fetch lacks keepalive and relies on crypto.randomUUID (secure-context only)",
+   "file": "jitsi-chat/src/components/VideoRoom.tsx:109",
+   "detail": "(1) sendWebhook's fetch has no `keepalive: true`, so events fired close to page unload (notably videoConferenceLeft when the user closes the tab right after hanging up) can be aborted by the browser and lost. (2) ce-id is generated with crypto.randomUUID() (VideoRoom.tsx:109), which only exists in secure contexts — if the SPA is ever served over plain HTTP on a non-localhost host (the container itself serves :80, docker-compose maps 8080:80), every sendWebhook call throws TypeError inside the try block and all telemetry is silently dropped.",
+   "cross_service": false,
+   "origin": "new",
+   "fix_hint": "Add keepalive: true to the fetch init; add a fallback UUID generator (or assert secure context at startup)."
+  },
+  {
+   "service": "jitsi-chat",
+   "severity": "LOW",
+   "title": "No runtime validation of required env vars — missing config yields silent broken behavior",
+   "file": "jitsi-chat/src/utils/env.ts:7",
+   "detail": "getEnv (env.ts:7-12) returns `import.meta.env[key] as string`, which is undefined when the variable is unset (e.g. env.sh ran without VITE_* vars, or .env not populated — .env.example ships all four empty). Consequences: WEBHOOK_URL undefined makes fetch('undefined') post to a relative path on the SPA's own origin; JITSI_DOMAIN undefined breaks the Jitsi iframe; STREAM_CHAT_API_KEY undefined makes StreamChat.getInstance throw inside the effect (uncaught, blank screen since no ErrorBoundary). There is no fail-fast or user-visible configuration error.",
+   "cross_service": false,
+   "origin": "new",
+   "fix_hint": "Validate all four vars at startup and render an explicit configuration-error stub when any is missing."
+  },
+  {
+   "service": "jitsi-chat",
+   "severity": "LOW",
+   "title": "env.sh injects env values into JS without escaping — quotes/backslashes silently corrupt env-config.js",
+   "file": "jitsi-chat/env.sh:8",
+   "detail": "env.sh:5-9 writes `\"$key\": \"$value\",` verbatim into /srv/env-config.js. Any VITE_ value containing a double quote or backslash produces syntactically invalid JS; the script load then fails and window._env_ is undefined, silently falling back to build-time (empty) values. Also `printenv | grep VITE_` matches the substring anywhere in the line, so an unrelated variable whose VALUE contains 'VITE_' would also be injected.",
+   "cross_service": false,
+   "origin": "new",
+   "fix_hint": "JSON-escape values (e.g. via `node -e` or printf %s with sed escaping) and anchor the grep with ^VITE_."
+  },
+  {
+   "service": "jitsi-chat",
+   "severity": "LOW",
+   "title": "Dockerfile uses 'npm install' instead of 'npm ci' — non-reproducible image builds",
+   "file": "jitsi-chat/Dockerfile:7",
+   "detail": "Dockerfile:6-7 copies package*.json and runs `npm install`, which may re-resolve semver ranges and rewrite the lockfile inside the image, so CI builds (publish-image.yml builds on every push) are not pinned to package-lock.json. `npm ci` is the standard for builds and is faster/clean. Minor: `FROM node:20-alpine as build` uses lowercase 'as' (BuildKit warning).",
+   "cross_service": false,
+   "origin": "new",
+   "fix_hint": "Replace `RUN npm install` with `RUN npm ci`; capitalize AS."
+  },
+  {
+   "service": "jitsi-chat",
+   "severity": "LOW",
+   "title": "Zero tests for critical client logic (token validation, event-type map, env resolution)",
+   "file": "jitsi-chat/package.json:6",
+   "detail": "No test framework is configured at all (package.json scripts have only dev/build/lint/preview; no test files exist anywhere in the repo). Pure, easily-testable units carry the service's contract with event-receiver: validateToken (App.tsx:12-24), JITSI_EVENT_TYPE_MAP and sendWebhook header construction (VideoRoom.tsx:10-27, 97-119), getEnv (utils/env.ts). Contract drift in ce-type values or header names would ship unnoticed since nothing asserts them. CLAUDE.md documents 'No test framework is configured' as accepted, but for the webhook contract a minimal vitest suite is cheap insurance.",
+   "cross_service": false,
+   "origin": "new",
+   "fix_hint": "Add vitest + a few unit tests for validateToken, the event-type map (16 entries matching event-schemas EventType jitsi.* values), and sendWebhook headers (mock fetch)."
+  },
+  {
+   "service": "jitsi-chat",
+   "severity": "LOW",
+   "title": "README.md is the stock Vite template — describes nothing about the service",
+   "file": "jitsi-chat/README.md:1",
+   "detail": "README.md is the unmodified create-vite React template text ('This template provides a minimal setup...', React Compiler notes, ESLint expansion advice). It contains no information about the URL contract, env vars, deployment, or the event pipeline; all real documentation lives in CLAUDE.md/docs/. Doc drift for the canonical entry-point file.",
+   "cross_service": false,
+   "origin": "new",
+   "fix_hint": "Replace with a short service README pointing to docs/SERVICE_OVERVIEW.md, the URL contract, and the four env vars."
+  },
+  {
+   "service": "jitsi-chat",
+   "severity": "LOW",
+   "title": "1.6 MB single JS chunk — no code splitting between Jitsi SDK and Stream Chat UI",
+   "file": "jitsi-chat/vite.config.ts:5",
+   "detail": "npm run build succeeds but emits dist/assets/index-*.js at 1,626 kB (468 kB gzip) with Vite's chunk-size warning; stream-chat-react and @jitsi/react-sdk are bundled together even though the chat panel is optional (jwt_chat absent → chat code never used). Participants on poor connections (the realistic audience for a meeting link) pay the full download before the video iframe mounts.",
+   "cross_service": false,
+   "origin": "new",
+   "fix_hint": "Lazy-load ChatOverlay (React.lazy/dynamic import) so stream-chat-react is fetched only when jwt_chat is present; optionally manualChunks."
+  }
+ ]
+}

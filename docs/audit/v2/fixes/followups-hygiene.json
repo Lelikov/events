@@ -1,0 +1,28 @@
+{
+  "scope": "followups 1,2,3,11,12",
+  "fixed": [
+    {
+      "item": "1: event-users uses canonical QueueSpec from event-schemas (relative path dep, local queue-argument literals deleted)",
+      "commits": ["event-users:2218270"]
+    },
+    {
+      "item": "2: event-receiver migrated to GET /api/users/by-identity; deprecated GET /api/users/roles/{role}/emails/{email} removed from event-users (grep across all repos confirmed no remaining callers)",
+      "commits": ["event-receiver:4aeb6f7", "event-users:2e96fcc"]
+    },
+    {
+      "item": "3: absolute file:///Users/... event-schemas refs replaced with relative path ../event-schemas via tool.uv.sources in event-saver, event-booking, event-notifier; uv sync + pytest green in all three",
+      "commits": ["event-saver:f1f5d11", "event-notifier:7492fe6", "root:adc3f65"]
+    },
+    {
+      "item": "11: simulate_booking.py now sends canonical MeetingUrlCreatedPayload ({email, recipient_role, meeting_url}) per CONTRACT_DECISIONS D5; legacy users-list fallback removed from meeting.url_* normalizer (event-booking already publishes canonical shape)",
+      "commits": ["event-receiver:0677811"]
+    },
+    {
+      "item": "12: QUEUES_DIGEST.md gained the admin-sourced booking.client_reassigned row + lifecycle section entry, consistent with MESSAGE_CONTRACTS.md and ROUTING_RULES",
+      "commits": ["event-receiver:1f770cc"]
+    }
+  ],
+  "skipped": [],
+  "testsPass": true,
+  "notes": "Test runs after each change: event-users 55 passed, event-receiver 103 passed, event-saver 100 passed, event-booking 88 passed, event-notifier 80 passed; ruff clean everywhere. simulate_booking.py is gitignored in event-receiver, so its payload fix (item 11) lives on disk only and could not be committed; the normalizer fallback removal and tests are committed. Receiver/users docs (API_CONTRACTS, DEPENDENCIES, SERVICE_OVERVIEW, AUDIT, README) updated for the by-identity migration."
+}

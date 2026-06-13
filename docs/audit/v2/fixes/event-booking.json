@@ -1,0 +1,147 @@
+{
+  "service": "event-booking",
+  "branch": "feat/event-booking-service",
+  "fixed": [
+    {
+      "title": "APP-scoped AsyncSession shared by all concurrent messages and the scheduler",
+      "commit": "b039979"
+    },
+    {
+      "title": "Constraints analyzer counts the booking being validated against itself: every new booking is rejected and DELETED",
+      "commit": "8a9f469"
+    },
+    {
+      "title": "Timezone-aware datetimes used against cal.com 'timestamp without time zone' columns — scheduler query and constraints crash",
+      "commit": "8a9f469"
+    },
+    {
+      "title": "Constraint rejection hard-DELETEs cal.com Booking rows — likely FK violations and broken cal.com invariants",
+      "commit": "8a9f469"
+    },
+    {
+      "title": "Multi-attendee bookings: LEFT JOIN Attendee returns multiple rows, fetch_one picks an arbitrary attendee",
+      "commit": "8a9f469"
+    },
+    {
+      "title": "ACTIVE_STATUSES contains 'rescheduled', which is not a cal.com BookingStatus",
+      "commit": "8a9f469"
+    },
+    {
+      "title": "EventPublisher ignores HTTP response status and is fully fire-and-forget — silent loss of all follow-up events",
+      "commit": "e425a1d"
+    },
+    {
+      "title": "EVENTS_ENDPOINT_URL is optional and defaults to None — service silently produces zero output",
+      "commit": "e425a1d"
+    },
+    {
+      "title": "Default RabbitMQ DSN embeds guest:guest credentials",
+      "commit": "e425a1d"
+    },
+    {
+      "title": "Deterministic AES-CBC with fixed zero IV for chat user IDs (AES-GCM compatible with event-receiver decoder)",
+      "commit": "0e09e39"
+    },
+    {
+      "title": "GetStream chat JWT never expires: create_token called with wrong kwarg 'expiration'",
+      "commit": "0e09e39"
+    },
+    {
+      "title": "Synchronous GetStream SDK called from async code — blocks the event loop, no configurable timeout",
+      "commit": "0e09e39"
+    },
+    {
+      "title": "Reassignment deletes then recreates the same GetStream channel ID — recreation fails on soft-deleted channels",
+      "commit": "0e09e39"
+    },
+    {
+      "title": "Client receives the ORGANIZER's personal meeting URL in notifications; client URL is never delivered",
+      "commit": "540191b"
+    },
+    {
+      "title": "No rollback/saga on partial failure: chat created, then meeting URL failure drops the message and orphans state (idempotent resume)",
+      "commit": "540191b"
+    },
+    {
+      "title": "No idempotency on redelivery: duplicate welcome messages and duplicate notifications (ce-id-scoped UUIDv5 dedupe ids)",
+      "commit": "540191b"
+    },
+    {
+      "title": "Reschedule flow recreates chat with welcome messages and orphans the old booking's chat and short URLs when from_reschedule is absent",
+      "commit": "540191b"
+    },
+    {
+      "title": "Meeting URL never written back to cal.com Booking.metadata (update_booking_video_url is dead code) and reschedule notifications lack meeting_url",
+      "commit": "540191b"
+    },
+    {
+      "title": "Jitsi JWT role claim 'organizer'/'client' is not a Jitsi-recognized claim; no moderator semantics",
+      "commit": "540191b"
+    },
+    {
+      "title": "Jitsi meeting JWT minted with sub:'*' (wildcard tenant/domain) instead of a fixed tenant (required JITSI_JWT_SUB)",
+      "commit": "540191b"
+    },
+    {
+      "title": "Reminder scheduler guarantees duplicate reminders: 10-minute window polled every 5 minutes, no cursor (persistent bookingReminderSentAt marker)",
+      "commit": "f977cd1"
+    },
+    {
+      "title": "Scheduler never emits booking.reminder_sent — spec, docs, and event-saver routing expect it",
+      "commit": "f977cd1"
+    },
+    {
+      "title": "Missing tests for the riskiest paths: reassignment, constraint self-inclusion, naive datetimes, ack semantics, DI wiring",
+      "commit": "8a9f469 + e425a1d + 0e09e39 + 540191b + f977cd1"
+    },
+    {
+      "title": "Dead code and convention violations: unused DB methods, mutable BookingDTO, chat_controller typed as object, else-branch style",
+      "commit": "8a9f469 + 540191b"
+    },
+    {
+      "title": "Documentation drift: wrong queues, wrong endpoint, wrong auth scheme, wrong requeue claim, nonexistent files",
+      "commit": "0496173"
+    },
+    {
+      "title": "No CLAUDE.md for event-booking",
+      "commit": "0496173"
+    }
+  ],
+  "skipped": [
+    {
+      "title": "event-booking and event-saver are competing consumers of the same queue",
+      "reason": "Already fixed by contracts wave (3def0f7): own per-consumer queue events.booking.lifecycle.booking from event_schemas.queues; verified in consumer.py/main.py and covered by TestRegisterContract."
+    },
+    {
+      "title": "Queue declared with conflicting x-dead-letter-exchange arguments — PRECONDITION_FAILED at startup",
+      "reason": "Already fixed by contracts wave (3def0f7): canonical QueueSpec.arguments used verbatim; verified."
+    },
+    {
+      "title": "Handler exceptions reject without requeue and dead-letter into a missing exchange — booking events lost",
+      "reason": "Already fixed (3def0f7): ensure_dead_letter_topology idempotently declares events.dlx and the per-queue DLQ (24h TTL); failures now park in the DLQ and replays resume idempotently (540191b)."
+    },
+    {
+      "title": "Published payloads drift from event-schemas models (meeting.url_created/deleted, chat.created/deleted)",
+      "reason": "Already fixed by contracts wave (3def0f7); verified canonical payloads in meeting.py/chat.py and covered by tests."
+    },
+    {
+      "title": "booking.rejected payload missing required BookingRejectedPayload fields",
+      "reason": "Already fixed by contracts wave (3def0f7); verified _build_rejected_payload emits all canonical fields."
+    },
+    {
+      "title": "flow-e2e: consumer reads cancellation_reason/previous_start_time/previous_organizer_email at top level instead of the {original, normalized} envelope",
+      "reason": "Already fixed by contracts wave (3def0f7) via unwrap_payload; verified and extended (previous_booking_uid now also consumed, 540191b)."
+    },
+    {
+      "title": "delivery-reliability: graceful_timeout never set",
+      "reason": "Already fixed in b039979: RabbitBroker(graceful_timeout=30.0) in ioc.py."
+    },
+    {
+      "title": "Root CLAUDE.md service table omits event-booking",
+      "reason": "Root /CLAUDE.md is outside this fixer's allowed staging paths (event-booking/ and docs/ only). Needs a one-line table addition by the root-docs owner."
+    }
+  ],
+  "testsPass": true,
+  "lintPass": true,
+  "notes": "88 tests green, ruff clean. Reliability redesign: idempotent resume instead of saga — every side effect idempotent (existing-channel create, welcome skipped when channel has messages, external-id-keyed short URLs, deterministic UUIDv5 event ids from ce-id-scoped dedupe keys); failures raise and the message dead-letters to events.booking.lifecycle.booking.dlq (manual replay). update_booking_video_url wired (client-role URL into cal.com metadata.videoCallUrl — safe because the client token has no moderator claim; organizer URL stays private). New required env: RABBIT_URL, EVENTS_ENDPOINT_URL, JITSI_JWT_SUB. GetStream user-id crypto is AES-GCM with deterministic HMAC-derived nonce (SIV-style) — same wire format event-receiver's decode_getstream_user_id expects; NOTE: ids change vs the legacy CBC scheme, so pre-existing GetStream users/channels will be recreated on next lifecycle event."
+}

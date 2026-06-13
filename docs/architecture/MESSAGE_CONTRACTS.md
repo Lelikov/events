@@ -7,7 +7,7 @@ All inter-service messages use the **CloudEvents specification v1.0** in **binar
 - **Transport:** AMQP 0.9.1 via RabbitMQ
 - **Exchange:** `events` (topic, durable)
 - **Routing:** Routing key = queue name; first-match glob pattern rules in event-receiver
-- **Headers:** `ce-type`, `ce-source`, `ce-id`, `ce-time`, `ce-booking_id`, `ce-specversion`, `ce-idempotencykey`, `ce-traceid`, `ce-spanid`, `ce-dataschema`
+- **Headers:** `ce-type`, `ce-source`, `ce-id`, `ce-time`, `ce-bookingid`, `ce-specversion`, `ce-idempotencykey`, `ce-traceid`, `ce-spanid`, `ce-dataschema`
 - **Body:** JSON event payload wrapped in `{"original": {...}, "normalized": {"participants": [...]}}`
 
 The `original` key contains the raw source payload unchanged. The `normalized` key contains enriched participant data (with `user_id` UUIDs resolved from event-users). All consumers MUST read source-specific fields from `original`, not from the top-level body.
@@ -28,56 +28,77 @@ Reformatted from `docs/audit/CONTRACT_MAP.md`.
 
 | Exchange | Type | Durable | Declared by | Purpose |
 |----------|------|---------|-------------|---------|
-| `events` | topic | yes | event-receiver (`RabbitTopologyManager.ensure_topology`), event-saver (`RabbitTopologyManager.ensure_topology`) | Primary message exchange for all CloudEvents |
-| `events.dlx` | topic | yes | event-receiver only | Dead-letter exchange for failed messages |
+| `events` | topic | yes | every service (idempotent; full topology by event-receiver) | Primary message exchange for all CloudEvents |
+| `events.dlx` | topic | yes | event-receiver AND every consumer (idempotent) | Dead-letter exchange for failed messages |
 
-**Note:** event-saver's topology manager does NOT create the DLX exchange or DLQ queues. event-notifier does not call `ensure_topology` at all -- it subscribes with `declare=False`.
+### Queues (canonical, from `event_schemas.queues.ALL_QUEUES`)
 
-### Queues
+**Single source of truth:** `event-schemas/event_schemas/queues.py`. One queue per consumer
+service; fan-out is achieved by binding several queues to the same routing key. Canonical
+arguments for every queue (verbatim): `x-max-priority=10`, `x-dead-letter-exchange=events.dlx`,
+`x-dead-letter-routing-key=<queue>.dlq`. Every queue has a `<queue>.dlq` companion
+(`x-message-ttl=86400000`) bound to `events.dlx`. Consumers declare their own queues + DLQs at
+startup; event-receiver declares the full topology.
 
-All main queues bind to the `events` exchange with routing key = queue name.
+| Queue | Binding (routing key) | Consumer | Purpose |
+|-------|----------------------|----------|---------|
+| `events.booking.lifecycle.saver` | `events.booking.lifecycle` | event-saver | Persist booking lifecycle events |
+| `events.booking.lifecycle.booking` | `events.booking.lifecycle` | event-booking | Orchestrate chat/meeting/notifications |
+| `events.chat.lifecycle` | `events.chat.lifecycle` | event-saver | Chat created/deleted |
+| `events.chat.activity` | `events.chat.activity` | event-saver | Chat messages |
+| `events.chat` | `events.chat` | event-saver | GetStream webhook events |
+| `events.meeting.lifecycle` | `events.meeting.lifecycle` | event-saver | Meeting URL created/deleted |
+| `events.notification.commands` | `events.notification.commands` | event-notifier | notification.send_requested commands |
+| `events.notification.delivery` | `events.notification.delivery` | event-saver | Delivery result events |
+| `events.jitsi` | `events.jitsi` | event-saver | Jitsi meeting events |
+| `events.mail` | `events.mail` | event-saver | UniSender status callbacks |
+| `events.user.email` | `events.user.email` | event-users | Email change requests |
+| `events.unrouted` | `events.unrouted` | event-saver | Unmatched / unknown-type events |
 
-| Queue | Consumer | DLQ? | Priority? | Purpose |
-|-------|----------|------|-----------|---------|
-| `events.booking.lifecycle` | event-saver | yes (receiver) / no (saver) | 10 | Booking created/cancelled/reassigned/rescheduled |
-| `events.booking.reminder` | event-saver | yes / no | 10 | Booking reminder events |
-| `events.chat.lifecycle` | event-saver | yes / no | 10 | Chat created/deleted |
-| `events.chat.activity` | event-saver | yes / no | 10 | Chat messages |
-| `events.meeting.lifecycle` | event-saver | yes / no | 10 | Meeting URL created/deleted |
-| `events.notification.delivery` | event-saver | yes / no | 10 | Notification delivery confirmations |
-| `events.notification.commands` | event-notifier (intended) | yes / no | 10 | Notification send commands |
-| `events.notifications` | none (orphaned) | yes / no | 10 | Phantom queue, previously event-notifier's incorrect default; no longer consumed |
-| `events.jitsi` | event-saver | yes / no | 10 | Jitsi meeting events |
-| `events.mail` | event-saver | yes / no | 10 | UniSender status callbacks |
-| `events.chat` | event-saver | yes / no | 10 | GetStream webhook events |
-| `events.user.email` | event-users | yes / no | 10 | Email change requests |
-| `events.unrouted` | event-saver (fallback) | yes / no | 10 | Unmatched events |
-| `*.dlq` variants | none (dead-letter storage) | -- | -- | 24h TTL dead-letter storage |
+**Removed (audit-v2):** `events.booking.reminder` (no producer, no consumer — reminders go via
+`notification.send_requested` with `trigger_event=BOOKING_REMINDER`); `events.notifications`
+(legacy phantom queue).
 
-**Inconsistency:** event-receiver creates queues with `x-max-priority=10` and `x-dead-letter-exchange=events.dlx`. event-saver creates plain durable queues without those arguments. If both declare the same queue with different arguments, RabbitMQ rejects the second declaration (audit IC-4).
+### Canonical data envelope (audit-v2)
 
-**Source:** `docs/audit/CONTRACT_MAP.md:22-40`
+Every CloudEvent published by event-receiver carries `data` as
+`{"original": <domain payload>, "normalized": {"participants": [{email, role, time_zone, locale, user_id}]}}`.
+Typed accessors: `event_schemas.envelope.EventEnvelope` / `unwrap_payload()`. Consumers MUST NOT
+read domain fields at the top level. `normalized.participants[].user_id` is the event-users UUID
+resolved by the receiver. `locale` (optional, event-schemas ≥0.3.0) is the participant's preferred
+language tag (e.g. `"ru"`, `"en"`): the receiver fills it from cal.com `language.locale`
+(organizer/attendees) and from producer `recipients[].locale` / `users[].locale`; event-notifier
+uses it for per-recipient template language selection with a configured default-locale fallback
+(`ru`). Absent locale ⇒ default locale.
 
----
+### Canonical CloudEvent attributes (audit-v2)
+
+Extension attribute names come from `event_schemas.attributes`: booking identifier is
+**`bookingid`** (`ce-bookingid` header) — never `booking_id`/`ce-booking_id`. Also `traceid`,
+`spanid`, `idempotencykey`. Unknown event types are published to `events.unrouted` (never a 500).
+
+Payload contracts per type: `event_schemas.mapping.PAYLOAD_MODELS` and
+`docs/audit/v2/CONTRACT_DECISIONS.md`.
 
 ## Complete Message Type Registry
 
 | CloudEvent `type` | Producer | Consumer | Routing Key (actual) | Priority | Payload Schema |
 |-------------------|----------|----------|---------------------|----------|----------------|
-| `booking.created` | event-receiver | event-notifier (via `events.notifications`) | `events.notifications` | 10 (CRITICAL) | `BookingCreatedPayload` |
-| `booking.rescheduled` | event-receiver | event-notifier | `events.notifications` | 10 (CRITICAL) | `BookingRescheduledPayload` |
-| `booking.reassigned` | event-receiver | event-notifier | `events.notifications` | 10 (CRITICAL) | `BookingReassignedPayload` |
-| `booking.cancelled` | event-receiver | event-notifier | `events.notifications` | 10 (CRITICAL) | `BookingCancelledPayload` |
-| `booking.reminder_sent` | event-receiver | event-notifier | `events.notifications` | 7 (HIGH) | `BookingReminderSentPayload` |
-| `chat.created` | event-receiver | event-saver | `events.chat.lifecycle` | 5 (NORMAL) | `ChatCreatedPayload` |
-| `chat.deleted` | event-receiver | event-saver | `events.chat.lifecycle` | 5 (NORMAL) | `ChatDeletedPayload` |
+| `booking.created` | cal.com / event-receiver (`/event/calcom`) | event-saver, event-booking | `events.booking.lifecycle` | 10 (CRITICAL) | `BookingCreatedPayload` |
+| `booking.rescheduled` | cal.com / event-receiver | event-saver, event-booking | `events.booking.lifecycle` | 10 (CRITICAL) | `BookingRescheduledPayload` |
+| `booking.reassigned` | event-receiver | event-saver, event-booking | `events.booking.lifecycle` | 10 (CRITICAL) | `BookingReassignedPayload` |
+| `booking.cancelled` | cal.com / event-receiver | event-saver, event-booking | `events.booking.lifecycle` | 10 (CRITICAL) | `BookingCancelledPayload` |
+| `booking.reminder_sent` | (no producer today; kept for saver routing) | event-saver, event-booking | `events.booking.lifecycle` | 7 (HIGH) | `BookingReminderSentPayload` |
+| `booking.rejected` | event-booking (via event-receiver) | event-saver, event-booking | `events.booking.lifecycle` | 10 (CRITICAL) | `BookingRejectedPayload` |
+| `chat.created` | event-booking (via event-receiver) | event-saver | `events.chat.lifecycle` | 5 (NORMAL) | `ChatCreatedPayload` |
+| `chat.deleted` | event-booking (via event-receiver) | event-saver | `events.chat.lifecycle` | 5 (NORMAL) | `ChatDeletedPayload` |
 | `chat.message_sent` | event-receiver | event-saver | `events.chat.activity` | 5 (NORMAL) | `ChatMessageSentPayload` |
-| `meeting.url_created` | event-receiver | event-saver | `events.meeting.lifecycle` | 5 (NORMAL) | `MeetingUrlCreatedPayload` |
-| `meeting.url_deleted` | event-receiver | event-saver | `events.meeting.lifecycle` | 5 (NORMAL) | `MeetingUrlDeletedPayload` |
-| `notification.send_requested` | event-receiver | event-notifier (intended, not delivered) | `events.notification.commands` | 7 (HIGH) | `NotificationCommandPayload` |
-| `notification.email.message_sent` | event-notifier (NOT implemented) | event-saver | `events.notification.delivery` | 7 (HIGH) | `EmailNotificationPayload` |
-| `notification.telegram.message_sent` | event-notifier (NOT implemented) | event-saver | `events.notification.delivery` | 7 (HIGH) | `TelegramNotificationPayload` |
-| `notification.push.message_sent` | event-notifier (NOT implemented) | event-saver | `events.notification.delivery` | 5 (NORMAL) | `PushNotificationPayload` |
+| `meeting.url_created` | event-booking (via event-receiver) | event-saver | `events.meeting.lifecycle` | 5 (NORMAL) | `MeetingUrlCreatedPayload` |
+| `meeting.url_deleted` | event-booking (via event-receiver) | event-saver | `events.meeting.lifecycle` | 5 (NORMAL) | `MeetingUrlDeletedPayload` |
+| `notification.send_requested` | event-booking (via event-receiver) | event-notifier | `events.notification.commands` | 7 (HIGH) | `NotificationCommandPayload` |
+| `notification.email.message_sent` | event-notifier (via event-receiver) | event-saver | `events.notification.delivery` | 7 (HIGH) | `EmailNotificationPayload` |
+| `notification.telegram.message_sent` | event-notifier (via event-receiver) | event-saver | `events.notification.delivery` | 7 (HIGH) | `TelegramNotificationPayload` |
+| `notification.push.message_sent` | event-notifier (push channel pending FCM credentials) | event-saver | `events.notification.delivery` | 5 (NORMAL) | `PushNotificationPayload` |
 | `unisender.events.v1.transactional.status.create` | event-receiver | event-saver | `events.mail` | 5 (NORMAL) | `UniSenderStatusPayload` |
 | `getstream.channel.created` | event-receiver | event-saver | `events.chat` | 5 (NORMAL) | `GetStreamEventPayload` |
 | `getstream.channel.deleted` | event-receiver | event-saver | `events.chat` | 5 (NORMAL) | `GetStreamEventPayload` |
@@ -102,9 +123,12 @@ All main queues bind to the `events` exchange with routing key = queue name.
 | `jitsi.suspend.detected` | jitsi-chat (via event-receiver) | event-saver | `events.jitsi` | 5 (NORMAL) | `JitsiEventPayload` |
 | `jitsi.toolbar.button_clicked` | jitsi-chat (via event-receiver) | event-saver | `events.jitsi` | 5 (NORMAL) | `JitsiEventPayload` |
 | `user.email.change_requested` | event-admin (via event-receiver `/event/admin`) | event-users | `events.user.email` | 10 (CRITICAL) | `UserEmailChangeRequestedPayload` |
+| `booking.client_reassigned` | event-admin (via event-receiver `/event/admin`) | event-saver | `events.booking.lifecycle` | 10 (CRITICAL) | `BookingClientReassignedPayload` |
 | _(unmatched)_ | event-receiver | event-saver (fallback) | `events.unrouted` | -- | raw payload |
 
-**Source:** `docs/audit/CONTRACT_MAP.md:46-71`, `event-schemas/event_schemas/types.py:8-43`
+Routing keys come from `event_schemas.queues.ROUTING_RULES`; `events.booking.lifecycle` fans out to BOTH `events.booking.lifecycle.saver` and `events.booking.lifecycle.booking`.
+
+**Source:** `event-schemas/event_schemas/queues.py`, `event-schemas/event_schemas/types.py`
 
 ---
 
@@ -134,12 +158,81 @@ All main queues bind to the `events` exchange with routing key = queue name.
 
 **Flow**:
 1. Admin вызывает `POST /api/users/id/{user_id}/change-email` в event-admin.
-2. event-admin публикует CloudEvent в event-receiver `POST /event/admin` (auth: static API key).
+2. event-admin публикует CloudEvent в event-receiver `POST /event/admin` (auth: `Authorization: Bearer <static API key>`).
 3. event-receiver маршрутизирует `admin` / `user.email.*` → `events.user.email`.
 4. event-users потребляет событие: обновляет `users.email`, создаёт запись в `user_email_changelog`, устанавливает `email_source='admin'`.
 5. Webhook outbox доставляет изменение в CRM; после успешной доставки сбрасывает `email_source='crm'`.
 
 **CRM sync protection**: поле `email_source='admin'` блокирует перезапись email при следующей синхронизации с CRM до тех пор, пока outbox не доставит изменение.
+
+---
+
+## Event Detail: `booking.client_reassigned`
+
+Событие смены клиента в бронировании, инициируемое администратором через `event-admin`.
+
+| Атрибут | Значение |
+|---------|----------|
+| `ce-type` | `booking.client_reassigned` |
+| `ce-source` | `admin` |
+| Queue | `events.booking.lifecycle` |
+| Priority | 10 (CRITICAL) |
+| Producer | event-admin (через `POST /event/admin` в event-receiver) |
+| Consumer | event-saver (`LifecycleProjection`, маппинг `BOOKING_CLIENT_REASSIGNED`) |
+
+**Payload schema (`BookingClientReassignedPayload`,** `event-schemas/event_schemas/user.py`**)**:
+
+```json
+{
+  "booking_uid": "book-123",
+  "new_client_user_id": "uuid",
+  "requested_by": "admin@example.com"
+}
+```
+
+**Flow**:
+1. Admin вызывает `POST /bookings/{booking_uid}/reassign-client` в event-admin.
+2. event-admin проверяет, что booking существует (404 иначе) и что в event-users есть client с указанным email (lowercase, 404 иначе).
+3. event-admin публикует CloudEvent в event-receiver `POST /event/admin` (auth: `Authorization: Bearer <static API key>`; ошибка публикации → 502, действие не применено).
+4. event-receiver маршрутизирует `admin` / `booking.client_reassigned` → `events.booking.lifecycle`.
+5. event-saver проецирует смену клиента в `bookings.client_user_id` и lifecycle-историю.
+
+---
+
+## Event Detail: `booking.rejected`
+
+Событие отказа в бронировании, инициируемое service event-booking при нарушении constraint (когда enabled) или при совпадении клиента с записью чёрного списка (`rejection_type='blacklisted'`).
+
+| Атрибут | Значение |
+|---------|----------|
+| `ce-type` | `booking.rejected` |
+| `ce-source` | `booking` |
+| Queue | `events.booking.lifecycle` |
+| Priority | 10 (CRITICAL) |
+| Producer | event-booking (через `POST /event/cloudevents` в event-receiver) |
+| Consumers | event-saver (audit), event-notifier (notifications) |
+
+**Payload schema (`BookingRejectedPayload`)**:
+
+```json
+{
+  "booking_uid": "uuid",
+  "client_email": "client@example.com",
+  "rejection_type": "blacklisted | month_limit | year_limit | min_interval | null",
+  "rejection_reasons": ["string", ...]
+}
+```
+
+**Flow**:
+1. event-booking consumes `booking.created` from `events.booking.lifecycle`.
+2. Blacklist check first (active set from event-admin `GET /api/blacklist/active`, static `BLACKLIST_SERVICE_TOKEN`, in-memory TTL cache, fail-open). Match → `rejection_type='blacklisted'`. Otherwise constraint analyzer determines violation (if `IS_ENABLE_BOOKING_CONSTRAINTS=true`).
+3. event-booking publishes CloudEvent to event-receiver `POST /event/cloudevents` (auth: Bearer token).
+4. event-receiver маршрутизирует `booking` / `booking.rejected` → `events.booking.lifecycle`.
+5. event-saver потребляет и сохраняет в audit table; event-notifier отправляет rejection notification client.
+
+**Intended flow**: This event integrates with event-notifier's routing rules to notify the client that their booking was rejected due to constraints or the blacklist.
+
+**Notification trigger**: alongside `booking.rejected` event-booking publishes `notification.send_requested`; constraint rejections use `trigger_event=BOOKING_REJECTED`, blacklist rejections use the dedicated `trigger_event=BOOKING_REJECTED_BLACKLISTED` (separate neutral templates — client-facing text never mentions the blacklist).
 
 ---
 
@@ -164,27 +257,20 @@ sequenceDiagram
         EU-->>ER: {id: uuid} or 404 -> create user
     end
 
-    ER->>ER: normalizers.normalize_booking_created()<br/>-> NormalizedPayload with participants
-    ER->>ER: EventRouter.resolve_routing_key<br/>(source="booking", type="booking.created")
-    Note over ER: First-match rule resolves to<br/>"events.notifications" (BUG: C-1)
+    ER->>ER: normalize -> envelope<br/>{original, normalized.participants}
+    ER->>ER: routing per event_schemas ROUTING_RULES<br/>(source="booking", type="booking.created")
 
-    ER->>RMQ: publish(exchange="events",<br/>routing_key="events.notifications",<br/>priority=10, headers=ce-*)
+    ER->>RMQ: publish(exchange="events",<br/>routing_key="events.booking.lifecycle",<br/>priority=10, headers=ce-bookingid, ce-*)
 
-    Note over RMQ: events.booking.lifecycle queue<br/>gets ZERO messages (shadowed)
+    Note over RMQ: fan-out: message copied to<br/>events.booking.lifecycle.saver AND<br/>events.booking.lifecycle.booking
 
-    RMQ->>EN: deliver to events.notifications queue
-    EN->>EN: NotificationConsumer._handle()<br/>-> DomainEvent{booking.created}
-    EN->>EN: ProcessDomainEventUseCase:<br/>idempotency check, load routing_rules
-    EN->>EU: GET /api/users/id/{user_id}
-    EU-->>EN: contacts: [email, telegram]
-    EN->>EN: Write outbox records (email + telegram)
+    RMQ->>ES: deliver to events.booking.lifecycle.saver
+    ES->>DB: events + bookings + lifecycle projection
 
-    Note over ES: event-saver does NOT receive<br/>this event unless explicitly<br/>subscribed to events.notifications
+    Note over EN: event-booking (not shown) consumes<br/>events.booking.lifecycle.booking,<br/>creates chat + meeting URLs, and emits<br/>notification.send_requested -> EN<br/>via events.notification.commands
 ```
 
-**Intended flow (after C-1 fix):** Routing key would be `events.booking.lifecycle`, event-saver would consume it, and event-notifier would receive `notification.send_requested` via `events.notification.commands` instead.
-
-**Source:** `docs/audit/CONTRACT_MAP.md:76-96`
+This flow was verified live in audit-v2 with a real cal.com payload (`docs/audit/v2/INTEGRATION_REPORT.md` §3).
 
 ---
 
@@ -201,20 +287,18 @@ sequenceDiagram
     participant Email as UniSender Go API
     participant TG as Telegram Bot API
 
-    Src->>ER: POST /event/cloudevents<br/>{type: notification.send_requested}
-    ER->>ER: JWT Bearer validation
-    ER->>ER: EventRouter resolves -><br/>"events.notification.commands"
+    Src->>ER: POST /event/booking<br/>{type: notification.send_requested,<br/>recipients[{email, role, locale?}], template_data}
+    ER->>ER: API-key auth, normalize recipients -><br/>normalized.participants (+user_id)
+    ER->>ER: routing rules -><br/>"events.notification.commands"
     ER->>RMQ: publish(routing_key=<br/>"events.notification.commands")
 
     Note over EN: event-notifier subscribes to<br/>"events.notification.commands" by default<br/>(queue mismatch C-3 resolved).
 
     RMQ->>EN: deliver message
 
-    EN->>EN: from_http() -> CloudEvent
-    EN->>EN: DOMAIN_EVENT_TO_TRIGGER map<br/>-> trigger_event string
-    EN->>DB_N: Check processed_events<br/>(idempotency)
-    EN->>DB_N: Load routing_rules(event_type)
-    EN->>EN: apply_routing_rules()<br/>-> [(user_id, role), ...]
+    EN->>EN: unwrap envelope, validate<br/>NotificationCommandPayload
+    EN->>EN: trigger_event from payload;<br/>user_id per recipient from<br/>normalized.participants (by email)
+    EN->>DB_N: atomic processed_events claim<br/>+ outbox insert (idempotent)
 
     loop Per recipient
         EN->>EU: GET /api/users/id/{user_id}
@@ -232,10 +316,11 @@ sequenceDiagram
         EN->>DB_N: UPDATE status='delivered'
     end
 
-    Note over EN: Delivery result events<br/>(notification.*.message_sent)<br/>are NOT published back.<br/>Pipeline stops here.
+    EN->>ER: POST notification.*.message_sent<br/>(delivery result, fire-and-forget)
+    Note over ER: result routed to<br/>events.notification.delivery<br/>and persisted by event-saver
 ```
 
-**Source:** `docs/audit/CONTRACT_MAP.md:100-135`, `event-notifier/docs/SERVICE_OVERVIEW.md:22-52`
+**Source:** `event-notifier/docs/SERVICE_OVERVIEW.md`, `docs/audit/v2/CONTRACT_DECISIONS.md` D6
 
 ---
 
@@ -257,7 +342,7 @@ All 25 event types are version `"v1"`. No consumer reads or validates the `datas
 
 ## Known Inconsistencies
 
-### IC-1: Booking lifecycle events routed to wrong queue [CRITICAL]
+### IC-1: Booking lifecycle events routed to wrong queue [RESOLVED]
 
 First-match routing in `event-receiver/event_receiver/config.py:9-34` sends `booking.created`, `booking.cancelled`, `booking.rescheduled`, `booking.reassigned`, `booking.reminder_sent` to `events.notifications` instead of `events.booking.lifecycle`.
 
@@ -265,19 +350,21 @@ First-match routing in `event-receiver/event_receiver/config.py:9-34` sends `boo
 
 `event-notifier/event_notifier/config.py:18` now correctly defaults to `events.notification.commands`, which matches the routing key event-receiver uses for `notification.send_requested` events. The previous default of `events.notifications` caused messages to pile up unconsumed.
 
-### IC-3: Dual EventType enums [CRITICAL]
+### IC-3: Dual EventType enums [RESOLVED]
 
 `event-schemas` defines `EventType.BOOKING_CREATED = "booking.created"` while `event-saver` defines `EventType.BOOKING_CREATED = "booking.events.v1.booking.created.create"` (`event-saver/event_saver/event_types.py:29`). The shared library is not used by its largest consumer.
 
-### IC-4: Queue declaration argument mismatch
+Resolved in audit-v2: event-saver's parallel enum and routing config were deleted; it consumes `event_schemas` types and `SAVER_QUEUES` directly.
 
-event-receiver creates queues with `x-max-priority=10` and DLX; event-saver creates plain durable queues. Same queue with different arguments causes RabbitMQ declaration conflict.
+### IC-4: Queue declaration argument mismatch [RESOLVED — audit-v2]
 
-### IC-5: Missing delivery result pipeline
+Resolved by audit-v2 contracts fix: all services declare queues from `event_schemas.queues.QueueSpec` with identical arguments, and event-saver/event-booking/event-notifier declare `events.dlx` and their own DLQs idempotently.
 
-event-notifier's architecture describes publishing `notification.*.message_sent` events back to event-receiver. No publisher implementation exists. The `events.notification.delivery` queue is permanently empty.
+### IC-5: Missing delivery result pipeline [RESOLVED — audit-v2]
 
-### IC-6: Orphaned queues
+event-notifier now publishes `notification.*.message_sent` binary CloudEvents to event-receiver after successful delivery (`DeliveryResultPublisher`, fire-and-forget, active when `EVENTS_ENDPOINT_URL` is set); event-saver persists them from `events.notification.delivery`.
+
+### IC-6: Orphaned queues [RESOLVED — audit-v2]
 
 | Queue | Why Orphaned |
 |-------|-------------|
@@ -310,15 +397,9 @@ In `event-schemas/event_schemas/types.py`:
 
 ### Step 3: Add Routing Rule
 
-In `event-receiver/event_receiver/config.py`, add a `RouteRule` to `_default_route_rules()`:
-
-```python
-RouteRule(
-    destination="events.<target_queue>",
-    source_pattern="<source_glob>",
-    type_pattern="<type_glob_or_exact>",
-),
-```
+In `event-schemas/event_schemas/queues.py`, add a `RoutingRuleSpec` to `ROUTING_RULES`
+(glob on source/type). event-receiver generates its routing from this table.
+Also add the type to `PAYLOAD_MODELS` in `event_schemas/mapping.py`.
 
 **Important:** Rule position matters. First match wins. Place specific rules before broad globs.
 
@@ -328,15 +409,14 @@ In `event-receiver/event_receiver/normalizers.py`, add a normalization path that
 
 ### Step 5: Add Consumer Handling (event-saver)
 
-1. Add the EventType string to `event-saver/event_saver/event_types.py` (note: uses different string format -- see IC-3)
-2. Add routing rule in `event-saver/event_saver/config.py`
-3. If new projection needed: create handler in `event-saver/event_saver/infrastructure/persistence/projections/`, register in `ioc.py`
+1. event-saver consumes `SAVER_QUEUES` from event-schemas — no per-service enum or routing config to touch
+2. If new projection needed: create handler in `event-saver/event_saver/infrastructure/persistence/projections/`, register in `ioc.py`
 
 ### Step 6: Declare Queue (if new)
 
-If the target queue is new:
-- event-receiver's topology manager auto-declares queues derived from routing destinations
-- event-saver's `config.py` `_default_route_rules()` must include a rule targeting the new queue (or set `RABBIT_TOPOLOGY_QUEUES` explicitly)
+If the target queue is new, add a `QueueSpec` to `event-schemas/event_schemas/queues.py`
+(`ALL_QUEUES`) and assign exactly ONE consumer service. Consumers declare their own queues
+and DLQs from the spec at startup; event-receiver declares the full topology.
 
 ### Step 7: Update Documentation
 

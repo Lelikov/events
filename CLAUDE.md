@@ -4,42 +4,121 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Monorepo Overview
 
-This is a **multi-service event-driven system** for managing bookings and participants. Seven independent packages share this root directory; each has its own `CLAUDE.md` with service-specific commands and architecture.
+This is a **multi-service event-driven system** for managing bookings and participants. Nine independent packages share this root directory; each has its own `CLAUDE.md` with service-specific commands and architecture.
 
 | Service | Language/Stack | Role |
 |---|---|---|
-| `event-receiver/` | Python, FastAPI | Ingress: validates requests, publishes CloudEvents to RabbitMQ |
-| `event-saver/` | Python, FastAPI, FastStream | Consumes RabbitMQ, **owns and writes** the PostgreSQL database |
-| `event-admin/` | Python, FastAPI | Read-only API over `event-saver`'s DB |
+| `event-receiver/` | Python, FastAPI | Ingress: validates webhooks (incl. cal.com `POST /event/calcom`), wraps payloads in the `{original, normalized}` envelope, publishes CloudEvents to RabbitMQ |
+| `event-saver/` | Python, FastAPI, FastStream | Consumes RabbitMQ, **owns and writes** the main PostgreSQL database |
+| `event-booking/` | Python, FastAPI, FastStream | Booking orchestrator: consumes lifecycle events, reads/writes the cal.com DB, creates GetStream chats + Jitsi meeting URLs, schedules reminders, publishes follow-up events via event-receiver |
+| `event-admin/` | Python, FastAPI | Read-only API over `event-saver`'s DB; publishes admin actions via event-receiver |
 | `event-admin-frontend/` | TypeScript, React, Vite | Admin UI for bookings and participants |
-| `event-users/` | Python, FastAPI | Separate user/contact management service with CRM sync |
-| `event-schemas/` | Python, Pydantic | Shared schema library; no runtime service |
+| `event-users/` | Python, FastAPI | Separate user/contact management service with CRM sync; consumes `events.user.email` |
+| `event-notifier/` | Python, FastAPI, FastStream, asyncpg | Notification dispatcher: consumes `events.notification.commands`, outbox + email/Telegram delivery, publishes delivery-result events |
+| `event-schemas/` | Python, Pydantic | Shared schema library (payloads, envelope, **canonical RabbitMQ topology**); no runtime service |
 | `jitsi-chat/` | TypeScript, React, Vite | Participant-facing video meeting + chat SPA |
 
 ## System Data Flow
 
 ```
-External clients / webhooks        jitsi-chat SPA (Jitsi iframe events)
+cal.com webhooks / external clients     jitsi-chat SPA (Jitsi iframe events)
         │                                   │
         ▼                                   ▼
-  event-receiver          (validates, normalizes → CloudEvent)
-        │ RabbitMQ topic exchange
-        ▼
-  event-saver             (consumes queues, writes PostgreSQL)
+  event-receiver          (validates, normalizes → CloudEvent {original, normalized})
+        │ RabbitMQ topic exchange "events" (DLX: events.dlx)
         │
-        ├──► event-admin  (read-only API from same DB)
-        │         │
-        │         ▼
-        │   event-admin-frontend  (calls event-admin + event-users)
+        ├──► events.booking.lifecycle.saver ──► event-saver  (writes PostgreSQL)
+        │                                            │
+        │                                            ├──► event-admin (read-only API, same DB)
+        │                                            │         └──► event-admin-frontend
+        │                                            └──► [events, bookings, participants, projections]
         │
-        └──► [DB tables: events, bookings, participants, projections]
-
-  event-users             (separate DB: users, user_contacts; CRM sync)
+        ├──► events.booking.lifecycle.booking ──► event-booking
+        │         (cal.com DB; GetStream chat; Jitsi meeting URLs; reminders)
+        │         └──► follow-up events (chat.*, meeting.url_*, booking.rejected,
+        │              notification.send_requested) ──► HTTP POST back to event-receiver
+        │
+        ├──► events.notification.commands ──► event-notifier
+        │         (outbox → UniSender email / Telegram)
+        │         └──► notification.*.message_sent ──► HTTP POST back to event-receiver
+        │
+        └──► events.user.email ──► event-users (separate DB: users, user_contacts; CRM sync)
 ```
 
-- **Database ownership**: `event-saver` owns all schema migrations (`alembic/` lives there). `event-admin` is read-only — never create migrations in `event-admin`.
-- **Shared schemas**: `event-schemas` is a local pip package imported by `event-receiver` and `event-saver`.
-- **participants.user_id** in `event-saver`'s DB references the UUID PK from `event-users`.
+- **Database ownership**: `event-saver` owns all main-DB schema migrations (`alembic/` lives there). `event-admin` is read-only — never create migrations in `event-admin`. `event-users` and `event-notifier` own their separate DBs. `event-booking` writes to the cal.com DB but NEVER migrates it (cal.com owns its schema).
+- **Shared schemas**: `event-schemas` (v0.2.0) is a local pip package imported by `event-receiver`, `event-saver`, `event-booking`, and `event-notifier`. Its `queues.py` is the single source of truth for the RabbitMQ topology; `envelope.py` defines the mandatory `{original, normalized}` consumer unwrap.
+- **participants.user_id** in `event-saver`'s DB references the UUID PK from `event-users`; event-receiver resolves it at ingress into `normalized.participants`.
+
+## Quick Start (Docker Compose)
+
+The whole system — 9 services, RabbitMQ, 4 PostgreSQL instances, and WireMock
+stand-ins for all external HTTP APIs — runs with one command from the repo root:
+
+```bash
+docker compose up -d --build     # 9 services + infra; no .env needed (dev defaults baked in)
+docker compose --profile observability up -d --build   # + Prometheus/Grafana/Alertmanager/exporters
+cp .env.example .env             # optional: copy + edit only what you change
+docker compose down -v           # tear down (incl. volumes; add --profile observability to also stop it)
+```
+
+The observability stack lives in the **`observability` compose profile** and is OFF
+by default — the bare `up` starts only the 14 app/infra containers. Enable it per the
+second command above, or set `COMPOSE_PROFILES=observability` in `.env` to make it part
+of the default `up`.
+
+Host ports:
+
+| Port | Service |
+|---|---|
+| 8888 | event-receiver (ingress webhooks: `/event/calcom`, `/event/jitsi`, …) |
+| 8001 | event-users API |
+| 8002 | event-admin API |
+| 3000 | event-admin-frontend (nginx, same-origin proxy to event-admin) |
+| 8080 | jitsi-chat SPA |
+| 8089 | WireMock mocks (journal: `http://localhost:8089/__admin/requests`) |
+| 5672 / 15672 | RabbitMQ (AMQP / management UI) |
+| 5433 | pg-calcom (fixture cal.com DB, used by `scripts/calcom_sim.py`) |
+| 9090 | Prometheus *(observability profile; 127.0.0.1 only; scrapes services + RabbitMQ + postgres exporters)* |
+| 3001 | Grafana *(observability profile; admin/admin; dashboards: System Overview, Booking Flow)* |
+| 9093 | Alertmanager *(observability profile; 127.0.0.1 only; routes Prometheus alerts → ops Telegram)* |
+
+Observability (in the `observability` profile): every Python service serves `GET /metrics` (prometheus-client);
+Prometheus config lives in `docker/prometheus/prometheus.yml`, the two
+provisioned dashboards in `docker/grafana/dashboards/` (uids
+`events-system-overview`, `events-booking-flow`). Alert rules live in
+`docker/prometheus/rules/` (infra + business) and route through Alertmanager
+(`docker/alertmanager/`) to a dedicated ops Telegram chat — set
+`ALERT_TELEGRAM_BOT_TOKEN`/`ALERT_TELEGRAM_CHAT_ID` in `.env` for real delivery.
+See `docs/architecture/ONBOARDING.md` § Observability for what's collected, the
+alert set, and how to add a metric or rule.
+
+### Симуляция событий cal.com
+
+`scripts/calcom_sim.py` генерирует реалистичные подписанные вебхуки cal.com
+(по образцу `event-booking/requests.jsonl`) и пишет фикстурные строки в pg-calcom:
+
+```bash
+uv run scripts/calcom_sim.py create [--starts-in 1h] [--locale en] [--dry-run]
+uv run scripts/calcom_sim.py lifecycle          # created -> rescheduled -> cancelled
+uv run scripts/calcom_sim.py cancel <uid>; uv run scripts/calcom_sim.py reschedule <uid>
+```
+
+Mock vs real external APIs: Shortify, UniSender Go, Telegram Bot API and
+GetStream all default to the WireMock container (`http://mocks:8080/<prefix>`,
+mappings in `docker/mocks/mappings/`). Point the corresponding `*_URL`/key
+variables in `.env` at real endpoints to integrate for real.
+
+External cal.com: by default `event-booking` reads the seeded `pg-calcom`
+fixture DB (`docker/calcom-init/`). Set `CALCOM_DATABASE_URL` in `.env` to a
+real cal.com PostgreSQL DSN to use an external instance (the fixture container
+keeps running but is unused).
+
+Notes:
+- `admin_users` (event-admin panel logins) is created by event-saver's alembic
+  but not seeded — seed rows manually if you need to log in to the admin UI.
+- event-receiver dedupes identical webhook payloads in-memory for 10 minutes
+  ("Duplicate event suppressed by idempotency cache") — restart it when
+  replaying the same payload during testing.
 
 ## Common Patterns Across Python Services
 
@@ -75,7 +154,8 @@ The `docs/` directory at the monorepo root contains **cross-service** documentat
 - `docs/architecture/CODING_STANDARDS.md` — shared coding conventions
 - `docs/architecture/ONBOARDING.md` — developer onboarding guide
 - `docs/architecture/INDEX.md` — FAQ-style documentation index
-- `docs/audit/` — system-wide audit report, dependency graph, scalability gaps
+- `docs/audit/v2/` — **current** audit (audit-v2, 2026-06-11): `AUDIT_REPORT_V2.md`, `CONTRACT_DECISIONS.md` (canonical contract rules D1–D8), `INTEGRATION_REPORT.md`, findings + fix manifests
+- `docs/audit/` — superseded April 2026 audit report, dependency graph, scalability gaps (historical)
 
 ### Per-Service Documentation
 
@@ -85,6 +165,7 @@ Each service has its own `CLAUDE.md` (commands, architecture) and `docs/` direct
 |---|---|---|
 | `event-receiver/` | ingress endpoints, auth, RabbitMQ | SERVICE_OVERVIEW, API_CONTRACTS, DEPENDENCIES, AUDIT |
 | `event-saver/` | clean architecture, projections, DB schema | SERVICE_OVERVIEW, API_CONTRACTS, DATA_MODEL, DEPENDENCIES, AUDIT |
+| `event-booking/` | orchestrator, cal.com DB invariants, chat/meeting flows | SERVICE_OVERVIEW, API_CONTRACTS, DEPENDENCIES, AUDIT |
 | `event-admin/` | read-only API, DI scopes, endpoint pattern | SERVICE_OVERVIEW, API_CONTRACTS, DATA_MODEL, DEPENDENCIES, AUDIT |
 | `event-admin-frontend/` | Vite/React, routing, auth flow | SERVICE_OVERVIEW, API_CONTRACTS, DEPENDENCIES, AUDIT |
 | `event-users/` | user/contact CRUD, CRM sync | SERVICE_OVERVIEW, API_CONTRACTS, DATA_MODEL, DEPENDENCIES, AUDIT |
@@ -94,20 +175,27 @@ Each service has its own `CLAUDE.md` (commands, architecture) and `docs/` direct
 
 ## RabbitMQ Queue Routing
 
-Events flow through a **topic exchange** with routing keys matching queue names. Default queues:
-- `events.booking.lifecycle` — booking created/cancelled/rescheduled/reassigned
-- `events.notification.delivery` — email/Telegram notifications
-- `events.chat.activity` — GetStream chat events
-- `events.jitsi` — Jitsi meeting events
-- `events.unrouted` — fallback
+Canonical topology lives in `event-schemas/event_schemas/queues.py` (**single source of truth** — `QueueSpec`, `ALL_QUEUES`, `ROUTING_RULES`). **One queue per consumer service**; fan-out = several queues bound to the same routing key. Every queue dead-letters to `events.dlx` with a `<queue>.dlq` companion (24h TTL).
 
-Routing rules use glob patterns on `source` and `type` fields. See `event-receiver/QUEUES_DIGEST.md` and `event-saver/QUEUES_DIGEST.md` for full mappings.
+| Queue | Routing key | Consumer |
+|---|---|---|
+| `events.booking.lifecycle.saver` | `events.booking.lifecycle` | event-saver |
+| `events.booking.lifecycle.booking` | `events.booking.lifecycle` | event-booking |
+| `events.chat.lifecycle` / `events.chat.activity` / `events.chat` | (same names) | event-saver |
+| `events.meeting.lifecycle` | `events.meeting.lifecycle` | event-saver |
+| `events.notification.commands` | `events.notification.commands` | event-notifier |
+| `events.notification.delivery` | `events.notification.delivery` | event-saver (delivery results) |
+| `events.jitsi` / `events.mail` | (same names) | event-saver |
+| `events.user.email` | `events.user.email` | event-users |
+| `events.unrouted` | `events.unrouted` | event-saver (unknown types — never a 500) |
+
+Removed queues (audit-v2): `events.booking.reminder`, `events.notifications`. Routing rules use glob patterns on `source` and `type` fields (`ROUTING_RULES`). See `event-receiver/QUEUES_DIGEST.md` and `event-saver/QUEUES_DIGEST.md` for full mappings.
 
 ## CloudEvents Format
 
 All inter-service messages use **CloudEvents binary mode**:
-- Headers: `ce-type`, `ce-source`, `ce-id`, `ce-time`, `ce-booking_id`, `ce-specversion`
-- Body: event payload (JSON)
+- Headers: `ce-type`, `ce-source`, `ce-id`, `ce-time`, `ce-bookingid` (no underscore — canonical in `event_schemas.attributes`), `ce-specversion`, `ce-traceid`, `ce-spanid`, `ce-idempotencykey`
+- Body: `{"original": <domain payload>, "normalized": {"participants": [...]}}` — consumers MUST unwrap via `event_schemas.envelope.unwrap_payload()`, never read domain fields at the top level
 
 Event schemas and priorities are defined in `event-schemas/event_schemas/`:
 - Priority 10 (CRITICAL): booking lifecycle

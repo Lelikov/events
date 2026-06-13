@@ -1,0 +1,31 @@
+{
+  "service": "event-saver",
+  "branch": "audit-fixes",
+  "fixed": [
+    {"title": "booking.rejected consumed but never reflected: status mapping ('rejected') + lifecycle projection (action 'rejected' with BookingRejectedPayload details)", "commit": "f581bdc"},
+    {"title": "No retry path for transient failures: transient (DB/pool/network) errors retried 3x with exponential backoff then NACK+requeue; only poison messages (parse/validation) rejected to DLQ", "commit": "26df5cb"},
+    {"title": "Consumer handler bound queue name via plain default parameter (FastStream body-field hazard): replaced with closure factory _make_handler(queue_name)", "commit": "26df5cb"},
+    {"title": "No consumer prefetch (QoS) / graceful_timeout unset: RabbitRouter built with Channel(prefetch_count=RABBIT_PREFETCH_COUNT, default 10) and graceful_timeout=RABBIT_GRACEFUL_TIMEOUT (default 30s)", "commit": "eae3a76"},
+    {"title": "Dual deduplication paths could crash instead of dedup; NULL-key events never deduped: single INSERT ... ON CONFLICT DO NOTHING (bare), migration a9d4c1f0b7e2 drops legacy 4-column unique index", "commit": "ed675bd"},
+    {"title": "Migration-backfilled hash differs from application hash: moot after legacy dedup index drop (hash now informational only, documented)", "commit": "ed675bd"},
+    {"title": "Alembic ORM models drifted from real schema (autogenerate would emit destructive drops): events tracing/idempotency columns + partial indexes, BookingLifecycleEvent model, drift guard tests", "commit": "a9f911d"},
+    {"title": "Regression from per-consumer queue rename: BookingRepository.get_or_none compared against old 'events.booking.lifecycle' literal so lifecycle events skipped upsert; now uses BOOKING_LIFECYCLE_SAVER_QUEUE.name from event_schemas", "commit": "0d10102"},
+    {"title": "ChatReadUpdateProjection never marked NULL-user_id messages as read: user_id IS DISTINCT FROM reader", "commit": "62a0fb6"},
+    {"title": "No health/readiness endpoint: GET /health (liveness) and GET /ready (SELECT 1, 503 when DB down)", "commit": "abc7075"},
+    {"title": "Dead code: decode_user_id AES decoder + cryptography dependency + getstream_user_id_encryption_key setting + QUEUE_DOMAIN_MAP deleted", "commit": "b4c9332"},
+    {"title": "Style violations (elif/else chains in participant_extractor, nested ternaries in notification_projection, dual-path if/else in event_repository) and 27 baseline ruff errors: ruff fully clean; telegram/email projections no longer attribute unknown roles to client", "commit": "b4c9332"},
+    {"title": "main.py copy-pasted 'event receiver application' log strings fixed", "commit": "b4c9332"},
+    {"title": "Test coverage gaps (April): EventRepository, BookingRepository, IngestEventUseCase (incl. client_reassigned), consumer retry/poison/factory, chat/meeting/video/notification projections, broker construction, ORM drift guards — suite 39 -> 100 tests", "commit": "04a0bf9"},
+    {"title": "Doc/code drift: AUDIT.md rewritten as audit-v2 2026-06-11; CLAUDE.md (participants table, EventRouter, dedup formula, retry claim, config), SERVICE_OVERVIEW/DATA_MODEL/QUEUES_DIGEST/EVENTS_DIGEST updated (client_reassigned, rejected, rescheduled shape); stale one-off reports deleted", "commit": "b80591e"}
+  ],
+  "skipped": [
+    {"title": "events.dlx and *.dlq never declared by event-saver (startup-order dependency)", "reason": "already fixed by contracts wave f61f098: _ensure_dead_letter_topology() idempotently declares DLX + own DLQs from event_schemas.queues"},
+    {"title": "LifecycleProjection loses previous start_time (flat 'previous_booking.start_time' key vs nested payload)", "reason": "already fixed by contracts wave f61f098: BookingRescheduledPayload carries top-level previous_start_time/previous_booking_uid per CONTRACT_DECISIONS D5; projection and test use the canonical flat shape"},
+    {"title": "Stale routing config: EventRouter dead code, duplicate BOOKING_REMINDER_SENT rules, rules missing client_reassigned/rejected", "reason": "already fixed by contracts wave f61f098: routing.py/EventRouter/Settings.routing deleted, consumer subscribes to SAVER_QUEUES from event_schemas; digests updated in docs commit b80591e"},
+    {"title": "Remove 24h TTL on DLQs", "reason": "CONTRACT_DECISIONS D2 declares DLQ arguments (x-message-ttl 86400000) canonical; instead transient errors no longer reach the DLQ at all (retry+requeue), TTL risk documented in AUDIT.md as platform-level alerting TODO"},
+    {"title": "events.notification.commands / events.user.email bypass event-saver (no audit-trail persistence)", "reason": "accepted decision documented in QUEUES_DIGEST.md and docs/AUDIT.md: commands are imperatives, not facts; resulting *.message_sent facts are persisted. Cross-service MESSAGE_CONTRACTS.md note left to root coordinator (event-saver fixer must not touch root architecture docs)"}
+  ],
+  "testsPass": true,
+  "lintPass": true,
+  "notes": "10 commits on event-saver audit-fixes (b4c9332..b80591e) on top of contracts-wave f61f098. Suite grew 39 -> 100 tests, ruff 27 errors -> 0 (fix=true config; per-file ARG002 ignore for protocol-shaped projection handlers). New migration a9d4c1f0b7e2 (drop legacy dedup index) on head 16939138e5a7; ORM metadata now matches the chain and is guarded by tests. New settings: RABBIT_PREFETCH_COUNT=10, RABBIT_GRACEFUL_TIMEOUT=30. cryptography dependency removed. NackMessage(requeue=True) relies on FastStream 0.6 HandlerException handling; DLQ consumer/alerting remains an open platform-level item."
+}

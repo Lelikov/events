@@ -1,0 +1,20 @@
+{
+  "mappings": [
+    {
+      "name": "UniSender Go: transactional email send",
+      "request": {
+        "method": "POST",
+        "urlPath": "/unisender/ru/transactional/api/v1/email/send.json"
+      },
+      "response": {
+        "status": 200,
+        "headers": { "Content-Type": "application/json" },
+        "jsonBody": {
+          "status": "success",
+          "job_id": "1devmockjobid",
+          "emails": ["recipient@example.com"]
+        }
+      }
+    }
+  ]
+}

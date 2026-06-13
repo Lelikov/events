@@ -1,5 +1,14 @@
 # Service Dependency Graph
 
+> **⚠️ SUPERSEDED — historical document.** Describes the **pre-audit-v2 topology (April
+> 2026)**. Audit-v2 (2026-06-10/11) changed the broker topology (one queue per consumer,
+> `event_schemas.queues` as single source of truth, `events.booking.reminder` and
+> `events.notifications` removed), added the **event-booking** consumer and the
+> `/event/calcom` ingress, and implemented the delivery-result pipeline. The diagram and
+> tables below are NOT updated; resolved discrepancies are annotated inline. Current state:
+> [`docs/audit/v2/AUDIT_REPORT_V2.md`](v2/AUDIT_REPORT_V2.md) and
+> [`docs/architecture/ARCHITECTURE.md`](../architecture/ARCHITECTURE.md).
+
 Generated: 2026-04-20
 
 ## System Topology
@@ -113,7 +122,19 @@ flowchart TD
 | event-notifier | event-users | `GET /users/{user_id}` | Resolve contacts by UUID (primary path) | No contacts resolved; notification silently skipped |
 | event-notifier | event-receiver | `POST /event/cloudevents` | Publish delivery result events (legacy/planned -- not confirmed active) | Fire-and-forget; errors logged only |
 
+> **[RESOLVED — audit-v2]** The delivery-result publisher is now real: event-notifier POSTs `notification.*.message_sent` binary CloudEvents to event-receiver (`DeliveryResultPublisher`, notifier `6bec0ea`); event-notifier resolves users via `GET /api/users/id/{user_id}`. The `/event/cloudevents` endpoint never existed — producers use the receiver's ingress endpoints (`/event/booking`, `/event/admin`, `/event/calcom`).
+
 ## Asynchronous Dependencies
+
+> **[STALE — audit-v2]** This table predates the v2 topology. Changes since:
+> `events.booking.lifecycle` split into `events.booking.lifecycle.saver` (event-saver) and
+> `events.booking.lifecycle.booking` (event-booking), both bound to routing key
+> `events.booking.lifecycle`; `events.booking.reminder` and `events.notifications` **removed**;
+> `events.notification.commands` is consumed by event-notifier (no longer "planned");
+> `events.notification.delivery` now receives real `notification.*.message_sent` events from
+> event-notifier; `events.unrouted` is consumed by event-saver (no longer dropped); plus
+> `booking.rejected` / `booking.client_reassigned` on the lifecycle key. Canonical registry:
+> `event-schemas/event_schemas/queues.py` and `docs/architecture/MESSAGE_CONTRACTS.md`.
 
 | Producer | Queue | Consumer | Event Types | Failure Impact |
 |----------|-------|----------|-------------|----------------|
@@ -131,6 +152,8 @@ flowchart TD
 | event-receiver | `events.notifications` | event-notifier | `booking.created`, `booking.cancelled`, `booking.rescheduled`, `booking.reassigned`, `booking.reminder_sent` | Notifications not dispatched; outbox not written |
 
 > **Discrepancy**: event-notifier subscribes to `events.notifications` (per its `config.py`), but the QUEUES_DIGEST lists `events.notification.commands` for `notification.send_requested`. These are different queues. Needs verification against actual event-receiver routing config.
+>
+> **[RESOLVED — audit-v2]** `events.notifications` no longer exists; event-notifier consumes `events.notification.commands` per `event_schemas.queues` (verified live at integration).
 
 ## External Dependencies
 

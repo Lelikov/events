@@ -1,0 +1,111 @@
+{
+  "service": "event-admin-frontend",
+  "branch": "audit-fixes",
+  "fixed": [
+    {
+      "title": "Global 401 interceptor fires on failed login: error never shown; hardcoded storage keys",
+      "commit": "7e92944"
+    },
+    {
+      "title": "Login 429 (throttling) and 401 surfaced as raw English / generic errors",
+      "commit": "7e92944"
+    },
+    {
+      "title": "No startup warning when VITE_API_BASE_URL is empty in production builds",
+      "commit": "7e92944"
+    },
+    {
+      "title": "JWT and role persisted in localStorage (XSS exfiltration risk) — moved to sessionStorage, legacy keys cleared, expiry-checked on load; residual JS-readability documented as accepted risk",
+      "commit": "85f3bcf"
+    },
+    {
+      "title": "JWT expiry (60-min tokens) not handled client-side — 401-with-token interceptor + AuthProvider drops expired tokens at startup",
+      "commit": "85f3bcf"
+    },
+    {
+      "title": "Role model contract drift: dead 'user' role branching removed (backend requires admin everywhere)",
+      "commit": "85f3bcf"
+    },
+    {
+      "title": "Role stored redundantly in localStorage separate from the JWT claim — storage removed entirely",
+      "commit": "85f3bcf"
+    },
+    {
+      "title": "Dev bypass button crashes if VITE_DEV_BYPASS_JWT unset/not a JWT; atob not base64url-safe — button gated on env var, decodeJwtPayload helper base64url+null safe",
+      "commit": "85f3bcf"
+    },
+    {
+      "title": "Bookings list silently truncated at 50 rows: explicit limit/offset + prev/next paging UI",
+      "commit": "29fc08e"
+    },
+    {
+      "title": "userBatchLoader cache never invalidated / unbounded staleness after email change; missing ids re-requested — invalidateUser/clearUserCache, negative caching, useSyncExternalStore subscription, modal invalidation, cleared on logout",
+      "commit": "7a1922d"
+    },
+    {
+      "title": "npm run lint fails with 3 errors (set-state-in-effect in UserInfo; react-refresh in context files)",
+      "commit": "7a1922d (UserInfo) + ed90599 (hook extraction); lint green"
+    },
+    {
+      "title": "Duplicated booking-details load logic in BookingDetailsPage — single effect with reload counter",
+      "commit": "7a1922d"
+    },
+    {
+      "title": "formatDateTime crashes app on invalid stored timezone; no error boundary — stored zone validated, try/catch fallback, ErrorBoundary added",
+      "commit": "ed90599 (validation) + 938c3c3 (fallback + boundary)"
+    },
+    {
+      "title": "bookingUid not URL-encoded in reassignBookingClient",
+      "commit": "6b0aff7"
+    },
+    {
+      "title": "Unknown routes render pseudo-404 without context — 404 card shows the pathname + back-to-dashboard button",
+      "commit": "6b0aff7"
+    },
+    {
+      "title": "else-if chain and nested ternaries violating no-elif convention (ParticipantPicker, BookingDetailsPage access maps)",
+      "commit": "6b0aff7"
+    },
+    {
+      "title": "Missing translation for 'Client with this email not found' 404 detail",
+      "commit": "6b0aff7"
+    },
+    {
+      "title": "Vite dev proxy routed /api/users directly to event-users bypassing event-admin RBAC proxy; dead VITE_USERS_API_BASE_URL removed",
+      "commit": "90a45b8"
+    },
+    {
+      "title": "No .env.example",
+      "commit": "90a45b8"
+    },
+    {
+      "title": "Dead code: public/env-config.js and stray nested build dir",
+      "commit": "90a45b8"
+    },
+    {
+      "title": "Zero test coverage / no test runner — Vitest (happy-dom) bootstrapped, 27 tests over apiRequest, jwt, routing, format, userBatchLoader",
+      "commit": "cb9031e"
+    },
+    {
+      "title": "CLAUDE.md documents VITE_USERS_API_TOKEN/usersApiRequest (removed code) + header typo",
+      "commit": "595886d"
+    },
+    {
+      "title": "Service docs describe pre-fix architecture; new endpoints undocumented; README stale 'proposed auth contract' — AUDIT.md rewritten for audit-v2 2026-06-11, SERVICE_OVERVIEW/API_CONTRACTS/DEPENDENCIES regenerated",
+      "commit": "595886d"
+    }
+  ],
+  "skipped": [
+    {
+      "title": "Error translation keyed on exact backend English detail strings",
+      "reason": "Mitigated client-side (missing translation added, coupling documented at the map). Real fix requires event-admin to return machine-readable error codes (detail: {code: ...}) — cross-service change outside this repo (event-admin read-only for this task). Tracked as FOLLOW-UP in docs/AUDIT.md #13."
+    },
+    {
+      "title": "httpOnly cookie session / CSP for JWT storage",
+      "reason": "event-admin has no refresh endpoint or cookie session, so the pragmatic fix applied is sessionStorage + 60-min expiry + startup expiry check + 401 interceptor; residual JS-readability documented as ACCEPTED in docs/AUDIT.md #3. CSP must be set at the hosting layer (a meta CSP breaks Vite dev HMR)."
+    }
+  ],
+  "testsPass": true,
+  "lintPass": true,
+  "notes": "Build (tsc -b && vite build), eslint, and 27 vitest tests all green. Verified-already-fixed April items (per findings re-check): getUserById wrong URL (replaced by POST /api/users/by-ids via event-admin proxy), getBookingDetails 404 retry, UserInfo N+1 (batch loader), ParticipantPicker focus spam (open-only fetch + 300ms debounce), dev bypass MODE guard. Frontend now talks ONLY to event-admin (users proxy), matching the backend coordination notes: 60-min JWTs handled, 429 login throttling handled, admin-only role model adopted. Cross-service ask for event-admin: stable machine-readable error codes for change-email/reassign details."
+}

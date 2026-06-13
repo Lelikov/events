@@ -1,0 +1,72 @@
+# Prometheus scrape config for the root docker-compose stack.
+# All targets are resolved by compose service name on the project network;
+# every Python service serves GET /metrics on its internal port 8888 (the
+# same app as /health). 15s interval per the metrics design spec.
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+# Alert rules (docker/prometheus/rules/, mounted read-only) are evaluated every
+# evaluation_interval and any firing alerts are pushed to Alertmanager.
+rule_files:
+  - "/etc/prometheus/rules/*.yml"
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ["alertmanager:9093"]
+
+scrape_configs:
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]
+
+  # ---- Python services (HTTP + consumer RED, business metrics) -------------
+  - job_name: event-receiver
+    static_configs:
+      - targets: ["event-receiver:8888"]
+
+  - job_name: event-saver
+    static_configs:
+      - targets: ["event-saver:8888"]
+
+  - job_name: event-booking
+    static_configs:
+      - targets: ["event-booking:8888"]
+
+  - job_name: event-notifier
+    static_configs:
+      - targets: ["event-notifier:8888"]
+
+  - job_name: event-users
+    static_configs:
+      - targets: ["event-users:8888"]
+
+  - job_name: event-admin
+    static_configs:
+      - targets: ["event-admin:8888"]
+
+  # ---- Infrastructure -------------------------------------------------------
+  # rabbitmq_prometheus plugin; per-object metrics enabled via
+  # docker/rabbitmq/20-prometheus.conf so rabbitmq_queue_messages carries
+  # {vhost, queue} labels (queue/DLQ depth panels).
+  - job_name: rabbitmq
+    static_configs:
+      - targets: ["rabbitmq:15692"]
+
+  # One postgres_exporter container per database; `db` label tells them apart.
+  - job_name: postgres
+    static_configs:
+      - targets: ["pg-exporter-saver:9187"]
+        labels:
+          db: saver
+      - targets: ["pg-exporter-users:9187"]
+        labels:
+          db: users
+      - targets: ["pg-exporter-notifier:9187"]
+        labels:
+          db: notifier
+      - targets: ["pg-exporter-calcom:9187"]
+        labels:
+          db: calcom

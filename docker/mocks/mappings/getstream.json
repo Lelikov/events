@@ -1,0 +1,56 @@
+{
+  "mappings": [
+    {
+      "name": "GetStream: upsert users",
+      "request": {
+        "method": "POST",
+        "urlPath": "/getstream/users"
+      },
+      "response": {
+        "status": 201,
+        "headers": { "Content-Type": "application/json" },
+        "jsonBody": { "users": {} }
+      }
+    },
+    {
+      "name": "GetStream: channel create/query",
+      "request": {
+        "method": "POST",
+        "urlPathPattern": "/getstream/channels/messaging/[^/]+/query"
+      },
+      "response": {
+        "status": 201,
+        "headers": { "Content-Type": "application/json" },
+        "jsonBody": {
+          "channel": { "id": "mock-channel", "type": "messaging", "cid": "messaging:mock-channel" },
+          "messages": [],
+          "members": []
+        }
+      }
+    },
+    {
+      "name": "GetStream: send message",
+      "request": {
+        "method": "POST",
+        "urlPathPattern": "/getstream/channels/messaging/[^/]+/message"
+      },
+      "response": {
+        "status": 201,
+        "headers": { "Content-Type": "application/json" },
+        "jsonBody": { "message": { "id": "mock-message-id" } }
+      }
+    },
+    {
+      "name": "GetStream: delete channel",
+      "request": {
+        "method": "DELETE",
+        "urlPathPattern": "/getstream/channels/messaging/[^/]+"
+      },
+      "response": {
+        "status": 200,
+        "headers": { "Content-Type": "application/json" },
+        "jsonBody": { "channel": { "id": "mock-channel", "type": "messaging" } }
+      }
+    }
+  ]
+}

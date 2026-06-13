@@ -1,0 +1,16 @@
+# Root build context (Python services build with context = monorepo root).
+# Keep heavyweight/dev-only artifacts out of every image build.
+**/.git
+**/.venv
+**/__pycache__
+**/node_modules
+**/dist
+**/postgres_data
+**/.pytest_cache
+**/.ruff_cache
+**/.env
+**/.env.*
+!**/.env.example
+**/*.jsonl
+**/.DS_Store
+docs

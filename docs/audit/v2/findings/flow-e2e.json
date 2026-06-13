@@ -1,0 +1,64 @@
+{
+  "findings": [
+    {
+      "service": "event-booking",
+      "severity": "HIGH",
+      "title": "Consumer reads cancellation_reason / previous_start_time / previous_organizer_email at the top level of CloudEvent data, but event-receiver always wraps payloads as {original, normalized} — all three contract fields are systematically None",
+      "file": "event-booking/event_booking/consumer.py:36",
+      "detail": "event-receiver's CloudEventPublisher (event-receiver/event_receiver/normalizers.py:53, adapters/publisher.py:92-131) publishes every event with data = {\"original\": <payload>, \"normalized\": {\"participants\": [...]}}. event-booking's BookingConsumer.dispatch does data.get(\"previous_start_time\") (line 36), data.get(\"previous_organizer_email\") (line 41) and data.get(\"cancellation_reason\") (line 46) on that wrapper, so even a fully correct producer that puts these fields in the event payload can never get them through: reschedule notifications lose the previous start time, reassign notifications lose the previous organizer, and cancellation notifications lose the reason (cal.com's real BOOKING_CANCELLED carries cancellationReason='Причина отмены', requests.jsonl:125). This is the event-booking analog of the already-recorded notifier wrong-level finding; it was not recorded for event-booking.",
+      "fix_hint": "Read fields from data[\"original\"] (or better: define the {original, normalized} envelope once in event-schemas with a typed accessor and use it in event-saver, event-booking and event-notifier alike).",
+      "cross_service": true,
+      "origin": "new"
+    },
+    {
+      "service": "event-schemas",
+      "severity": "HIGH",
+      "title": "booking.rescheduled contract has no previous-uid field, but a real cal.com reschedule mints a NEW uid — booking identity splits: event-saver keeps the old booking active forever and bookingid semantics (old vs new uid) are undefined",
+      "file": "event-schemas/event_schemas/booking.py:34",
+      "detail": "Real cal.com BOOKING_RESCHEDULED (requests.jsonl:259-369) creates a new booking uid ('bHm9EUG3QxL6CZWHBQQMxv') and references the predecessor only via rescheduleUid ('xaYwx8FnWLR2ZSvT8vg4WA', line 313) plus rescheduleStartTime/rescheduleEndTime/rescheduleId. The internal contract (BookingRescheduledPayload: volunteer_id, client_id, start_time, end_time, previous_booking.start_time) and the ce-bookingid extension model a reschedule as a mutation of ONE booking_uid. No field can carry the old uid, and nothing defines whether bookingid must be the old or the new uid. Consequences: event-saver upserts a brand-new bookings row for the new uid while the old-uid row keeps status 'created' forever (BookingDataExtractor maps no status for rescheduled — 'COALESCE preserves existing' only makes sense for same-uid updates, event-saver/event_saver/domain/services/booking_extractor.py:11-17); booking_lifecycle_events history splits across two booking_ids with no link; event-booking creates a fresh chat/short-URLs for the new uid while the old uid's chat is orphaned (partially recorded) — the root cause is the missing uid linkage in the contract itself.",
+      "fix_hint": "Add previous_booking_uid (mapped from cal.com rescheduleUid) to the booking.rescheduled payload model; document bookingid = new uid; event-saver should mark the old uid's booking as 'rescheduled'/closed and store the linkage; event-booking should use previous_booking_uid for chat/URL cleanup instead of Booking.fromReschedule heuristics.",
+      "cross_service": true,
+      "origin": "new"
+    },
+    {
+      "service": "event-schemas",
+      "severity": "HIGH",
+      "title": "BOOKING_PAYMENT_INITIATED is present in real cal.com traffic but is unmappable end-to-end: no EventType/TriggerEvent member, payload has no bookingId and attendees is empty — and receiver 500s on any unknown type",
+      "file": "event-schemas/event_schemas/types.py:18",
+      "detail": "requests.jsonl:190-257 is a real captured BOOKING_PAYMENT_INITIATED webhook. (1) EventType has no payment members at all and TriggerEvent (types.py:90) covers only created/rescheduled/reassigned/cancelled/reminder/rejected, so no translator can map it; cal.com's adjacent triggers (BOOKING_PAYMENT_COMPLETED, BOOKING_REQUESTED for requiresConfirmation=True bookings, BOOKING_REJECTED-by-organizer, MEETING_ENDED, RECORDING_READY) are equally unmappable, meaning paid and confirmation-required event types simply cannot run on this pipeline. (2) Even if forwarded verbatim, /event/booking's mandatory booking_uid cannot be satisfied: the payment payload contains uid but NO bookingId, NO status, NO metadata, and attendees: [] (line 194) — so any normalizer/transform assuming attendees[0]/client (e.g. _transform_booking_created_payload pattern) breaks on this shape. (3) The already-recorded receiver finding (ValueError 500 on non-enum types) turns each such real webhook into a hard 500 + lost message instead of a graceful skip.",
+      "fix_hint": "Decide explicitly: either add booking.payment_initiated/payment_completed, booking.requested and meeting.ended/recording.ready to EventType with routing rules and at least an audit-trail consumer in event-saver, or specify an allowlist-and-204 policy at ingress so unsupported cal.com triggers are dropped deliberately, not via 500.",
+      "cross_service": true,
+      "origin": "new"
+    },
+    {
+      "service": "event-receiver",
+      "severity": "MEDIUM",
+      "title": "Ingress booking.created contract is hardwired to exactly one organizer + one client — cal.com guests and multi-attendee/seated bookings cannot be represented and extra participants are silently dropped",
+      "file": "event-receiver/event_receiver/controllers/ingest.py:153",
+      "detail": "_transform_booking_created_payload picks the first user with role 'organizer' and the first with role 'client' and raises BadRequestError otherwise; _participants_from_booking_created (normalizers.py:117-131) likewise emits exactly two participants. Real cal.com payloads carry a guests list (responses.guests.value, requests.jsonl:58-62), an attendees array that can hold multiple entries, and seated-event fields (seatsPerTimeSlot/seatsShowAttendees, requests.jsonl:90-92). Any third participant a translator forwards in users[] is silently discarded from normalization (no user_id resolution, no participant projection in event-saver), and a multi-client booking cannot pass validation at all. This is the ingress/contract-side counterpart of the already-recorded event-booking DB-read multi-attendee finding.",
+      "fix_hint": "Make the booking.created users contract a true list (1 organizer + N clients/guests): validate roles, normalize all entries into normalized.participants, and propagate the full list downstream; reject only when there is no organizer.",
+      "cross_service": true,
+      "origin": "new"
+    },
+    {
+      "service": "event-notifier",
+      "severity": "MEDIUM",
+      "title": "No per-recipient localization anywhere in the notification chain: booking times sent as raw UTC ISO strings, time_zone fields carried but never applied, identical template data for organizer and client, and cal.com locale is dropped at ingress",
+      "file": "event-notifier/event_notifier/infrastructure/channels/email.py:56",
+      "detail": "Real cal.com payloads provide per-person timeZone ('Europe/Madrid') and language.locale ('ru') for both organizer and attendees (requests.jsonl:10-15, 41-46). event-booking builds template_data with start_time/end_time as booking.start_time.isoformat() (UTC, naive from the cal.com DB) plus separate organizer_time_zone/client_time_zone strings (event-booking/event_booking/controllers/booking.py:214-237), and sends ONE notification command with ONE template_data for both recipients. EmailChannel passes template_data verbatim as global_substitutions shared by all recipients — so even after the recorded transport bugs are fixed, a client in Madrid receives '2026-05-12T22:05:00' with no tz conversion, no way to render per-recipient local time, and no locale to choose a language for templates (TelegramChannel has the same gap). locale is never modeled in NormalizedParticipant, UserInfo or template_data, so it cannot be recovered downstream.",
+      "fix_hint": "Carry time_zone and locale per recipient (extend recipients entries or template_data per-recipient blocks), render times in the recipient's zone (zoneinfo) before substitution, and use per-recipient substitutions instead of global_substitutions.",
+      "cross_service": true,
+      "origin": "new"
+    },
+    {
+      "service": "event-schemas",
+      "severity": "LOW",
+      "title": "Actor attribution lost: cal.com cancelledBy / rescheduledBy have no field in any internal contract, so notifications and the audit trail cannot say who cancelled or rescheduled",
+      "file": "event-schemas/event_schemas/booking.py:84",
+      "detail": "Real payloads carry cancelledBy (requests.jsonl:126) and rescheduledBy (requests.jsonl:207, 314) — note rescheduledBy can differ from the organizer (lelikovas+test@gmail.com vs lelikovas@gmail.com). BookingCancelledPayload only models cancellation_reason; BookingRescheduledPayload models nothing about the actor; event-booking's template_data and event-saver's lifecycle details (_pick of start_time/end_time/previous_booking.start_time, lifecycle_projection.py:91) drop the actor entirely. Cancellation emails cannot distinguish 'organizer cancelled' from 'client cancelled' (different templates/wording are typically required), and the booking_lifecycle_events audit row has no actor.",
+      "fix_hint": "Add cancelled_by / rescheduled_by (email or user_id + role) to the cancelled/rescheduled payload models, map them in the future cal.com translator, include them in lifecycle projection details and notification template_data.",
+      "cross_service": true,
+      "origin": "new"
+    }
+  ]
+}

@@ -1,0 +1,74 @@
+{
+  "findings": [
+    {
+      "service": "event-notifier",
+      "severity": "CRITICAL",
+      "title": "UsersClient.get_contacts_by_id calls GET /users/{user_id}, but event-users only serves /api/users/id/{user_id} — guaranteed 404, recipient silently dropped",
+      "file": "event-notifier/event_notifier/infrastructure/users_client.py:80",
+      "detail": "get_contacts_by_id() issues GET {event_users_url}/users/{user_id}. event-users mounts its router at prefix /api/users and the by-id endpoint is GET /api/users/id/{user_id} (event-users/event_users/routes.py:29,106). Every call therefore returns 404, which get_contacts_by_id treats as 'user not found' and maps to an empty contact list (users_client.py:87-89). The use case then skips the recipient, writes zero outbox records, ACKs the message, and the notification is permanently and silently lost. This is an additional, independent breakage layer beyond the already-recorded payload-wrapper and recipient-contract findings: even after those are fixed and a valid user_id arrives, contact resolution still 404s and drops 100% of notifications. The 404→[] conflation also means a future route rename would silently disable all notifications again.",
+      "fix_hint": "Change the path to /api/users/id/{user_id} (or have ioc.py set base_url including /api and use /users/id/{id}); add an integration/contract test against event-users' OpenAPI schema; consider treating 404 for a user_id that was just present in the event as an error rather than a silent skip.",
+      "cross_service": true,
+      "origin": "new"
+    },
+    {
+      "service": "event-notifier",
+      "severity": "HIGH",
+      "title": "Outbox retry policy: no 4xx/5xx error classification, total retry budget ~9.2 minutes, and 'failed' rows are terminal with no redrive or alerting",
+      "file": "event-notifier/event_notifier/adapters/outbox_sender.py:96-125",
+      "detail": "EmailChannel and TelegramChannel collapse every HTTPStatusError into DeliveryResult(success=False) without distinguishing permanent 4xx (invalid template, bad chat_id, invalid email) from transient 5xx/timeouts (email.py:73-79, telegram.py:47-53). OutboxSender retries all failures identically: max_retries defaults to 5 (db/models.py:54) with backoff 10/40/90/160/250s, a total window of ~550 seconds. Consequences: (a) a UniSender or Telegram outage longer than ~9.2 minutes permanently marks every due notification 'failed'; (b) permanently-bad requests are retried 5 times with the identical payload, wasting the window and polluting provider rate limits; (c) status='failed' rows are never re-driven, reaped, exported, or alerted on — mark_failed is a dead end (repository.py:135-140), so loss is silent. This is distinct from the recorded 'processing rows never reaped' and 'DOMAIN_EVENT_TO_TRIGGER lookup fails' findings: it applies to well-formed records under realistic provider outages.",
+      "fix_hint": "Classify errors in channels (retryable: 408/429/5xx/timeouts; permanent: other 4xx → fail fast). For retryable errors, do not cap at a ~9-minute budget: either raise max_retries with capped exponential backoff (hours) or move exhausted rows to a 'dead' state with an alert/metric and an operator redrive path (UPDATE ... SET status='pending').",
+      "cross_service": false,
+      "origin": "new"
+    },
+    {
+      "service": "event-saver",
+      "severity": "HIGH",
+      "title": "No consumer prefetch (QoS) in any service — a queue backlog floods consumers with unlimited unacked messages, exhausts the DB pool, and shovels events into the broken DLQ path",
+      "file": "event-saver/event_saver/ioc.py:69",
+      "detail": "All five consumers create their broker with defaults: fastapi.RabbitRouter(url) in event-saver/event-receiver and RabbitBroker(url) in event-booking (ioc.py:68), event-notifier (ioc.py:66), event-users (ioc.py:134). FastStream 0.6's default Channel has prefetch_count=None, and set_qos is only called when prefetch_count is set (faststream/rabbit/helpers/channel_manager.py:75-77), so the RabbitMQ default of unlimited prefetch applies. After any downtime or burst, the broker delivers the entire backlog at once. In event-saver each message opens its own pooled session (event_store_facade.py:52) against pool_size=10/max_overflow=20 (ioc.py:92-97); hundreds of concurrent handler tasks exceed the pool, asyncio.TimeoutError from the pool (default 30s) makes handlers raise, and the raise path is the already-broken REJECT→missing-DLX/unconsumed-24h-TTL-DLQ pipeline — i.e. backlog pressure converts into permanent event loss. In event-booking/event-notifier the same flood multiplies the recorded shared-APP-session corruption. Unlimited prefetch also defeats the x-max-priority=10 queues declared everywhere: priority ordering is meaningless when the broker hands the whole queue to one consumer immediately.",
+      "fix_hint": "Pass default_channel=Channel(prefetch_count=N) (e.g. 10-50 per service, saver's should not exceed its DB pool headroom) when constructing RabbitBroker/RabbitRouter in all five services; alternatively set per-subscriber channel settings. Add this to the shared coding standards.",
+      "cross_service": true,
+      "origin": "new"
+    },
+    {
+      "service": "event-booking",
+      "severity": "MEDIUM",
+      "title": "graceful_timeout never set in any service — SIGTERM cancels in-flight handlers immediately, guaranteeing redelivery duplicates and abandoned outbox rows on every deploy",
+      "file": "event-booking/event_booking/ioc.py:68",
+      "detail": "No service passes graceful_timeout when creating its broker (event-booking ioc.py:68, event-notifier ioc.py:66, event-users ioc.py:134, event-saver ioc.py:69, event-receiver ioc.py:41). In FastStream 0.6, subscriber.stop() calls lock.wait_release(graceful_timeout), and wait_release is a no-op when the timeout is falsy ('if timeout:' — faststream/_internal/endpoint/subscriber/utils.py:69-71). So on SIGTERM the broker closes without waiting for running handlers: their acks are lost and the broker redelivers the messages. event-saver tolerates this (atomic commit + ON CONFLICT dedup), but event-booking re-runs the full pipeline (duplicate client-visible welcome messages/notifications — the recorded no-idempotency finding becomes a guaranteed every-deploy event, not just a failure-mode), and event-users re-runs the non-idempotent email-change flow. In event-notifier, main.py:67-68 additionally calls sender_task.cancel() which can interrupt OutboxSender mid-batch after fetch_pending_outbox committed status='processing' but before mark_delivered/mark_retry — feeding the recorded 'processing rows never recovered' black hole on routine restarts, not just crashes.",
+      "fix_hint": "Set graceful_timeout (e.g. 30s) on every RabbitBroker/RabbitRouter; in event-notifier, stop the consumer first, then let OutboxSender finish its current batch (await a 'drained' event with timeout) before cancelling the task.",
+      "cross_service": true,
+      "origin": "new"
+    },
+    {
+      "service": "event-receiver",
+      "severity": "MEDIUM",
+      "title": "Unroutable publishes are silently dropped: mandatory=True returns are ignored because on_return_raises is left False — receiver returns 2xx while the event vanishes",
+      "file": "event-receiver/event_receiver/adapters/publisher.py:135-143",
+      "detail": "CloudEventPublisher.publish relies on FastStream defaults: mandatory=True and publisher_confirms=True, but the default Channel has on_return_raises=False (faststream/rabbit/schemas/channel.py:21-29). With on_return_raises=False, a Basic.Return for an unroutable message is swallowed by aio-pika; publish() completes normally, the controller returns 202, and the webhook source (cal.com/UniSender/GetStream) considers the event delivered forever. Today every routing destination happens to get a queue+binding from ensure_topology() at startup, so the gap is latent — but it fires silently whenever RABBIT_TOPOLOGY_QUEUES is explicitly set narrower than routing_destinations (config.py:153-155 allows this), a routing rule destination is added without redeploy/restart, or an operator deletes/recreates a queue without the binding. There is no log, metric, or error on return.",
+      "fix_hint": "Construct the broker with default_channel=Channel(on_return_raises=True) and translate aio_pika.exceptions.DeliveryError into a 5xx so the webhook source retries; or register a return callback that logs and counts returned messages. Also validate at startup that rabbit_topology_queues is a superset of routing_destinations.",
+      "cross_service": false,
+      "origin": "new"
+    },
+    {
+      "service": "event-receiver",
+      "severity": "MEDIUM",
+      "title": "No publish timeout: a blocked RabbitMQ connection (memory/disk alarm) makes every webhook request hang indefinitely waiting for publisher confirms",
+      "file": "event-receiver/event_receiver/adapters/publisher.py:135",
+      "detail": "broker.publish() is awaited with no timeout argument; FastStream passes timeout=None down to aio-pika Exchange.publish (faststream/rabbit/publisher/producer.py:177-195), which waits for the publisher confirm without bound. When RabbitMQ raises a resource alarm it blocks publishing connections and never confirms — every in-flight /event/* request then hangs until the client gives up. Webhook sources time out and retry, stacking more hung requests until uvicorn worker/connection limits are reached, turning a broker alarm into a full ingress outage with no error logs. The HTTP→AMQP boundary itself is otherwise sound: publish is awaited before the 202 is sent, so an outright publish exception correctly yields a 5xx and the source retries — but a hang yields neither success nor failure.",
+      "fix_hint": "Pass an explicit timeout (e.g. 5-10s) to broker.publish (or wrap in anyio.fail_after) and map TimeoutError to HTTP 503 so webhook sources back off and retry; add a metric/alert on publish latency.",
+      "cross_service": false,
+      "origin": "new"
+    },
+    {
+      "service": "event-receiver",
+      "severity": "MEDIUM",
+      "title": "When event-users is unavailable, events are published with participants permanently missing user_id — no backfill or reconciliation exists downstream",
+      "file": "event-receiver/event_receiver/adapters/users_client.py:30-35",
+      "detail": "UserResolver.resolve_or_create retries 3 times with exponential backoff (good), but on final failure logs a warning and returns None; CloudEventPublisher then publishes the event with participant.user_id absent (publisher.py:99-106). event-saver persists the participant/booking rows with NULL user_id and nothing ever re-resolves them: there is no reconciliation job, and subsequent events for the same booking only upsert. The user_id is the cross-service join key to event-users (root CLAUDE.md: participants.user_id references event-users' PK), so a transient event-users outage at ingest time permanently degrades admin UI joins, notification recipient resolution, and analytics for those bookings. Availability-over-consistency is a reasonable ingest choice, but the degradation is currently silent and irreversible.",
+      "fix_hint": "Either record a 'resolution_pending' marker and add a small backfill task (in event-saver or event-users) that re-resolves NULL user_ids by (email, role), or emit a metric/structured event when publishing without user_id so the gap is at least visible and bounded.",
+      "cross_service": true,
+      "origin": "new"
+    }
+  ]
+}

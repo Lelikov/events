@@ -1,0 +1,29 @@
+{
+  "service": "event-admin",
+  "branch": "audit-fixes",
+  "fixed": [
+    {"title": "CRITICAL: DEBUG=True auth bypass removed entirely; startup refuses weak/placeholder secrets outside DEBUG; .env.example added", "commit": "216c747"},
+    {"title": "HIGH: get_booking_details asyncio.gather over 7 queries on one AsyncSession -> sequentialized; concurrency-detecting regression test", "commit": "26d5a93"},
+    {"title": "MEDIUM: EventPublisher error handling — tenacity retries on transport errors, structured EventPublishError -> 502 'action NOT applied', configurable attempts/timeout (also fixes unused tenacity dep, LOW)", "commit": "13ac7ec"},
+    {"title": "MEDIUM: reassign-client validates booking exists (404) before publishing booking.client_reassigned", "commit": "ca74f81"},
+    {"title": "MEDIUM: login brute-force lockout (per IP+email, 429), TOTP replay protection (single-use codes), TOTPService fails closed on malformed secrets", "commit": "a8e3409"},
+    {"title": "MEDIUM: admin_users DDL moved from model docstring to tracked idempotent scripts/admin_users.sql with ownership note + sync test", "commit": "024aad2"},
+    {"title": "MEDIUM: zero test coverage -> pytest bootstrapped, 75 tests (ASGI harness with fake Dishka provider, no DB/network needed)", "commit": "e727b7e"},
+    {"title": "MEDIUM: doc drift — SERVICE_OVERVIEW/API_CONTRACTS/DATA_MODEL/DEPENDENCIES/CLAUDE.md rewritten (publishes events, EVENT_RECEIVER_* env vars, reassign endpoint, receiver failure mode); AUDIT.md rewritten for audit-v2 2026-06-11", "commit": "4a3c357"},
+    {"title": "LOW: JWT expiry 24h -> 60min default; optional JWT_AUDIENCE/JWT_ISSUER minting + verification (tolerant when unset, mirrors event-users)", "commit": "44e84ea"},
+    {"title": "LOW: cache invalidation token compared via hmac.compare_digest", "commit": "b1eda2f"},
+    {"title": "LOW: users proxy untyped dict passthrough -> typed allowlist response models; by-ids body -> UsersByIdsRequest (422 not 500); migrated to GET /api/users/by-identity", "commit": "2d6d17f"},
+    {"title": "LOW: change_user_email normalizes new_email lowercase once for validation AND published payload", "commit": "b42b96d"},
+    {"title": "LOW (security cross-cut): CORS allow_credentials dropped, methods/headers restricted; middleware ordering made explicit with comment + test", "commit": "8fbedff"},
+    {"title": "LOW: Settings three construction paths -> single get_settings() + create_app() factory", "commit": "e727b7e"},
+    {"title": "LOW: booking.client_reassigned documented in docs/architecture/MESSAGE_CONTRACTS.md (root repo commit e26157c)", "commit": "e26157c"}
+  ],
+  "skipped": [
+    {"title": "Adopt 'Bearer <key>' scheme for admin ingest API key", "reason": "event-receiver's ingest_admin compares the raw Authorization value with hmac.compare_digest (already constant-time after receiver fixer's hardening); switching event-admin unilaterally to Bearer would break the live contract. Kept raw, documented in adapter + .env.example; key strength now enforced at startup on both sides. Needs a coordinated two-side change if desired."},
+    {"title": "event-receiver/QUEUES_DIGEST.md missing booking.client_reassigned row", "reason": "File lives in the event-receiver repo — out of scope for this fixer (do not touch other repos). Root MESSAGE_CONTRACTS.md updated instead; flagged here for the receiver maintainer."},
+    {"title": "Set DEBUG=False in local .env", "reason": "Local gitignored .env keeps DEBUG=True with an explanatory comment because its secrets must match neighbor services' weak local dev values (event-users JWT_SECRET_KEY, event-receiver ADMIN_API_KEY=123) and DEBUG=False would fail the new secret-strength startup check. Harmless now: DEBUG no longer affects authentication. .env.example ships DEBUG=False."}
+  ],
+  "testsPass": true,
+  "lintPass": true,
+  "notes": "14 commits on event-admin:audit-fixes (e727b7e..head). Test suite 0 -> 75 (pytest+pytest-asyncio, fake DI provider harness — tests/conftest.py). Breaking-ish changes for ops: (1) startup now fails outside DEBUG if JWT_SECRET_KEY/USERS_SERVICE_API_TOKEN/CACHE_INVALIDATION_TOKEN/EVENT_RECEIVER_API_KEY are <16 chars or placeholders; (2) JWT default lifetime is now 60 min (set JWT_EXPIRE_MINUTES to override); (3) /auth/login can now return 429. Coordination: event-admin now mints aud/iss when JWT_AUDIENCE/JWT_ISSUER are set — enable together with event-users' matching vars (either order is safe, both sides tolerant when unset). event-admin switched user lookup to GET /api/users/by-identity (event-users may drop the deprecated path-segment endpoint once event-notifier also migrates). Publish failures surface as 502 with 'action NOT applied' — no outbox; admin retries manually. LoginGuard/UsersCache are in-memory per-process (single-instance assumption, documented in AUDIT.md)."
+}
