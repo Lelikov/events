@@ -74,13 +74,17 @@ Host ports:
 | 5433 | pg-calcom (fixture cal.com DB, used by `scripts/calcom_sim.py`) |
 | 9090 | Prometheus (127.0.0.1 only; scrapes all services + RabbitMQ + postgres exporters) |
 | 3001 | Grafana (admin/admin; provisioned dashboards: System Overview, Booking Flow) |
+| 9093 | Alertmanager (127.0.0.1 only; routes Prometheus alerts → ops Telegram) |
 
 Observability: every Python service serves `GET /metrics` (prometheus-client);
 Prometheus config lives in `docker/prometheus/prometheus.yml`, the two
 provisioned dashboards in `docker/grafana/dashboards/` (uids
-`events-system-overview`, `events-booking-flow`). See
-`docs/architecture/ONBOARDING.md` § Observability for what's collected and how
-to add a metric.
+`events-system-overview`, `events-booking-flow`). Alert rules live in
+`docker/prometheus/rules/` (infra + business) and route through Alertmanager
+(`docker/alertmanager/`) to a dedicated ops Telegram chat — set
+`ALERT_TELEGRAM_BOT_TOKEN`/`ALERT_TELEGRAM_CHAT_ID` in `.env` for real delivery.
+See `docs/architecture/ONBOARDING.md` § Observability for what's collected, the
+alert set, and how to add a metric or rule.
 
 ### Симуляция событий cal.com
 

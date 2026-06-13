@@ -58,7 +58,8 @@ fixture, or swap the `mocks` endpoints (`SHORTENER_URL`, `UNISENDER_BASE_URL`,
 Entry points (defaults): event-receiver `:8888`, event-users `:8001`,
 event-admin `:8002`, admin frontend `:3000`, jitsi-chat `:8080`, WireMock
 request journal `:8089/__admin/requests`, RabbitMQ management `:15672`,
-Prometheus `:9090` (127.0.0.1 only), Grafana `:3001` (admin/admin).
+Prometheus `:9090` (127.0.0.1 only), Grafana `:3001` (admin/admin),
+Alertmanager `:9093` (127.0.0.1 only).
 
 Every published host port is an env var with the default above — override in
 `.env` (or inline) without touching the compose file:
@@ -76,6 +77,7 @@ Every published host port is an env var with the default above — override in
 | `MOCKS_PORT` | 8089 | WireMock (127.0.0.1 only) |
 | `PROMETHEUS_PORT` | 9090 | prometheus (127.0.0.1 only) |
 | `GRAFANA_PORT` | 3001 | grafana (login `GRAFANA_ADMIN_USER`/`GRAFANA_ADMIN_PASSWORD`, default admin/admin) |
+| `ALERTMANAGER_PORT` | 9093 | alertmanager (127.0.0.1 only) |
 
 CORS origins, `MEETING_HOST_URL` and `VITE_WEBHOOK_URL` defaults are derived
 from these vars inside `docker-compose.yml`, and `scripts/calcom_sim.py`
@@ -245,6 +247,42 @@ http://localhost:9090. Dashboard JSON edits in the repo are picked up within
 3. Chart it: edit the dashboard JSON in `docker/grafana/dashboards/` (or edit in
    the Grafana UI and export back into the repo).
 4. New service? Add a scrape job in `docker/prometheus/prometheus.yml`.
+
+### Alerting (Alertmanager + Telegram)
+
+Prometheus evaluates alert rules and pushes firing alerts to **Alertmanager**
+(`alertmanager:9093`, exposed loopback-only at http://localhost:9093), which
+routes them to a dedicated **ops** Telegram chat. Design spec:
+`docs/superpowers/specs/2026-06-13-alertmanager-telegram-design.md`.
+
+- **Where rules live**: `docker/prometheus/rules/` (mounted read-only into
+  Prometheus; `rule_files: /etc/prometheus/rules/*.yml`).
+  - `infra.yml` — `ServiceDown` (up==0, 1m, crit), `HighErrorRate` (5xx >5% /5m,
+    warn), `HighLatencyP95` (p95 >1s /10m, warn), `DLQGrowing` (`*.dlq` >0 /5m,
+    warn), `OutboxBacklog` (pending >100 /10m, warn), `OutboxStalled` (oldest
+    pending >5m, crit), `RabbitMQDown`/`PostgresDown` (1m, crit).
+  - `business.yml` — `BookingRejectionSpike` (rejections >0.2/s /10m, warn),
+    `NotificationDeliveryFailures` (failed deliveries >0 /5m, warn).
+- **Routing / severity**: alerts group by `alertname`+`job`. `severity=critical`
+  notifies fast (`group_wait` 10s, `repeat_interval` 1h); `severity=warning`
+  batches (`group_wait` 1m, `repeat_interval` 12h). Single Telegram receiver,
+  HTML message with a severity emoji and a Grafana link. Config template:
+  `docker/alertmanager/alertmanager.tmpl.yml` (rendered at container start by
+  `docker/alertmanager/entrypoint.sh`, which `sed`-substitutes the env vars —
+  Alertmanager does no env interpolation in its YAML).
+- **Set the ops bot token + chat** (real delivery): create a dedicated bot via
+  @BotFather (separate from event-notifier's client-facing `TELEGRAM_BOT_TOKEN`),
+  then set `ALERT_TELEGRAM_BOT_TOKEN` and `ALERT_TELEGRAM_CHAT_ID` in `.env`.
+  **Left blank → graceful degrade**: Alertmanager still starts and alerts still
+  fire and route, but Telegram sends fail with a logged `401` (visible via
+  `docker compose logs alertmanager`).
+- **How to add a rule**: drop it in the right `docker/prometheus/rules/*.yml`
+  with a `severity: warning|critical` label and `summary`/`description`
+  annotations (use `{{ $labels.* }}` / `{{ $value }}`). Validate with
+  `docker run --rm --entrypoint promtool -v $PWD/docker/prometheus/rules:/rules
+  prom/prometheus promtool check rules /rules/*.yml`; Prometheus reloads on
+  restart (or `POST /-/reload`). Verify in Prometheus → Alerts and at
+  http://localhost:9093.
 
 ## Minimum Viable Setup
 
