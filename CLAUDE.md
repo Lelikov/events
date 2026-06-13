@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Monorepo Overview
 
-This is a **multi-service event-driven system** for managing bookings and participants. Nine independent packages share this root directory; each has its own `CLAUDE.md` with service-specific commands and architecture.
+This is a **multi-service event-driven system** for managing bookings and participants. Ten independent packages share this root directory; each has its own `CLAUDE.md` with service-specific commands and architecture.
 
 | Service | Language/Stack | Role |
 |---|---|---|
@@ -15,6 +15,7 @@ This is a **multi-service event-driven system** for managing bookings and partic
 | `event-admin-frontend/` | TypeScript, React, Vite | Admin UI for bookings and participants |
 | `event-users/` | Python, FastAPI | Separate user/contact management service with CRM sync; consumes `events.user.email` |
 | `event-notifier/` | Python, FastAPI, FastStream, asyncpg | Notification dispatcher: consumes `events.notification.commands`, outbox + email/Telegram delivery, publishes delivery-result events |
+| `event-shortener/` | Python, FastAPI | URL shortener (REST, own PostgreSQL); event-booking shortens meeting links via it. Replaced the `/shortify` WireMock stub |
 | `event-schemas/` | Python, Pydantic | Shared schema library (payloads, envelope, **canonical RabbitMQ topology**); no runtime service |
 | `jitsi-chat/` | TypeScript, React, Vite | Participant-facing video meeting + chat SPA |
 
@@ -35,6 +36,7 @@ cal.com webhooks / external clients     jitsi-chat SPA (Jitsi iframe events)
         │
         ├──► events.booking.lifecycle.booking ──► event-booking
         │         (cal.com DB; GetStream chat; Jitsi meeting URLs; reminders)
+        │         ├──► REST ──► event-shortener (shortens meeting links; own PostgreSQL)
         │         └──► follow-up events (chat.*, meeting.url_*, booking.rejected,
         │              notification.send_requested) ──► HTTP POST back to event-receiver
         │
@@ -51,18 +53,19 @@ cal.com webhooks / external clients     jitsi-chat SPA (Jitsi iframe events)
 
 ## Quick Start (Docker Compose)
 
-The whole system — 9 services, RabbitMQ, 4 PostgreSQL instances, and WireMock
-stand-ins for all external HTTP APIs — runs with one command from the repo root:
+The whole system — 10 services, RabbitMQ, 5 PostgreSQL instances, and WireMock
+stand-ins for the remaining external HTTP APIs — runs with one command from the
+repo root:
 
 ```bash
-docker compose up -d --build     # 9 services + infra; no .env needed (dev defaults baked in)
+docker compose up -d --build     # 10 services + infra; no .env needed (dev defaults baked in)
 docker compose --profile observability up -d --build   # + Prometheus/Grafana/Alertmanager/exporters
 cp .env.example .env             # optional: copy + edit only what you change
 docker compose down -v           # tear down (incl. volumes; add --profile observability to also stop it)
 ```
 
 The observability stack lives in the **`observability` compose profile** and is OFF
-by default — the bare `up` starts only the 14 app/infra containers. Enable it per the
+by default — the bare `up` starts only the 16 app/infra containers. Enable it per the
 second command above, or set `COMPOSE_PROFILES=observability` in `.env` to make it part
 of the default `up`.
 
@@ -73,6 +76,7 @@ Host ports:
 | 8888 | event-receiver (ingress webhooks: `/event/calcom`, `/event/jitsi`, …) |
 | 8001 | event-users API |
 | 8002 | event-admin API |
+| 8000 | event-shortener API (REST URL shortener; event-booking calls it) |
 | 3000 | event-admin-frontend (nginx, same-origin proxy to event-admin) |
 | 8080 | jitsi-chat SPA |
 | 8089 | WireMock mocks (journal: `http://localhost:8089/__admin/requests`) |
@@ -170,6 +174,7 @@ Each service has its own `CLAUDE.md` (commands, architecture) and `docs/` direct
 | `event-admin-frontend/` | Vite/React, routing, auth flow | SERVICE_OVERVIEW, API_CONTRACTS, DEPENDENCIES, AUDIT |
 | `event-users/` | user/contact CRUD, CRM sync | SERVICE_OVERVIEW, API_CONTRACTS, DATA_MODEL, DEPENDENCIES, AUDIT |
 | `event-notifier/` | notification dispatch, channels | SERVICE_OVERVIEW, API_CONTRACTS, DEPENDENCIES, AUDIT |
+| `event-shortener/` | REST URL shortener, idents, redirect | SERVICE_OVERVIEW, API_CONTRACTS, DEPENDENCIES, AUDIT |
 | `event-schemas/` | event types, priorities, versioning | SERVICE_OVERVIEW, API_CONTRACTS, DEPENDENCIES, AUDIT |
 | `jitsi-chat/` | Jitsi video + Stream Chat SPA | SERVICE_OVERVIEW, API_CONTRACTS, DEPENDENCIES |
 

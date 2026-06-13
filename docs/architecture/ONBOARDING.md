@@ -37,13 +37,14 @@ event-notifier is the newest service. It has no migration framework (raw SQL boo
 
 ### Quick start: one command (recommended)
 
-The root `docker-compose.yml` starts everything — all 9 services, RabbitMQ,
-four PostgreSQL containers (saver/users/notifier/cal.com fixture) and a
-WireMock container mocking every external HTTP API (Shortify, UniSender Go,
-Telegram, GetStream):
+The root `docker-compose.yml` starts everything — all 10 services, RabbitMQ,
+five PostgreSQL containers (saver/users/notifier/shortener/cal.com fixture) and
+a WireMock container mocking the remaining external HTTP APIs (UniSender Go,
+Telegram, GetStream). The former `/shortify` WireMock stub was replaced by the
+real `event-shortener` service:
 
 ```bash
-docker compose up -d --build    # 9 services + infra (14 containers); no .env required
+docker compose up -d --build    # 10 services + infra; no .env required
 docker compose --profile observability up -d --build   # + monitoring stack (see below)
 docker compose ps               # wait until everything is (healthy)
 docker compose down -v          # tear down, including volumes
@@ -63,7 +64,8 @@ fixture, or swap the `mocks` endpoints (`SHORTENER_URL`, `UNISENDER_BASE_URL`,
 `TELEGRAM_BASE_URL`, `CHAT_BASE_URL`) for real APIs.
 
 Entry points (defaults): event-receiver `:8888`, event-users `:8001`,
-event-admin `:8002`, admin frontend `:3000`, jitsi-chat `:8080`, WireMock
+event-admin `:8002`, event-shortener `:8000`, admin frontend `:3000`,
+jitsi-chat `:8080`, WireMock
 request journal `:8089/__admin/requests`, RabbitMQ management `:15672`,
 Prometheus `:9090` (127.0.0.1 only), Grafana `:3001` (admin/admin),
 Alertmanager `:9093` (127.0.0.1 only) — the last three only with the
@@ -77,6 +79,7 @@ Every published host port is an env var with the default above — override in
 | `RECEIVER_PORT` | 8888 | event-receiver |
 | `USERS_PORT` | 8001 | event-users |
 | `ADMIN_PORT` | 8002 | event-admin |
+| `SHORTENER_PORT` | 8000 | event-shortener |
 | `ADMIN_FRONTEND_PORT` | 3000 | event-admin-frontend |
 | `JITSI_CHAT_PORT` | 8080 | jitsi-chat |
 | `RABBITMQ_AMQP_PORT` | 5672 | rabbitmq (127.0.0.1 only) |
@@ -231,8 +234,9 @@ with `docker compose --profile observability up -d` or set
   `admin_blacklist_ops_total{op}`, and more — see each service's `*/metrics.py`.
 - **Infrastructure**: RabbitMQ via the `rabbitmq_prometheus` plugin
   (`rabbitmq_queue_messages{queue}` incl. `*.dlq` depths; per-object metrics
-  enabled in `docker/rabbitmq/20-prometheus.conf`) and the four PostgreSQL DBs
-  via one `postgres_exporter` container each (`db` label: saver/users/notifier/calcom).
+  enabled in `docker/rabbitmq/20-prometheus.conf`) and the five PostgreSQL DBs
+  via one `postgres_exporter` container each
+  (`db` label: saver/users/notifier/shortener/calcom).
 
 Every Python service serves `GET /metrics` on the same port as `/health` (8888
 in-container). Scrape config: `docker/prometheus/prometheus.yml` (15s interval).

@@ -13,12 +13,13 @@ An event-driven microservices system for managing bookings, participants, and no
 |---------|---------|-----------|------------------|
 | event-receiver | HTTP ingress gateway: validates webhooks (incl. cal.com `POST /event/calcom`), normalizes to the `{original, normalized}` CloudEvent envelope, publishes to RabbitMQ | Python 3.14, FastAPI, FastStream, Dishka | 103 |
 | event-saver | Consumes RabbitMQ queues, deduplicates, persists raw events, builds projection tables; owns the main DB schema (alembic) | Python 3.14, FastAPI, FastStream, SQLAlchemy 2.x, Alembic, Dishka | 100 |
-| event-booking | Booking orchestrator: consumes `events.booking.lifecycle.booking`, reads/writes the cal.com DB, enforces booking constraints, creates GetStream chat channels, mints per-participant Jitsi JWT meeting URLs (Shortify), schedules reminders, publishes follow-up events back through event-receiver | Python 3.14, FastAPI (health), FastStream, SQLAlchemy, Dishka, stream-chat, PyJWT | 88 |
+| event-booking | Booking orchestrator: consumes `events.booking.lifecycle.booking`, reads/writes the cal.com DB, enforces booking constraints, creates GetStream chat channels, mints per-participant Jitsi JWT meeting URLs (shortened via event-shortener), schedules reminders, publishes follow-up events back through event-receiver | Python 3.14, FastAPI (health), FastStream, SQLAlchemy, Dishka, stream-chat, PyJWT | 88 |
 | event-admin | Read-only API over event-saver's DB for admin UI; publishes admin actions (email change, client reassign) via event-receiver | Python 3.14, FastAPI, SQLAlchemy 2.x, Dishka | 75 |
 | event-admin-frontend | Admin SPA: bookings list, booking details, participants (talks only to event-admin, incl. its users proxy) | TypeScript, React 18, Vite, Vitest | 27 |
 | jitsi-chat | Participant-facing video meeting + chat SPA; sends Jitsi iframe telemetry CloudEvents to event-receiver | TypeScript, React 19, Vite 7, @jitsi/react-sdk, stream-chat, Vitest | 21 |
 | event-users | User/contact CRUD with background CRM sync and CRM webhook outbox; consumes `events.user.email` | Python 3.14, FastAPI, SQLAlchemy 2.x, Dishka | 55 |
 | event-notifier | Notification dispatcher: consumes `events.notification.commands`, transactional outbox, email/Telegram delivery, publishes `notification.*.message_sent` delivery results back via event-receiver | Python 3.14, FastAPI, FastStream, asyncpg, Dishka, Jinja2 | 80 |
+| event-shortener | REST URL shortener: shortens meeting links for event-booking (`POST/GET/PATCH/DELETE /api/v1/urls/*` + public `GET /{ident}` redirect), own PostgreSQL. Replaced the `/shortify` WireMock stub | Python 3.14, FastAPI, SQLAlchemy 2.x, Alembic, Dishka | — |
 | event-schemas | Shared Python library (v0.2.0): Pydantic payload models, EventType enum, priorities, **canonical RabbitMQ topology** (`queues.py`), envelope (`envelope.py`), CloudEvent attributes | Python, Pydantic v2 | 73 |
 
 ## System Topology
@@ -38,7 +39,6 @@ flowchart TD
         TELEGRAM_API[Telegram Bot API]
         CRM[External CRM API]
         GETSTREAM_API[GetStream Chat API]
-        SHORTIFY[Shortify URL shortener]
     end
 
     subgraph Infra["Infrastructure"]
@@ -47,6 +47,7 @@ flowchart TD
         PG_USERS[(PostgreSQL\nusers DB\nport 5446)]
         PG_NOTIFIER[(PostgreSQL\nnotifier DB\nport 5432)]
         PG_CALCOM[(PostgreSQL\ncal.com DB)]
+        PG_SHORTENER[(PostgreSQL\nshortener DB)]
     end
 
     subgraph Services["Application Services"]
@@ -57,6 +58,7 @@ flowchart TD
         FRONTEND[event-admin-frontend\nVite SPA]
         USERS[event-users\nPort 8001]
         NOTIFIER[event-notifier\nBackground consumer]
+        SHORTENER[event-shortener\nREST URL shortener\nPort 8000]
     end
 
     subgraph Lib["Shared Libraries"]
@@ -100,7 +102,8 @@ flowchart TD
     NOTIFIER -->|"sendMessage"| TELEGRAM_API
     USERS -->|"CRM sync + webhook outbox\n(AES encrypted)"| CRM
     BOOKING -->|"create channels, tokens"| GETSTREAM_API
-    BOOKING -->|"short meeting URLs"| SHORTIFY
+    BOOKING -->|"shorten meeting URLs\n(Bearer key, REST)"| SHORTENER
+    SHORTENER -->|"read/write"| PG_SHORTENER
 
     %% Library dependencies (compile-time)
     SCHEMAS -.->|"pip import"| RECEIVER
