@@ -1,0 +1,13 @@
+apiVersion: 1
+
+# VictoriaLogs datasource for the Logs dashboard + Grafana Explore. Separate
+# file so the existing Prometheus datasource (prometheus.yml, uid `prometheus`)
+# is untouched. Requires the `victoriametrics-logs-datasource` plugin, installed
+# via GF_INSTALL_PLUGINS on the grafana container.
+datasources:
+  - name: VictoriaLogs
+    uid: victorialogs # docker/grafana/dashboards/logs.json references this uid
+    type: victoriametrics-logs-datasource
+    access: proxy
+    url: http://victorialogs:9428
+    editable: false

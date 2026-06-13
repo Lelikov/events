@@ -224,6 +224,8 @@ services:
       GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
       GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
       GF_USERS_ALLOW_SIGN_UP: "false"
+      # VictoriaLogs datasource plugin (provisioned in datasources/victorialogs.yml).
+      GF_INSTALL_PLUGINS: victoriametrics-logs-datasource
     volumes:
       # Datasource (uid `prometheus`) + the two dashboards are provisioned
       # from the repo — no clicking required after `docker compose up`.
@@ -269,6 +271,42 @@ services:
       timeout: 5s
       retries: 5
       start_period: 10s
+    restart: unless-stopped
+
+  # --------------------------------------------------------------------------
+  # Logging: Vector (collector) -> VictoriaLogs (storage), queried in Grafana.
+  # (design: docs/superpowers/specs/2026-06-13-log-aggregation-vector-victorialogs-design.md)
+  # --------------------------------------------------------------------------
+  victorialogs:
+    image: victoriametrics/victoria-logs:v1.50.0
+    profiles: ["observability"]
+    command:
+      - "-retentionPeriod=${LOGS_RETENTION_PERIOD:-7d}"
+      - "-storageDataPath=/victoria-logs-data"
+    volumes:
+      - victorialogs-data:/victoria-logs-data
+    ports:
+      # Loopback-only: built-in UI + LogsQL API (/select/logsql/query) on :9428.
+      - "127.0.0.1:${VICTORIALOGS_PORT:-9428}:9428"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO /dev/null http://127.0.0.1:9428/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+
+  # Vector tails every container's stdout via the Docker socket (read-only),
+  # parses structlog JSON, and ships to VictoriaLogs. No app changes needed.
+  vector:
+    image: timberio/vector:0.56.0-alpine
+    profiles: ["observability"]
+    volumes:
+      - ./docker/vector/vector.yaml:/etc/vector/vector.yaml:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    depends_on:
+      victorialogs:
+        condition: service_healthy
     restart: unless-stopped
 
   # --------------------------------------------------------------------------
@@ -567,3 +605,4 @@ volumes:
   pg-calcom-data:
   prometheus-data:
   alertmanager-data:
+  victorialogs-data:

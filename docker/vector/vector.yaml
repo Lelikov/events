@@ -1,0 +1,81 @@
+# Vector config — collects every container's stdout/stderr via the Docker
+# socket and ships it to VictoriaLogs. Part of the `observability` compose
+# profile (design: docs/superpowers/specs/2026-06-13-log-aggregation-vector-victorialogs-design.md).
+#
+# Pipeline: docker_logs (source) -> remap (parse structlog JSON) -> elasticsearch
+# sink pointed at VictoriaLogs' Elasticsearch-bulk ingest endpoint.
+
+# Vector self-telemetry off — we don't scrape Vector itself here.
+data_dir: /vector-data-dir
+
+sources:
+  docker_logs:
+    type: docker_logs
+    # Read every container. Exclude Vector itself (by container name and image)
+    # to avoid a log feedback loop where Vector ingests its own output.
+    exclude_containers:
+      - vector
+      - timberio/vector
+
+transforms:
+  parse:
+    type: remap
+    inputs:
+      - docker_logs
+    source: |-
+      # Service name from the compose service label, falling back to the
+      # container name. Vector exposes container labels under `.label`.
+      .service = .label."com.docker.compose.service" || .container_name || "unknown"
+      .container = .container_name
+      .stream = .stream
+
+      # Keep the docker_logs-provided timestamp (RFC3339) as the event time.
+      # `.timestamp` is already set by the docker_logs source.
+
+      # Try to parse the raw line as JSON (the 7 Python services emit structlog
+      # JSON when DEBUG=false). On failure, keep the raw line as `_msg`.
+      parsed, err = parse_json(.message)
+      if err == null && is_object(parsed) {
+          # Merge structured fields, then normalise the message/level fields.
+          obj = object!(parsed)
+          . = merge(., obj)
+          ._msg = string(obj.event) ?? string(obj.message) ?? string(.message)
+          if exists(obj.level) {
+              .level = downcase(string!(obj.level))
+          }
+          # structlog carries its own ISO timestamp; prefer it when present so
+          # log time matches the application clock rather than capture time.
+          if exists(obj.timestamp) {
+              ts, tserr = parse_timestamp(string!(obj.timestamp), "%+")
+              if tserr == null {
+                  .timestamp = ts
+              }
+          }
+      } else {
+          # Plain-text infra logs (Postgres, RabbitMQ, nginx, Caddy, WireMock).
+          ._msg = .message
+      }
+
+      # Drop the now-redundant raw fields the sink doesn't need.
+      del(.message)
+      del(.label)
+
+sinks:
+  victorialogs:
+    type: elasticsearch
+    inputs:
+      - parse
+    endpoints:
+      - http://victorialogs:9428/insert/elasticsearch/
+    # VictoriaLogs speaks the ES bulk API; v8 is the documented api_version.
+    api_version: v8
+    compression: gzip
+    # VictoriaLogs has no ES `/` health route — skip Vector's ES healthcheck.
+    healthcheck:
+      enabled: false
+    # VL reads these from the bulk request query string: which field is the
+    # message, which is the time, and which form the log stream identity.
+    query:
+      _msg_field: _msg
+      _time_field: timestamp
+      _stream_fields: service,container
