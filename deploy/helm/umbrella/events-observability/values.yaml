@@ -151,6 +151,34 @@ kube-prometheus-stack:
         isDefault: false
         jsonData:
           maxLines: 1000
+          # Derived field: clicking a trace_id log label jumps to the Tempo trace.
+          # Mirrors docker/grafana/provisioning/datasources/victorialogs.yml.
+          derivedFields:
+            - name: trace_id
+              matcherType: label
+              matcherRegex: trace_id
+              url: "${__value.raw}"
+              datasourceUid: tempo
+      - name: Tempo
+        uid: tempo # dashboards can reference datasource uid `tempo`
+        type: tempo
+        access: proxy
+        # In-cluster Tempo server (tempo subchart Service, release events-observability).
+        url: http://events-observability-tempo:3200
+        isDefault: false
+        editable: false
+        jsonData:
+          # Logs ↔ traces correlation: clicking a trace in Tempo opens the matching
+          # VictoriaLogs stream. Mirrors docker/grafana/provisioning/datasources/tempo.yml.
+          tracesToLogsV2:
+            datasourceUid: victorialogs
+            filterByTraceID: true
+            spanStartTimeShift: -1h
+            spanEndTimeShift: 1h
+          serviceMap:
+            datasourceUid: prometheus
+          nodeGraph:
+            enabled: true
 
 # ===========================================================================
 # VictoriaLogs server (logs store + query backend for the victorialogs DS).
@@ -237,3 +265,104 @@ vector:
           _msg_field: _msg
           _time_field: timestamp
           _stream_fields: service,container
+
+# ===========================================================================
+# Grafana Tempo — single-binary trace store.
+# Config mirrors docker/tempo/tempo.yaml: OTLP gRPC+HTTP receiver, local
+# filesystem storage, 7-day block retention.
+# In-cluster Service name: events-observability-tempo (port 3200 HTTP, 4317 gRPC).
+# ===========================================================================
+tempo:
+  tempo:
+    reportingEnabled: false
+    storage:
+      trace:
+        backend: local
+        local:
+          path: /var/tempo/blocks
+        wal:
+          path: /var/tempo/wal
+    ingester:
+      max_block_duration: 5m
+    compactor:
+      compaction:
+        block_retention: 168h   # 7 days, matches VictoriaLogs retention
+    distributor:
+      receivers:
+        otlp:
+          protocols:
+            grpc:
+              endpoint: 0.0.0.0:4317
+            http:
+              endpoint: 0.0.0.0:4318
+    server:
+      http_listen_port: 3200
+      grpc_listen_port: 9096
+  persistence:
+    enabled: true
+    size: 10Gi
+  service:
+    type: ClusterIP
+  serviceAccount:
+    create: true
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+
+# ===========================================================================
+# OpenTelemetry Collector — deployment mode, OTLP receiver, exports to Tempo.
+# Config mirrors docker/otel-collector/config.yaml.
+# In-cluster Service name: events-observability-opentelemetry-collector (port 4317).
+# Services send traces to http://events-observability-opentelemetry-collector:4317
+# (configured via OTEL_EXPORTER_OTLP_ENDPOINT in each service's Vault secret).
+# ===========================================================================
+opentelemetry-collector:
+  mode: deployment
+  image:
+    repository: otel/opentelemetry-collector-contrib
+  # Disable the default clusterRole (not needed for a deployment-mode collector
+  # that only receives and forwards traces — no k8s API access required).
+  clusterRole:
+    create: false
+  serviceAccount:
+    create: true
+  config:
+    receivers:
+      otlp:
+        protocols:
+          grpc:
+            endpoint: 0.0.0.0:4317
+          http:
+            endpoint: 0.0.0.0:4318
+
+    processors:
+      memory_limiter:
+        check_interval: 1s
+        limit_percentage: 80
+        spike_limit_percentage: 20
+      batch:
+        timeout: 2s
+      resource:
+        attributes:
+          - key: deployment.environment
+            value: kubernetes
+            action: upsert
+
+    exporters:
+      otlp/tempo:
+        # In-cluster Tempo Service (events-observability release prefix).
+        endpoint: events-observability-tempo:4317
+        tls:
+          insecure: true
+
+    service:
+      pipelines:
+        traces:
+          receivers: [otlp]
+          processors: [memory_limiter, batch, resource]
+          exporters: [otlp/tempo]
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi

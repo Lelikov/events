@@ -90,3 +90,22 @@ vector:
       memory: 128Mi
     limits:
       memory: 256Mi
+
+tempo:
+  persistence:
+    enabled: true
+    size: 50Gi
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      memory: 1Gi
+
+opentelemetry-collector:
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      memory: 512Mi

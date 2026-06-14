@@ -3,12 +3,13 @@ name: events-observability
 description: >-
   Observability umbrella for the events platform on Kubernetes: metrics
   (kube-prometheus-stack: Prometheus Operator + Grafana + Alertmanager), logs
-  (VictoriaLogs single + a Vector DaemonSet shipping pod logs), and the migrated
+  (VictoriaLogs single + a Vector DaemonSet shipping pod logs), distributed
+  tracing (Grafana Tempo + OpenTelemetry Collector), and the migrated
   docker-compose assets — 3 Grafana dashboards, PrometheusRule alert rules, a
   ServiceMonitor scraping the 7 metrics-exposing services, and Telegram
   Alertmanager routing. Deployed separately from events-platform.
 type: application
-version: 0.1.0
+version: 0.2.0
 appVersion: "latest"
 
 # OCI repositories used on purpose: the prometheus-community / victoriametrics /
@@ -33,3 +34,15 @@ dependencies:
   - name: vector
     version: 0.56.0
     repository: oci://ghcr.io/vectordotdev/helm-charts
+  # Grafana Tempo — single-binary trace store (OTLP receiver, local storage).
+  # Plan specified 1.18.2 but that version is no longer published; using the
+  # current stable 1.24.4 (appVersion 2.9.0). Config mirrors docker/tempo/tempo.yaml.
+  - name: tempo
+    version: 1.24.4
+    repository: https://grafana.github.io/helm-charts
+  # OpenTelemetry Collector (deployment mode) — receives OTLP from all Python
+  # services and forwards to Tempo. Plan specified 0.111.0; using current stable
+  # 0.158.1 (appVersion 0.153.0). Config mirrors docker/otel-collector/config.yaml.
+  - name: opentelemetry-collector
+    version: 0.158.1
+    repository: https://open-telemetry.github.io/opentelemetry-helm-charts

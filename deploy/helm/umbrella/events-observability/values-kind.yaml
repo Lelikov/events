@@ -71,3 +71,17 @@ vector:
     requests:
       cpu: 25m
       memory: 64Mi
+
+tempo:
+  persistence:
+    enabled: false # emptyDir in kind
+  resources:
+    requests:
+      cpu: 25m
+      memory: 64Mi
+
+opentelemetry-collector:
+  resources:
+    requests:
+      cpu: 15m
+      memory: 64Mi
