@@ -2,7 +2,7 @@
 # All runtime env (secret and non-secret) comes from Vault via ESO (phase 2).
 
 nameOverride: ""
-fullnameOverride: ""
+fullnameOverride: "event-notifier"
 
 replicas: 1
 
