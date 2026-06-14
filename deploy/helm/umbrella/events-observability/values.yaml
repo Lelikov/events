@@ -205,6 +205,7 @@ victoria-logs-single:
 # k8s port of docker/vector/vector.yaml's structlog parser.
 # ===========================================================================
 vector:
+  enabled: true
   role: Agent
   customConfig:
     data_dir: /vector-data-dir
@@ -273,6 +274,7 @@ vector:
 # In-cluster Service name: events-observability-tempo (port 3200 HTTP, 4317 gRPC).
 # ===========================================================================
 tempo:
+  enabled: true
   tempo:
     reportingEnabled: false
     storage:
@@ -318,6 +320,7 @@ tempo:
 # (configured via OTEL_EXPORTER_OTLP_ENDPOINT in each service's Vault secret).
 # ===========================================================================
 opentelemetry-collector:
+  enabled: true
   mode: deployment
   image:
     repository: otel/opentelemetry-collector-contrib
