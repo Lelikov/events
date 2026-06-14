@@ -21,12 +21,12 @@
 | `event-saver` | Python, FastAPI, FastStream | Консьюмер RabbitMQ; **владеет** основной базой PostgreSQL и пишет в неё |
 | `event-booking` | Python, FastAPI, FastStream | Оркестратор бронирований: лимиты и чёрные списки, чтение/запись БД cal.com, GetStream-чаты, Jitsi-ссылки, напоминания, публикация follow-up событий |
 | `event-admin` | Python, FastAPI | Read-only API над БД event-saver; публикует админ-действия через event-receiver |
-| `event-admin-frontend` | TypeScript, React, Vite | Админ-панель: бронирования, участники, чёрный список |
+| `event-admin-frontend` | TypeScript, React, Vite | Админ-панель: бронирования, участники, чёрный список; мониторинг ошибок + производительности (Sentry, опционально) |
 | `event-users` | Python, FastAPI | Управление пользователями и контактами, синхронизация с CRM; консьюмер `events.user.email` |
 | `event-notifier` | Python, FastAPI, FastStream | Доставка уведомлений: outbox → email (UniSender) / Telegram, публикация результатов доставки |
 | `event-shortener` | Python, FastAPI | REST-сократитель ссылок (своя PostgreSQL); event-booking сокращает через него ссылки на встречи |
 | `event-schemas` | Python, Pydantic | Общая библиотека схем: payload'ы, конверт, **каноническая топология RabbitMQ**; не рантайм-сервис |
-| `jitsi-chat` | TypeScript, React, Vite | SPA участника: видеовстреча Jitsi + чат Stream |
+| `jitsi-chat` | TypeScript, React, Vite | SPA участника: видеовстреча Jitsi + чат Stream; мониторинг ошибок + производительности (Sentry, опционально) |
 
 ## Поток данных
 
@@ -125,6 +125,10 @@ Prometheus собирает метрики сервисов + RabbitMQ + postgre
 (`OTEL_SDK_DISABLED=true`); для включения запустите профиль с
 `OTEL_SDK_DISABLED=false docker compose --profile observability up -d --build`.
 Конфиги — `docker/tempo/tempo.yaml`, `docker/otel-collector/config.yaml`.
+**Фронтенды**: оба SPA (`event-admin-frontend`, `jitsi-chat`) поддерживают мониторинг
+ошибок + производительности через **Sentry** (`@sentry/react`, без session replay).
+Включается через `VITE_SENTRY_ENABLED=true` + `VITE_SENTRY_DSN`; по умолчанию выключен.
+Конфигурация доставляется через `window._env_` (runtime), в k8s — через Vault/ESO.
 Подробности — [`docs/architecture/ONBOARDING.md`](docs/architecture/ONBOARDING.md) § Observability.
 
 ## Production (Kubernetes)

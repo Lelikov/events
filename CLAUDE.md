@@ -12,12 +12,12 @@ This is a **multi-service event-driven system** for managing bookings and partic
 | `event-saver/` | Python, FastAPI, FastStream | Consumes RabbitMQ, **owns and writes** the main PostgreSQL database |
 | `event-booking/` | Python, FastAPI, FastStream | Booking orchestrator: consumes lifecycle events, reads/writes the cal.com DB, creates GetStream chats + Jitsi meeting URLs, schedules reminders, publishes follow-up events via event-receiver |
 | `event-admin/` | Python, FastAPI | Read-only API over `event-saver`'s DB; publishes admin actions via event-receiver |
-| `event-admin-frontend/` | TypeScript, React, Vite | Admin UI for bookings and participants |
+| `event-admin-frontend/` | TypeScript, React, Vite | Admin UI for bookings and participants; Sentry error+perf monitoring (gated, off by default) |
 | `event-users/` | Python, FastAPI | Separate user/contact management service with CRM sync; consumes `events.user.email` |
 | `event-notifier/` | Python, FastAPI, FastStream, asyncpg | Notification dispatcher: consumes `events.notification.commands`, outbox + email/Telegram delivery, publishes delivery-result events |
 | `event-shortener/` | Python, FastAPI | URL shortener (REST, own PostgreSQL); event-booking shortens meeting links via it. Replaced the `/shortify` WireMock stub |
 | `event-schemas/` | Python, Pydantic | Shared schema library (payloads, envelope, **canonical RabbitMQ topology**); no runtime service |
-| `jitsi-chat/` | TypeScript, React, Vite | Participant-facing video meeting + chat SPA |
+| `jitsi-chat/` | TypeScript, React, Vite | Participant-facing video meeting + chat SPA; Sentry error+perf monitoring (gated, off by default) |
 
 ## System Data Flow
 
@@ -103,9 +103,14 @@ Tracing: every Python service exports OpenTelemetry spans via OTLP/gRPC to **ote
 → **Tempo** (datasource uid `tempo`); off by default (`OTEL_SDK_DISABLED=true`); enable with
 `OTEL_SDK_DISABLED=false docker compose --profile observability up -d --build`. Configs:
 `docker/tempo/tempo.yaml`, `docker/otel-collector/config.yaml`.
+Frontend monitoring: both SPAs (`event-admin-frontend`, `jitsi-chat`) ship **Sentry** error +
+performance tracking (`@sentry/react`, no replay); gated by `VITE_SENTRY_ENABLED=true` +
+`VITE_SENTRY_DSN` (off by default); runtime config via `window._env_`; CI source-map upload
+via `@sentry/vite-plugin` (repo secrets `SENTRY_ORG`/`SENTRY_PROJECT`/`SENTRY_AUTH_TOKEN`);
+best-effort Sentry↔Tempo correlation via `SentryTracePropagator` in the shared `telemetry.py`.
 See `docs/architecture/ONBOARDING.md` § Observability for what's collected, the
-alert set, how to add a metric or rule, and the full tracing guide (TraceQL, manual spans,
-logs↔traces correlation).
+alert set, how to add a metric or rule, the full tracing guide (TraceQL, manual spans,
+logs↔traces correlation), and the Frontend observability (Sentry) subsection.
 
 ### Симуляция событий cal.com
 

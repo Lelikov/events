@@ -391,6 +391,51 @@ request and every RabbitMQ consume. It travels alongside the `ce-*` CloudEvent h
 `docs/architecture/MESSAGE_CONTRACTS.md` § Overview). `ce-traceid`/`ce-spanid` are derived
 from the active span whenever one exists.
 
+### Frontend observability (Sentry)
+
+Both React/Vite SPAs (`event-admin-frontend`, `jitsi-chat`) ship `@sentry/react` for
+**errors + performance monitoring** (no session replay). Key facts:
+
+- **What's captured**: unhandled JS exceptions (via `ErrorBoundary.componentDidCatch` +
+  `Sentry.captureException`) and page-load / fetch performance transactions
+  (`browserTracingIntegration`). `sendDefaultPii: false` throughout.
+- **Gating**: Sentry is initialized only when `VITE_SENTRY_ENABLED=true` AND a non-empty
+  `VITE_SENTRY_DSN` are both present. The default (`VITE_SENTRY_ENABLED` absent / `false`)
+  is fully off — no Sentry network calls in local dev or tests.
+- **Runtime config via `window._env_`**: all `VITE_SENTRY_*` knobs are delivered at
+  container start (nginx/Caddy entrypoint regenerates `env-config.js` / `env-config.js`
+  from `^VITE_*` env vars), so one image serves every environment without a rebuild. In
+  Kubernetes, the vars arrive via Vault → ESO → `envFrom` (same pattern as backend services).
+- **Source-map upload in CI**: each SPA's `publish-image.yml` passes three repo secrets
+  (`SENTRY_ORG`, `SENTRY_PROJECT`, `SENTRY_AUTH_TOKEN`) to the Docker build stage. The
+  `@sentry/vite-plugin` uploads hidden source maps (`build.sourcemap: "hidden"`) to Sentry
+  keyed to `release=<git sha>`, then deletes them from the output. Without a token (local
+  build) the plugin is disabled and the build still succeeds.
+- **Best-effort Tempo correlation**: `jitsi-chat` sets `VITE_SENTRY_BACKEND_URL` to the
+  event-receiver public origin; `event-admin-frontend` relies on the same-origin nginx proxy
+  so `VITE_SENTRY_BACKEND_URL` may be left empty (the `window.location.origin` target covers
+  it). Sentry's `browserTracingIntegration` attaches a `sentry-trace` header to matching
+  fetch calls. On the backend, a `SentryTracePropagator` in the shared `telemetry.py` (all
+  seven Python services) extracts the `sentry-trace` header and continues the same 128-bit
+  trace id into the OTel span, so the backend span is visible in Tempo under the Sentry
+  transaction's trace id. This is best-effort: the link surfaces only for `event-admin` and
+  `event-receiver` (the two services the SPAs call); the propagator is a no-op everywhere
+  else.
+
+**Runtime knobs** (all `VITE_*` so the container entrypoint picks them up):
+
+| Variable | Purpose |
+|---|---|
+| `VITE_SENTRY_ENABLED` | `"true"` to activate; anything else → off |
+| `VITE_SENTRY_DSN` | Project DSN from sentry.io (public-safe; empty placeholder in seed-vault.sh) |
+| `VITE_SENTRY_ENVIRONMENT` | Environment tag on every event (`"production"`, `"staging"`, …) |
+| `VITE_SENTRY_TRACES_SAMPLE_RATE` | 0–1 performance-sampling rate (prod default: `0.1`) |
+| `VITE_SENTRY_BACKEND_URL` | *(jitsi-chat only)* event-receiver public origin for `sentry-trace` propagation |
+
+**CI secrets** (build-time only, never shipped to the browser, never in Vault):
+`SENTRY_AUTH_TOKEN`, `SENTRY_ORG`, `SENTRY_PROJECT` — add as GitHub Actions repo secrets in
+`Lelikov/event-admin-frontend` and `Lelikov/jitsi-chat` for source-map uploads to activate.
+
 ### Logging (Vector + VictoriaLogs)
 
 In the same `observability` profile, **Vector** tails every container's

@@ -251,15 +251,35 @@ put event-shortener \
   OTEL_TRACES_SAMPLER_ARG="0.1"
 
 # --- event-admin-frontend (nginx SPA; same-origin proxy, no app secrets) ----
+# VITE_SENTRY_DSN: leave empty — the operator sets the real DSN for this project.
+# VITE_SENTRY_BACKEND_URL: same-origin (nginx proxy) — window.location.origin
+#   already covers it; tracePropagationTargets needs no extra entry.
 put event-admin-frontend \
-  VITE_API_BASE_URL=""
+  VITE_API_BASE_URL="" \
+  VITE_SENTRY_ENABLED="true" \
+  VITE_SENTRY_DSN="" \
+  VITE_SENTRY_ENVIRONMENT="production" \
+  VITE_SENTRY_TRACES_SAMPLE_RATE="0.1"
 
 # --- jitsi-chat (browser SPA; only public VITE_* vars) ----------------------
+# VITE_SENTRY_DSN: leave empty — the operator sets the real DSN for this project.
+# VITE_SENTRY_BACKEND_URL: the event-receiver public origin that jitsi-chat calls.
+#   Set to the deployed receiver URL (e.g. https://receiver.example.com) so
+#   Sentry's browserTracingIntegration adds sentry-trace headers to those fetches.
 put jitsi-chat \
   VITE_JITSI_DOMAIN="${VITE_JITSI_DOMAIN}" \
   VITE_WEBHOOK_URL="https://receiver.example.com/event/jitsi" \
   VITE_STREAM_CHAT_API_KEY="${CHAT_API_KEY}" \
-  VITE_STREAM_CHAT_BASE_URL="${VITE_STREAM_CHAT_BASE_URL}"
+  VITE_STREAM_CHAT_BASE_URL="${VITE_STREAM_CHAT_BASE_URL}" \
+  VITE_SENTRY_ENABLED="true" \
+  VITE_SENTRY_DSN="" \
+  VITE_SENTRY_ENVIRONMENT="production" \
+  VITE_SENTRY_TRACES_SAMPLE_RATE="0.1" \
+  VITE_SENTRY_BACKEND_URL=""
 
 echo "Done. Seeded 9 services under secret/events/*."
+echo "NOTE: VITE_SENTRY_DSN is empty in event-admin-frontend and jitsi-chat — set the real DSN"
+echo "  in Vault after creating a Sentry project (VITE_SENTRY_ENABLED=true gates on a non-empty DSN)."
+echo "NOTE: VITE_SENTRY_BACKEND_URL is empty in jitsi-chat — set to the deployed event-receiver"
+echo "  origin (e.g. https://receiver.example.com) to enable sentry-trace propagation."
 echo "Verify e.g.: VAULT_ADDR=${VAULT_ADDR} vault kv get secret/events/event-saver"
