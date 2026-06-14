@@ -50,12 +50,27 @@ vault_cli() {
   vault "$@"
 }
 
-# Load the dev defaults (ignore comments/blank lines). These become shell vars.
-echo "Sourcing dev defaults from: $ENV_FILE"
-set -a
-# shellcheck disable=SC1090
-source <(grep -E '^[A-Z_][A-Z0-9_]*=' "$ENV_FILE")
-set +a
+# Load the dev defaults (KEY=VALUE lines; ignore comments/blanks). We parse
+# line-by-line rather than `source`-ing the file: .env files use docker-compose
+# semantics (unquoted values may contain spaces, e.g. "Events Dev"), which a
+# shell `source` would mis-tokenize. Everything after the first '=' is the value.
+echo "Loading dev defaults from: $ENV_FILE"
+while IFS= read -r line; do
+  case "$line" in
+    ''|'#'*) continue ;;
+    [A-Z_]*=*) ;;
+    *) continue ;;
+  esac
+  key="${line%%=*}"
+  val="${line#*=}"
+  # Strip one layer of surrounding quotes if present.
+  case "$val" in
+    \"*\") val="${val#\"}"; val="${val%\"}" ;;
+    \'*\') val="${val#\'}"; val="${val%\'}" ;;
+  esac
+  printf -v "$key" '%s' "$val"
+  export "$key"
+done < "$ENV_FILE"
 
 # Internal service URLs (Kubernetes Service DNS; port 8888 internal everywhere).
 RECEIVER_URL="http://event-receiver:8888"

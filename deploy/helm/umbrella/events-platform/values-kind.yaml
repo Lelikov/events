@@ -5,9 +5,13 @@
 #
 # externalSecret stays ENABLED so the rendered manifests match prod, but it
 # REQUIRES the phase-2 prereqs (ESO + a "vault-backend" ClusterSecretStore
-# seeded from a dev-mode Vault). Until phase 2 lands, the kind-smoke job must
-# install ESO + Vault and seed the secret/data/events/<service> paths before
-# the pods will become Ready (envFrom references the ESO-managed secret).
+# seeded from Vault). Before deploying this overlay:
+#   1. Install prereqs + apply ClusterSecretStore/ClusterIssuers:
+#        deploy/helm/prereqs/README.md  (cert-manager -> ingress-nginx -> vault -> ESO)
+#   2. Seed Vault from the repo's dev defaults:
+#        VAULT_ADDR=... VAULT_TOKEN=... deploy/scripts/seed-vault.sh
+#      -> writes secret/events/<service>, resolved as secret/data/events/<service>.
+# Only then do the pods become Ready (envFrom references the ESO-managed secret).
 #
 # cert-manager is not assumed in a bare kind cluster, so the cluster-issuer
 # annotation is cleared and TLS is disabled on the ingresses below.

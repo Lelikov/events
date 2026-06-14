@@ -3,11 +3,33 @@
 Production Kubernetes packaging for the events platform. `docker-compose`
 remains the local-dev story; these charts are for cluster deployment.
 
-> **Phase 1 (this directory) is the Helm core only:** library chart, 9 thin
-> per-service charts, and the `events-platform` umbrella. The runtime
-> prerequisites that make a deploy actually *work* — Vault, External Secrets
-> Operator, ingress-nginx, cert-manager — are **phase 2** and are not here yet.
-> The templates are designed so phase 2 wires them in without rework.
+> **Phase 1 is the Helm core:** library chart, 9 thin per-service charts, the
+> `events-platform` umbrella. **Phase 2 (`prereqs/`) adds the runtime
+> prerequisites** that make a deploy actually *work* — Vault, External Secrets
+> Operator, ingress-nginx, cert-manager — plus the `vault-backend`
+> ClusterSecretStore, Let's Encrypt ClusterIssuers, and the Vault seed script.
+
+## Deploy order (kind / any cluster)
+
+The platform pods only become Ready once the ESO-managed `<release>-env` Secrets
+exist, which requires the prereqs + a seeded Vault. End-to-end:
+
+1. **Install prereqs** — cert-manager → ingress-nginx → Vault → ESO, then apply
+   the ClusterIssuers + ClusterSecretStore. See **[`prereqs/README.md`](prereqs/README.md)**.
+2. **Seed Vault** — `VAULT_ADDR=... VAULT_TOKEN=... deploy/scripts/seed-vault.sh`
+   writes `secret/events/<service>` from the repo's `.env.example` dev defaults
+   (resolved as `secret/data/events/<service>` by each ExternalSecret).
+3. **Deploy the platform** — `helm dependency build` the umbrella, then
+   `helm upgrade --install events-platform umbrella/events-platform -f <overlay>`.
+
+For a quick LOCAL test of just the secret flow (no cluster), use the
+docker-compose `vault` profile (dev mode, OFF by default):
+
+```bash
+docker compose --profile vault up -d vault
+USE_DOCKER_VAULT=1 VAULT_TOKEN=dev-root-token deploy/scripts/seed-vault.sh
+docker compose --profile vault down -v
+```
 
 ## Layout
 
