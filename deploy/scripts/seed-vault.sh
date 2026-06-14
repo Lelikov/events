@@ -81,12 +81,15 @@ ADMIN_RECEIVER_ADMIN_URL="${RECEIVER_URL}/event/admin"
 SHORTENER_INTERNAL_URL="http://event-shortener:8888"
 
 # DB / broker connections are EXTERNAL in prod — operators set the real DSNs.
-PG_SAVER_DSN_PH="postgresql+asyncpg://USER:PASSWORD@CHANGE-ME-saver-host:5432/event_saver"
-PG_USERS_DSN_PH="postgresql+asyncpg://USER:PASSWORD@CHANGE-ME-users-host:5432/event_users"
-PG_NOTIFIER_DSN_PH="postgresql+asyncpg://USER:PASSWORD@CHANGE-ME-notifier-host:5432/event_notifier"
-PG_SHORTENER_DSN_PH="postgresql+asyncpg://USER:PASSWORD@CHANGE-ME-shortener-host:5432/event_shortener"
-CALCOM_DSN_PH="postgresql+asyncpg://USER:PASSWORD@CHANGE-ME-calcom-host:5432/calcom"
-RABBIT_URL_PH="amqp://USER:PASSWORD@CHANGE-ME-rabbit-host:5672/"
+# These are overridable via the environment (`: "${VAR:=default}"`), so the kind
+# smoke (smoke.sh) can point them at the in-cluster devDependencies before
+# calling this script; left unset they keep the CHANGE-ME prod placeholders.
+: "${PG_SAVER_DSN_PH:=postgresql+asyncpg://USER:PASSWORD@CHANGE-ME-saver-host:5432/event_saver}"
+: "${PG_USERS_DSN_PH:=postgresql+asyncpg://USER:PASSWORD@CHANGE-ME-users-host:5432/event_users}"
+: "${PG_NOTIFIER_DSN_PH:=postgresql+asyncpg://USER:PASSWORD@CHANGE-ME-notifier-host:5432/event_notifier}"
+: "${PG_SHORTENER_DSN_PH:=postgresql+asyncpg://USER:PASSWORD@CHANGE-ME-shortener-host:5432/event_shortener}"
+: "${CALCOM_DSN_PH:=postgresql+asyncpg://USER:PASSWORD@CHANGE-ME-calcom-host:5432/calcom}"
+: "${RABBIT_URL_PH:=amqp://USER:PASSWORD@CHANGE-ME-rabbit-host:5672/}"
 
 put() {
   local svc="$1"; shift
