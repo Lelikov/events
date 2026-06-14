@@ -152,8 +152,8 @@ R_prereqs="PASS"; ok "prereqs installed"
 # Postgres/RabbitMQ that values-kind.yaml brings up under the events-platform
 # release in namespace ${NS}). The seed script reads override env vars for the
 # DSN/RABBIT placeholders.
-PG_HOST="events-platform-devPostgresql.${NS}.svc"
-RABBIT_HOST="events-platform-devRabbitmq.${NS}.svc"
+PG_HOST="events-platform-devpostgresql.${NS}.svc"
+RABBIT_HOST="events-platform-devrabbitmq.${NS}.svc"
 export PG_SAVER_DSN_PH="postgresql+asyncpg://postgres:postgres@${PG_HOST}:5432/event_saver"
 export PG_USERS_DSN_PH="postgresql+asyncpg://postgres:postgres@${PG_HOST}:5432/event_users"
 export PG_NOTIFIER_DSN_PH="postgresql+asyncpg://postgres:postgres@${PG_HOST}:5432/event_notifier"

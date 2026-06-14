@@ -29,9 +29,13 @@ spec:
       {{- end }}
     spec:
       securityContext:
+        {{- if .Values.podSecurityContext }}
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+        {{- else }}
         runAsNonRoot: true
         seccompProfile:
           type: RuntimeDefault
+        {{- end }}
       containers:
         - name: {{ include "events-common.name" . }}
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default "latest" }}"

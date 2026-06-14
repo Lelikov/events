@@ -41,12 +41,12 @@ dependencies:
   # never create databases). For a real in-cluster smoke we need Postgres +
   # RabbitMQ, gated behind devDependencies.* so prod renders nothing extra.
   - name: postgresql
-    alias: devPostgresql
+    alias: devpostgresql
     version: "15.5.38"
     repository: "https://charts.bitnami.com/bitnami"
     condition: devDependencies.postgresql.enabled
   - name: rabbitmq
-    alias: devRabbitmq
+    alias: devrabbitmq
     version: "14.7.0"
     repository: "https://charts.bitnami.com/bitnami"
     condition: devDependencies.rabbitmq.enabled
