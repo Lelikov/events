@@ -384,6 +384,11 @@ services:
     environment:
       DEBUG: "false"
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      OTEL_SERVICE_NAME: event-receiver
+      OTEL_SDK_DISABLED: ${OTEL_SDK_DISABLED:-true}
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-http://otel-collector:4317}
+      OTEL_EXPORTER_OTLP_PROTOCOL: grpc
+      OTEL_TRACES_SAMPLER: ${OTEL_TRACES_SAMPLER:-parentbased_always_on}
       RABBIT_URL: amqp://${RABBITMQ_USER:-events}:${RABBITMQ_PASSWORD:-dev-rabbit-password-01}@rabbitmq:5672/
       CORS_ORIGINS: http://localhost:${ADMIN_FRONTEND_PORT:-3000},http://localhost:${JITSI_CHAT_PORT:-8080}
       # Jitsi webhook JWTs are minted by event-booking — keys/claims must match.
@@ -422,6 +427,11 @@ services:
     environment:
       DEBUG: "false"
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      OTEL_SERVICE_NAME: event-saver
+      OTEL_SDK_DISABLED: ${OTEL_SDK_DISABLED:-true}
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-http://otel-collector:4317}
+      OTEL_EXPORTER_OTLP_PROTOCOL: grpc
+      OTEL_TRACES_SAMPLER: ${OTEL_TRACES_SAMPLER:-parentbased_always_on}
       RABBIT_URL: amqp://${RABBITMQ_USER:-events}:${RABBITMQ_PASSWORD:-dev-rabbit-password-01}@rabbitmq:5672/
       POSTGRES_DSN: postgresql+asyncpg://${PG_SAVER_USER:-postgres}:${PG_SAVER_PASSWORD:-postgres}@pg-saver:5432/${PG_SAVER_DB:-event_saver}
     depends_on:
@@ -444,6 +454,11 @@ services:
     environment:
       DEBUG: "false"
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      OTEL_SERVICE_NAME: event-booking
+      OTEL_SDK_DISABLED: ${OTEL_SDK_DISABLED:-true}
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-http://otel-collector:4317}
+      OTEL_EXPORTER_OTLP_PROTOCOL: grpc
+      OTEL_TRACES_SAMPLER: ${OTEL_TRACES_SAMPLER:-parentbased_always_on}
       # Override CALCOM_DATABASE_URL in .env to use an external cal.com DB.
       CALCOM_POSTGRES_DSN: ${CALCOM_DATABASE_URL:-postgresql+asyncpg://calcom:calcom@pg-calcom:5432/calcom}
       RABBIT_URL: amqp://${RABBITMQ_USER:-events}:${RABBITMQ_PASSWORD:-dev-rabbit-password-01}@rabbitmq:5672/
@@ -490,6 +505,11 @@ services:
     environment:
       DEBUG: "false"
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      OTEL_SERVICE_NAME: event-users
+      OTEL_SDK_DISABLED: ${OTEL_SDK_DISABLED:-true}
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-http://otel-collector:4317}
+      OTEL_EXPORTER_OTLP_PROTOCOL: grpc
+      OTEL_TRACES_SAMPLER: ${OTEL_TRACES_SAMPLER:-parentbased_always_on}
       POSTGRES_DSN: postgresql+asyncpg://${PG_USERS_USER:-postgres}:${PG_USERS_PASSWORD:-postgres}@pg-users:5432/${PG_USERS_DB:-event_users}
       JWT_SECRET_KEY: ${ADMIN_JWT_SECRET:-dev-admin-jwt-8f2c6a1d9e4b7350a3c5d7e9}
       API_BEARER_TOKEN: ${USERS_API_BEARER_TOKEN:-dev-users-bearer-2a7d9e4f8c1b6350}
@@ -526,6 +546,11 @@ services:
     environment:
       DEBUG: "false"
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      OTEL_SERVICE_NAME: event-admin
+      OTEL_SDK_DISABLED: ${OTEL_SDK_DISABLED:-true}
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-http://otel-collector:4317}
+      OTEL_EXPORTER_OTLP_PROTOCOL: grpc
+      OTEL_TRACES_SAMPLER: ${OTEL_TRACES_SAMPLER:-parentbased_always_on}
       # Read-only view over event-saver's database (+ its own admin_users table).
       POSTGRES_DSN: postgresql+asyncpg://${PG_SAVER_USER:-postgres}:${PG_SAVER_PASSWORD:-postgres}@pg-saver:5432/${PG_SAVER_DB:-event_saver}
       JWT_SECRET_KEY: ${ADMIN_JWT_SECRET:-dev-admin-jwt-8f2c6a1d9e4b7350a3c5d7e9}
@@ -559,6 +584,11 @@ services:
     environment:
       DEBUG: "false"
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      OTEL_SERVICE_NAME: event-notifier
+      OTEL_SDK_DISABLED: ${OTEL_SDK_DISABLED:-true}
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-http://otel-collector:4317}
+      OTEL_EXPORTER_OTLP_PROTOCOL: grpc
+      OTEL_TRACES_SAMPLER: ${OTEL_TRACES_SAMPLER:-parentbased_always_on}
       RABBIT_URL: amqp://${RABBITMQ_USER:-events}:${RABBITMQ_PASSWORD:-dev-rabbit-password-01}@rabbitmq:5672/
       DATABASE_URL: postgresql+asyncpg://${PG_NOTIFIER_USER:-postgres}:${PG_NOTIFIER_PASSWORD:-postgres}@pg-notifier:5432/${PG_NOTIFIER_DB:-event_notifier}
       EVENT_USERS_URL: http://event-users:8888
@@ -601,6 +631,11 @@ services:
     environment:
       DEBUG: "false"
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      OTEL_SERVICE_NAME: event-shortener
+      OTEL_SDK_DISABLED: ${OTEL_SDK_DISABLED:-true}
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-http://otel-collector:4317}
+      OTEL_EXPORTER_OTLP_PROTOCOL: grpc
+      OTEL_TRACES_SAMPLER: ${OTEL_TRACES_SAMPLER:-parentbased_always_on}
       POSTGRES_DSN: postgresql+asyncpg://${PG_SHORTENER_USER:-postgres}:${PG_SHORTENER_PASSWORD:-postgres}@pg-shortener:5432/${PG_SHORTENER_DB:-event_shortener}
       # Static bearer key event-booking sends on /api/v1/* — must match booking's SHORTENER_API_KEY.
       SHORTENER_API_KEY: ${SHORTENER_API_KEY:-dev-shortify-api-key-8c4e1f7b2a93d650}
