@@ -8,6 +8,10 @@ remains the local-dev story; these charts are for cluster deployment.
 > prerequisites** that make a deploy actually *work* — Vault, External Secrets
 > Operator, ingress-nginx, cert-manager — plus the `vault-backend`
 > ClusterSecretStore, Let's Encrypt ClusterIssuers, and the Vault seed script.
+> **Phase 3 (`umbrella/events-observability/`) is the SEPARATE observability
+> umbrella** — kube-prometheus-stack + VictoriaLogs + a Vector DaemonSet,
+> migrating the docker-compose dashboards, alert rules, scrape config and
+> Alertmanager Telegram routing. See [Observability umbrella](#observability-umbrella--umbrellaevents-observability) below.
 
 ## Deploy order (kind / any cluster)
 
@@ -102,6 +106,85 @@ name; the overlays set `image.tag`, `ingress.host`, `replicas`, and `hpa`:
 - `values-kind.yaml` — replicas 1, ingress hosts on `*.127.0.0.1.nip.io`,
   TLS/cert-manager disabled. `externalSecret` stays enabled (matches prod) but
   **requires the phase-2 ESO + Vault prereqs** before pods become Ready.
+
+## Observability umbrella — `umbrella/events-observability`
+
+A **separate** umbrella (its own release, deployed independently of
+`events-platform`) that brings metrics, logs and alerting to the cluster by
+migrating the docker-compose observability assets. Subcharts (pinned, pulled via
+OCI to dodge the http chart-index throttling):
+
+| Subchart | Version | Provides |
+|---|---|---|
+| `kube-prometheus-stack` (`oci://ghcr.io/prometheus-community/charts`) | `86.2.3` | Prometheus Operator + Prometheus + Grafana + Alertmanager + node-exporter + kube-state-metrics |
+| `victoria-logs-single` (`oci://ghcr.io/victoriametrics/helm-charts`) | `0.13.7` | VictoriaLogs server (log store + query); its bundled vector subchart is **disabled** |
+| `vector` (`oci://ghcr.io/vectordotdev/helm-charts`) | `0.56.0` | Vector **DaemonSet** (`role: Agent`), `kubernetes_logs` source |
+
+What's deployed and how each docker-compose asset was migrated:
+
+- **Dashboards** — the 3 Grafana JSONs (`events-system-overview`,
+  `events-booking-flow`, `events-logs`) are copied verbatim into the chart's
+  `dashboards/` and rendered, one per file, as **ConfigMaps labeled
+  `grafana_dashboard: "1"`** (`templates/grafana-dashboards.yaml`). The
+  kube-prometheus-stack Grafana **sidecar** discovers them across all namespaces
+  and loads them, preserving the original uids.
+- **Datasources** — Grafana provisions the in-stack Prometheus datasource (uid
+  **`prometheus`**, the stack default) plus a **`victorialogs`** datasource
+  (`additionalDataSources`, type `victoriametrics-logs-datasource`) backed by the
+  in-cluster VictoriaLogs Service. The plugin is installed via
+  `grafana.plugins: [victoriametrics-logs-datasource]`. The dashboards reference
+  these two datasources **by uid**, so the uids must stay stable.
+- **Scrape config** → a single **ServiceMonitor**
+  (`templates/servicemonitor-platform.yaml`) replacing the per-service jobs in
+  `docker/prometheus/prometheus.yml`. It selects platform Services by
+  `app.kubernetes.io/part-of: events-platform` (the label
+  `events-common.labels` sets on every Service) **and** an `In` list of the 7
+  metrics-exposing service names (the 2 frontends on :80 are excluded), scraping
+  port name `http` path `/metrics` every 15s. A relabel maps each target's
+  Service name onto the classic **`job`** label so the migrated alert rules and
+  dashboards keep matching `event-receiver`/`event-saver`/… exactly.
+- **Prereq ServiceMonitors are flipped on here.** `prereqs/*.yaml` ship with
+  `serviceMonitor.enabled: false`; turning them on is this umbrella's job. The
+  ingress-nginx/cert-manager/ESO ServiceMonitors carry `release:` labels the
+  stack's `serviceMonitorSelectorNilUsesHelmValues: false` already discovers — set
+  each prereq's `*.serviceMonitor.enabled: true` (or `metrics.serviceMonitor.enabled`)
+  when you want those targets scraped.
+- **Alert rules** → a **PrometheusRule** (`templates/prometheusrule.yaml`)
+  translated from `docker/prometheus/rules/{infra,business}.yml` — same alert
+  names, exprs, `for:` durations, severities and annotations (`ServiceDown`,
+  `HighErrorRate`, `HighLatencyP95`, `DLQGrowing`, `OutboxBacklog`,
+  `OutboxStalled`, `RabbitMQDown`, `PostgresDown`, `BookingRejectionSpike`,
+  `NotificationDeliveryFailures`). RabbitMQ/Postgres are managed/external under
+  k8s, so their exporter-based rules no-op until an operator points those
+  exporters at Prometheus.
+- **Alertmanager** → the Telegram receiver + critical/warning routing from
+  `docker/alertmanager/alertmanager.tmpl.yml` are migrated into the stack's
+  `alertmanager.config`. The **bot token is NOT inlined** — it comes from
+  **Vault via ESO**: `templates/externalsecret-alertmanager.yaml` maps Vault path
+  **`secret/data/events/alertmanager`** (key `bot-token`) into a k8s Secret
+  `alertmanager-telegram`, which the operator mounts at
+  `/etc/alertmanager/secrets/alertmanager-telegram/bot-token` and the config reads
+  via `bot_token_file`. `chat_id` is a non-credential destination id set inline in
+  `values-prod.yaml`. **Seed Vault** the same way as the services:
+  `vault kv put secret/events/alertmanager bot-token=<token>`.
+- **Logs** → the **Vector DaemonSet** uses the **`kubernetes_logs`** source
+  (replacing docker-compose's `docker_logs`), runs the same structlog-JSON VRL
+  remap as `docker/vector/vector.yaml` (deriving `service` from the pod's
+  `app.kubernetes.io/name` label), and ships to VictoriaLogs' Elasticsearch bulk
+  endpoint. VictoriaLogs retention defaults to **7d** with persistence on.
+
+Overlays: `values-prod.yaml` (30d Prometheus retention, persistence, real
+Telegram chat id) and `values-kind.yaml` (tiny resources, ephemeral storage,
+control-plane scrapes off — CI smoke).
+
+```bash
+cd umbrella/events-observability
+helm dependency build
+helm template events-observability . -f values.yaml -f values-prod.yaml \
+  | kubeconform -ignore-missing-schemas -summary   # ServiceMonitor/PrometheusRule CRDs skipped
+helm upgrade --install events-observability . -n observability --create-namespace \
+  -f values.yaml -f values-prod.yaml
+```
 
 ## Key values knobs
 
