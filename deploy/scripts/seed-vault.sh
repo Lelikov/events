@@ -80,6 +80,12 @@ BOOKING_RECEIVER_BOOKING_URL="${RECEIVER_URL}/event/booking"
 ADMIN_RECEIVER_ADMIN_URL="${RECEIVER_URL}/event/admin"
 SHORTENER_INTERNAL_URL="http://event-shortener:8888"
 
+# OpenTelemetry collector in-cluster endpoint (events-observability release).
+# The collector Service name is produced by the opentelemetry-collector chart:
+# <release>-opentelemetry-collector. All 7 Python services receive OTLP gRPC
+# on port 4317 via this endpoint. Sampling: parentbased_traceidratio at 10 %.
+OTEL_COLLECTOR_ENDPOINT="http://events-observability-opentelemetry-collector:4317"
+
 # DB / broker connections are EXTERNAL in prod — operators set the real DSNs.
 # These are overridable via the environment (`: "${VAR:=default}"`), so the kind
 # smoke (smoke.sh) can point them at the in-cluster devDependencies before
@@ -117,14 +123,24 @@ put event-receiver \
   ADMIN_API_KEY="${ADMIN_API_KEY}" \
   CALCOM_WEBHOOK_SECRET="${CALCOM_WEBHOOK_SECRET}" \
   EVENT_USERS_API_URL="${USERS_URL}" \
-  EVENT_USERS_API_TOKEN="${USERS_API_BEARER_TOKEN}"
+  EVENT_USERS_API_TOKEN="${USERS_API_BEARER_TOKEN}" \
+  OTEL_SDK_DISABLED="false" \
+  OTEL_EXPORTER_OTLP_ENDPOINT="${OTEL_COLLECTOR_ENDPOINT}" \
+  OTEL_SERVICE_NAME="event-receiver" \
+  OTEL_TRACES_SAMPLER="parentbased_traceidratio" \
+  OTEL_TRACES_SAMPLER_ARG="0.1"
 
 # --- event-saver ------------------------------------------------------------
 put event-saver \
   DEBUG="false" \
   LOG_LEVEL="${LOG_LEVEL}" \
   RABBIT_URL="${RABBIT_URL_PH}" \
-  POSTGRES_DSN="${PG_SAVER_DSN_PH}"
+  POSTGRES_DSN="${PG_SAVER_DSN_PH}" \
+  OTEL_SDK_DISABLED="false" \
+  OTEL_EXPORTER_OTLP_ENDPOINT="${OTEL_COLLECTOR_ENDPOINT}" \
+  OTEL_SERVICE_NAME="event-saver" \
+  OTEL_TRACES_SAMPLER="parentbased_traceidratio" \
+  OTEL_TRACES_SAMPLER_ARG="0.1"
 
 # --- event-booking ----------------------------------------------------------
 put event-booking \
@@ -149,7 +165,12 @@ put event-booking \
   BLACKLIST_ENABLED="${BLACKLIST_ENABLED}" \
   EVENT_ADMIN_API_URL="${ADMIN_URL}" \
   BLACKLIST_SERVICE_TOKEN="${BLACKLIST_SERVICE_TOKEN}" \
-  BLACKLIST_CACHE_TTL="${BLACKLIST_CACHE_TTL}"
+  BLACKLIST_CACHE_TTL="${BLACKLIST_CACHE_TTL}" \
+  OTEL_SDK_DISABLED="false" \
+  OTEL_EXPORTER_OTLP_ENDPOINT="${OTEL_COLLECTOR_ENDPOINT}" \
+  OTEL_SERVICE_NAME="event-booking" \
+  OTEL_TRACES_SAMPLER="parentbased_traceidratio" \
+  OTEL_TRACES_SAMPLER_ARG="0.1"
 
 # --- event-users ------------------------------------------------------------
 put event-users \
@@ -167,7 +188,12 @@ put event-users \
   CRM_API_TOKEN="${CRM_API_TOKEN}" \
   CRM_ENCRYPTION_KEY="${CRM_ENCRYPTION_KEY}" \
   EVENT_ADMIN_URL="${ADMIN_URL}" \
-  EVENT_ADMIN_CACHE_TOKEN="${CACHE_INVALIDATION_TOKEN}"
+  EVENT_ADMIN_CACHE_TOKEN="${CACHE_INVALIDATION_TOKEN}" \
+  OTEL_SDK_DISABLED="false" \
+  OTEL_EXPORTER_OTLP_ENDPOINT="${OTEL_COLLECTOR_ENDPOINT}" \
+  OTEL_SERVICE_NAME="event-users" \
+  OTEL_TRACES_SAMPLER="parentbased_traceidratio" \
+  OTEL_TRACES_SAMPLER_ARG="0.1"
 
 # --- event-admin ------------------------------------------------------------
 put event-admin \
@@ -181,7 +207,12 @@ put event-admin \
   CACHE_INVALIDATION_TOKEN="${CACHE_INVALIDATION_TOKEN}" \
   EVENT_RECEIVER_URL="${RECEIVER_URL}" \
   EVENT_RECEIVER_API_KEY="${ADMIN_API_KEY}" \
-  BLACKLIST_SERVICE_TOKEN="${BLACKLIST_SERVICE_TOKEN}"
+  BLACKLIST_SERVICE_TOKEN="${BLACKLIST_SERVICE_TOKEN}" \
+  OTEL_SDK_DISABLED="false" \
+  OTEL_EXPORTER_OTLP_ENDPOINT="${OTEL_COLLECTOR_ENDPOINT}" \
+  OTEL_SERVICE_NAME="event-admin" \
+  OTEL_TRACES_SAMPLER="parentbased_traceidratio" \
+  OTEL_TRACES_SAMPLER_ARG="0.1"
 
 # --- event-notifier ---------------------------------------------------------
 put event-notifier \
@@ -200,14 +231,24 @@ put event-notifier \
   UNISENDER_FROM_NAME="${UNISENDER_FROM_NAME}" \
   UNISENDER_TEMPLATE_IDS='{"ru":{"BOOKING_CREATED":"00000000-0000-4000-8000-000000000001","BOOKING_CANCELLED":"00000000-0000-4000-8000-000000000002","BOOKING_RESCHEDULED":"00000000-0000-4000-8000-000000000003","BOOKING_REASSIGNED":"00000000-0000-4000-8000-000000000004","BOOKING_REMINDER":"00000000-0000-4000-8000-000000000005","BOOKING_REJECTED":"00000000-0000-4000-8000-000000000006","BOOKING_REJECTED_BLACKLISTED":"00000000-0000-4000-8000-000000000007"},"en":{"BOOKING_REJECTED_BLACKLISTED":"00000000-0000-4000-8000-000000000008"}}' \
   TELEGRAM_BASE_URL="${TELEGRAM_BASE_URL}" \
-  TELEGRAM_BOT_TOKEN="${TELEGRAM_BOT_TOKEN}"
+  TELEGRAM_BOT_TOKEN="${TELEGRAM_BOT_TOKEN}" \
+  OTEL_SDK_DISABLED="false" \
+  OTEL_EXPORTER_OTLP_ENDPOINT="${OTEL_COLLECTOR_ENDPOINT}" \
+  OTEL_SERVICE_NAME="event-notifier" \
+  OTEL_TRACES_SAMPLER="parentbased_traceidratio" \
+  OTEL_TRACES_SAMPLER_ARG="0.1"
 
 # --- event-shortener --------------------------------------------------------
 put event-shortener \
   DEBUG="false" \
   LOG_LEVEL="${LOG_LEVEL}" \
   POSTGRES_DSN="${PG_SHORTENER_DSN_PH}" \
-  SHORTENER_API_KEY="${SHORTENER_API_KEY}"
+  SHORTENER_API_KEY="${SHORTENER_API_KEY}" \
+  OTEL_SDK_DISABLED="false" \
+  OTEL_EXPORTER_OTLP_ENDPOINT="${OTEL_COLLECTOR_ENDPOINT}" \
+  OTEL_SERVICE_NAME="event-shortener" \
+  OTEL_TRACES_SAMPLER="parentbased_traceidratio" \
+  OTEL_TRACES_SAMPLER_ARG="0.1"
 
 # --- event-admin-frontend (nginx SPA; same-origin proxy, no app secrets) ----
 put event-admin-frontend \
