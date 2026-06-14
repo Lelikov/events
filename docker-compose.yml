@@ -310,6 +310,42 @@ services:
     restart: unless-stopped
 
   # --------------------------------------------------------------------------
+  # Distributed tracing: Grafana Tempo (storage) + OTel Collector (ingest).
+  # (design: docs/superpowers/plans/2026-06-14-distributed-tracing-opentelemetry.md)
+  # Tracing is OFF by default (OTEL_SDK_DISABLED=true); enable via the
+  # observability profile and set OTEL_SDK_DISABLED=false.
+  # --------------------------------------------------------------------------
+  tempo:
+    image: grafana/tempo:2.7.1
+    command: ["-config.file=/etc/tempo/tempo.yaml"]
+    profiles: ["observability"]
+    volumes:
+      - ./docker/tempo/tempo.yaml:/etc/tempo/tempo.yaml:ro
+      - tempo-data:/var/tempo
+    ports:
+      - "127.0.0.1:${TEMPO_PORT:-3200}:3200"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O- http://localhost:3200/ready | grep -q ready || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    restart: unless-stopped
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.121.0
+    command: ["--config=/etc/otelcol/config.yaml"]
+    profiles: ["observability"]
+    volumes:
+      - ./docker/otel-collector/config.yaml:/etc/otelcol/config.yaml:ro
+    ports:
+      - "127.0.0.1:${OTEL_COLLECTOR_PORT:-4317}:4317"
+    depends_on:
+      tempo:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # --------------------------------------------------------------------------
   # Vault (secret-flow testing only — OFF by default, `vault` profile).
   # Dev mode (in-memory, auto-unsealed, root token below). This is ONLY for
   # exercising the Kubernetes ExternalSecrets flow locally (seed-vault.sh against
@@ -635,3 +671,4 @@ volumes:
   prometheus-data:
   alertmanager-data:
   victorialogs-data:
+  tempo-data:
