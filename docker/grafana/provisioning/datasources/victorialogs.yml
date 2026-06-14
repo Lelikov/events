@@ -11,3 +11,10 @@ datasources:
     access: proxy
     url: http://victorialogs:9428
     editable: false
+    jsonData:
+      derivedFields:
+        - name: trace_id
+          matcherType: label
+          matcherRegex: trace_id
+          url: "${__value.raw}"
+          datasourceUid: tempo

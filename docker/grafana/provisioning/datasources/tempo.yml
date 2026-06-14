@@ -1,0 +1,22 @@
+apiVersion: 1
+
+# Tempo datasource for distributed tracing. Separate file so the existing
+# Prometheus (prometheus.yml, uid `prometheus`) and VictoriaLogs
+# (victorialogs.yml, uid `victorialogs`) datasources are untouched.
+datasources:
+  - name: Tempo
+    type: tempo
+    uid: tempo
+    access: proxy
+    url: http://tempo:3200
+    editable: false
+    jsonData:
+      tracesToLogsV2:
+        datasourceUid: victorialogs
+        filterByTraceID: true
+        spanStartTimeShift: -1h
+        spanEndTimeShift: 1h
+      serviceMap:
+        datasourceUid: prometheus
+      nodeGraph:
+        enabled: true
