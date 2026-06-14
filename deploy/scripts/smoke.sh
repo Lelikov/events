@@ -97,14 +97,15 @@ R_cluster="PASS"; ok "cluster up"
 
 # 2. prereqs ----------------------------------------------------------------
 log "Adding helm repos"
-helm repo add jetstack https://charts.jetstack.io >/dev/null 2>&1 || true
+# NB: cert-manager is pulled from its OCI registry below (the jetstack HTTP
+# index throttles and can hang `helm repo add` itself), so no jetstack repo here.
 helm repo add ingress-nginx https://kubernetes.github.io/ingress-nginx >/dev/null 2>&1 || true
 helm repo add hashicorp https://helm.releases.hashicorp.com >/dev/null 2>&1 || true
 helm repo add external-secrets https://charts.external-secrets.io >/dev/null 2>&1 || true
-helm repo update >/dev/null 2>&1 || true
+helm repo update ingress-nginx hashicorp external-secrets >/dev/null 2>&1 || true
 
-log "Installing cert-manager"
-helm upgrade --install cert-manager jetstack/cert-manager --version "${CERT_MANAGER_VER}" \
+log "Installing cert-manager (OCI registry — the jetstack HTTP index throttles)"
+helm upgrade --install cert-manager oci://quay.io/jetstack/charts/cert-manager --version "${CERT_MANAGER_VER}" \
   --namespace cert-manager --create-namespace --set installCRDs=true --wait --timeout 5m \
   || { err "cert-manager install failed"; exit 1; }
 
