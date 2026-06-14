@@ -343,8 +343,8 @@ services:
   # --------------------------------------------------------------------------
   event-receiver:
     build:
-      context: .
-      dockerfile: event-receiver/Dockerfile
+      context: ./event-receiver
+      dockerfile: Dockerfile
     environment:
       DEBUG: "false"
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
@@ -381,8 +381,8 @@ services:
 
   event-saver:
     build:
-      context: .
-      dockerfile: event-saver/Dockerfile
+      context: ./event-saver
+      dockerfile: Dockerfile
     environment:
       DEBUG: "false"
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
@@ -403,8 +403,8 @@ services:
 
   event-booking:
     build:
-      context: .
-      dockerfile: event-booking/Dockerfile
+      context: ./event-booking
+      dockerfile: Dockerfile
     environment:
       DEBUG: "false"
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
@@ -449,8 +449,8 @@ services:
 
   event-users:
     build:
-      context: .
-      dockerfile: event-users/Dockerfile
+      context: ./event-users
+      dockerfile: Dockerfile
     environment:
       DEBUG: "false"
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
@@ -485,8 +485,8 @@ services:
 
   event-admin:
     build:
-      context: .
-      dockerfile: event-admin/Dockerfile
+      context: ./event-admin
+      dockerfile: Dockerfile
     environment:
       DEBUG: "false"
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
@@ -518,8 +518,8 @@ services:
 
   event-notifier:
     build:
-      context: .
-      dockerfile: event-notifier/Dockerfile
+      context: ./event-notifier
+      dockerfile: Dockerfile
     environment:
       DEBUG: "false"
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
