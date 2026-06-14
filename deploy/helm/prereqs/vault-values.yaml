@@ -1,0 +1,79 @@
+# Vault — single-instance "standalone" server (hashicorp/vault chart).
+#
+# Pinned chart: hashicorp/vault 0.30.1 (appVersion Vault 1.20.1).
+#
+# This is a SINGLE-INSTANCE server with FILE storage on a PVC — NOT the chart's
+# `server.dev` in-memory mode. It survives pod restarts (data on the PVC) but
+# starts SEALED after a restart and must be unsealed (1 key share / threshold 1
+# here for simplicity). That is acceptable for a smoke/staging cluster.
+#
+# PRODUCTION IS OUT OF SCOPE (see the design doc "Out of scope"): a real deploy
+# needs HA (raft, 3/5 nodes), auto-unseal (KMS/transit), and a hardened storage
+# backend. Swap `server.standalone` for `server.ha.raft` + a seal stanza there.
+
+global:
+  tlsDisable: true # in-cluster http://vault:8200; terminate TLS at the edge / mesh in prod.
+
+injector:
+  # We use ESO (ClusterSecretStore) to read Vault, not the Vault agent sidecar
+  # injector — so it is disabled to keep the footprint small.
+  enabled: false
+
+server:
+  # Standalone (single pod) with file storage on a PVC. NOT dev/in-memory.
+  dev:
+    enabled: false
+
+  standalone:
+    enabled: true
+    config: |
+      ui = true
+
+      listener "tcp" {
+        address     = "[::]:8200"
+        cluster_address = "[::]:8201"
+        tls_disable = 1
+      }
+
+      storage "file" {
+        path = "/vault/data"
+      }
+
+  ha:
+    enabled: false
+
+  dataStorage:
+    enabled: true
+    size: 1Gi
+    # storageClass: ""   # uses the cluster default StorageClass.
+
+  # ServiceAccount Vault runs as. ESO's Kubernetes auth role binds the platform
+  # namespace ServiceAccounts; Vault itself uses this SA for the token reviewer.
+  serviceAccount:
+    create: true
+    name: vault
+
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+  readinessProbe:
+    enabled: true
+    # Ready once unsealed and active (standalone => sealed acceptable pre-init).
+    path: "/v1/sys/health?standbyok=true&sealedcode=204&uninitcode=204"
+  livenessProbe:
+    enabled: true
+    path: "/v1/sys/health?standbyok=true"
+    initialDelaySeconds: 60
+
+ui:
+  enabled: true
+  serviceType: ClusterIP
+
+# csi provider not used (ESO reads Vault over the API).
+csi:
+  enabled: false

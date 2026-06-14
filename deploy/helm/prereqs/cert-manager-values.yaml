@@ -1,0 +1,48 @@
+# cert-manager (jetstack/cert-manager chart).
+#
+# Pinned chart: jetstack/cert-manager v1.19.5 (chart version == appVersion).
+#
+# Issues/renews TLS certs for the public Ingresses (event-receiver,
+# event-admin-frontend, event-admin API, jitsi-chat, event-shortener) via the
+# Let's Encrypt ClusterIssuers in manifests/cluster-issuer.yaml (ACME http01
+# solved through ingress-nginx — so cert-manager MUST be installed before, and
+# the ClusterIssuers applied after, ingress-nginx is up).
+
+# Install the cert-manager CRDs as part of the release (required, per spec).
+installCRDs: true
+
+replicaCount: 1
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    cpu: 200m
+    memory: 256Mi
+
+webhook:
+  replicaCount: 1
+  resources:
+    requests:
+      cpu: 25m
+      memory: 32Mi
+    limits:
+      cpu: 100m
+      memory: 128Mi
+
+cainjector:
+  replicaCount: 1
+  resources:
+    requests:
+      cpu: 25m
+      memory: 64Mi
+    limits:
+      cpu: 100m
+      memory: 256Mi
+
+# Scraped by the phase-3 observability umbrella.
+prometheus:
+  enabled: true
+  servicemonitor:
+    enabled: false

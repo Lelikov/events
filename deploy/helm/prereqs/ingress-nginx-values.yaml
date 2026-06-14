@@ -1,0 +1,53 @@
+# ingress-nginx controller (ingress-nginx/ingress-nginx chart).
+#
+# Pinned chart: ingress-nginx/ingress-nginx 4.15.1 (appVersion controller 1.15.1).
+#
+# Cloud-agnostic: a LoadBalancer Service (works on any cloud's LB; on bare-metal
+# pair with MetalLB, on kind use the NodePort overlay noted below). cert-manager
+# solves ACME http01 challenges through this controller (see ClusterIssuer).
+
+controller:
+  ingressClassResource:
+    name: nginx
+    enabled: true
+    default: true
+  # Make this controller the cluster default so Ingresses without an explicit
+  # className still route here.
+  ingressClass: nginx
+
+  replicaCount: 2
+
+  service:
+    type: LoadBalancer
+    # externalTrafficPolicy Local preserves the client source IP (useful for
+    # webhook allow-lists on event-receiver).
+    externalTrafficPolicy: Local
+
+  # Expose controller metrics for the phase-3 observability umbrella to scrape.
+  metrics:
+    enabled: true
+    serviceMonitor:
+      enabled: false # turned on by events-observability in phase 3.
+
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+  config:
+    # Surface the real client IP to backends behind a cloud LB / proxy.
+    use-forwarded-headers: "true"
+    # Larger body for webhook payloads (cal.com / Jitsi events).
+    proxy-body-size: "8m"
+
+  admissionWebhooks:
+    enabled: true
+
+# For a kind cluster there is no cloud LoadBalancer. Install with these extra
+# flags instead of editing this file:
+#   --set controller.service.type=NodePort \
+#   --set controller.hostPort.enabled=true \
+#   --set controller.service.externalTrafficPolicy=Cluster

@@ -1,0 +1,47 @@
+# External Secrets Operator (external-secrets/external-secrets chart).
+#
+# Pinned chart: external-secrets/external-secrets 0.10.7 (appVersion v0.10.7).
+#
+# WHY 0.10.x AND NOT 2.x: the 0.10.x line serves the `external-secrets.io/v1beta1`
+# API that the events-common library chart renders (ExternalSecret /
+# ClusterSecretStore, phase 1 convention). ESO 0.14+/2.x promote those CRDs to
+# `v1` and remove `v1beta1`, which would break the rendered manifests. Bump the
+# CRDs + apiVersion together in a dedicated change if you move to 2.x.
+
+# Install the CRDs (ExternalSecret, ClusterSecretStore, etc.) with the chart.
+installCRDs: true
+
+replicaCount: 1
+
+# Leader election so a future replicaCount>1 is safe.
+leaderElect: true
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    cpu: 200m
+    memory: 256Mi
+
+webhook:
+  resources:
+    requests:
+      cpu: 25m
+      memory: 32Mi
+    limits:
+      cpu: 100m
+      memory: 128Mi
+
+certController:
+  resources:
+    requests:
+      cpu: 25m
+      memory: 32Mi
+    limits:
+      cpu: 100m
+      memory: 128Mi
+
+# ServiceMonitor wiring is handled by the phase-3 observability umbrella.
+serviceMonitor:
+  enabled: false
