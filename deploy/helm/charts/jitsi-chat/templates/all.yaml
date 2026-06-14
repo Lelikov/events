@@ -1,0 +1,19 @@
+{{- include "events-common.deployment" . }}
+---
+{{ include "events-common.service" . }}
+{{- with (include "events-common.ingress" .) }}
+---
+{{ . }}
+{{- end }}
+{{- with (include "events-common.hpa" .) }}
+---
+{{ . }}
+{{- end }}
+{{- with (include "events-common.externalsecret" .) }}
+---
+{{ . }}
+{{- end }}
+{{- with (include "events-common.migrationJob" .) }}
+---
+{{ . }}
+{{- end }}

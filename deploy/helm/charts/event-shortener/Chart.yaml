@@ -1,0 +1,10 @@
+apiVersion: v2
+name: event-shortener
+description: Thin per-service chart for event-shortener; renders resources via the events-common library.
+type: application
+version: 0.1.0
+appVersion: "latest"
+dependencies:
+  - name: events-common
+    version: 0.1.0
+    repository: "file://../../library/events-common"

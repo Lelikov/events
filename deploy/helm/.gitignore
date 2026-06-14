@@ -1,0 +1,5 @@
+# Helm build artifacts — regenerated via `helm dependency build`.
+# The library is file:// based, so vendored .tgz copies and lockfiles are
+# reproducible and should not be committed.
+**/charts/*.tgz
+**/Chart.lock

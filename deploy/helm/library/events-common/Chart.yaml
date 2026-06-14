@@ -1,0 +1,12 @@
+apiVersion: v2
+name: events-common
+description: >-
+  Library chart for the events platform. Provides named templates for
+  Deployment, Service, Ingress, HPA, ExternalSecret and migration Job.
+  All runtime config/secrets come from Vault via External Secrets Operator;
+  no value-bearing ConfigMap is ever rendered.
+type: library
+version: 0.1.0
+appVersion: "0.1.0"
+maintainers:
+  - name: lelikov

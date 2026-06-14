@@ -1,0 +1,68 @@
+# Values for event-admin. Only k8s spec lives here — NEVER app config or secrets.
+# All runtime env (secret and non-secret) comes from Vault via ESO (phase 2).
+
+nameOverride: ""
+fullnameOverride: ""
+
+replicas: 1
+
+image:
+  repository: ghcr.io/lelikov/event-admin
+  tag: latest
+  pullPolicy: IfNotPresent
+
+containerPort: 8888
+
+# Optional command/args override for the Deployment (e.g. bypass entrypoint
+# migration on DB-owning services so replicas don't migrate concurrently).
+command: []
+args: []
+
+probes:
+  liveness: /health
+  readiness: /ready
+  initialDelaySeconds: 5
+  periodSeconds: 10
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi
+
+# ExternalSecret: maps Vault path -> k8s Secret consumed via envFrom.
+# Target secret name is "<fullname>-env" (set by the library).
+externalSecret:
+  enabled: true
+  refreshInterval: 1h
+  storeKind: ClusterSecretStore
+  storeName: vault-backend
+  vaultPath: secret/data/events/event-admin
+
+ingress:
+  enabled: true
+  className: nginx
+  clusterIssuer: letsencrypt-prod
+  host: admin-api.example.com
+  path: /
+  pathType: Prefix
+  annotations: {}
+  tls:
+    enabled: true
+    secretName: ""
+
+hpa:
+  enabled: false
+  minReplicas: 2
+  maxReplicas: 5
+  targetCPUUtilizationPercentage: 80
+  targetMemoryUtilizationPercentage: 80
+
+migration:
+  enabled: false
+  backoffLimit: 3
+
+podAnnotations: {}
+readOnlyRootFilesystem: false
