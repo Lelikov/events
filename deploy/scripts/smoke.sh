@@ -41,10 +41,13 @@ VAULT_VER="0.30.1"
 ESO_VER="0.10.7"
 
 # --- result matrix (printed at the end) ------------------------------------
-declare -A R=(
-  [cluster]="not-reached" [prereqs]="not-reached" [vault_seeded]="not-reached"
-  [platform_installed]="not-reached" [pods_ready]="not-reached" [receiver_202]="not-reached"
-)
+# Plain vars (no associative arrays — macOS ships bash 3.2).
+R_cluster="not-reached"
+R_prereqs="not-reached"
+R_vault_seeded="not-reached"
+R_platform_installed="not-reached"
+R_pods_ready="not-reached"
+R_receiver_202="not-reached"
 
 log()  { printf '\n\033[1;34m==> %s\033[0m\n' "$*"; }
 ok()   { printf '\033[1;32m[ok]\033[0m %s\n' "$*"; }
@@ -55,12 +58,12 @@ need() { command -v "$1" >/dev/null 2>&1 || { err "missing required tool: $1"; M
 
 report() {
   log "SMOKE RESULT MATRIX"
-  printf '  %-20s %s\n' "cluster_created:"     "${R[cluster]}"
-  printf '  %-20s %s\n' "prereqs_installed:"   "${R[prereqs]}"
-  printf '  %-20s %s\n' "vault_seeded:"        "${R[vault_seeded]}"
-  printf '  %-20s %s\n' "platform_installed:"  "${R[platform_installed]}"
-  printf '  %-20s %s\n' "pods_ready:"          "${R[pods_ready]}"
-  printf '  %-20s %s\n' "receiver_202:"        "${R[receiver_202]}"
+  printf '  %-20s %s\n' "cluster_created:"     "${R_cluster}"
+  printf '  %-20s %s\n' "prereqs_installed:"   "${R_prereqs}"
+  printf '  %-20s %s\n' "vault_seeded:"        "${R_vault_seeded}"
+  printf '  %-20s %s\n' "platform_installed:"  "${R_platform_installed}"
+  printf '  %-20s %s\n' "pods_ready:"          "${R_pods_ready}"
+  printf '  %-20s %s\n' "receiver_202:"        "${R_receiver_202}"
 }
 
 cleanup() {
@@ -90,7 +93,7 @@ else
   kind create cluster --name "${KIND_CLUSTER}" --wait 120s || { err "kind create failed"; exit 1; }
 fi
 kubectl cluster-info --context "kind-${KIND_CLUSTER}" >/dev/null 2>&1 || { err "cluster unreachable"; exit 1; }
-R[cluster]="PASS"; ok "cluster up"
+R_cluster="PASS"; ok "cluster up"
 
 # 2. prereqs ----------------------------------------------------------------
 log "Adding helm repos"
@@ -125,7 +128,7 @@ log "Installing External Secrets Operator"
 helm upgrade --install external-secrets external-secrets/external-secrets --version "${ESO_VER}" \
   --namespace "${ESO_NS}" --create-namespace --set installCRDs=true --wait --timeout 5m \
   || { err "ESO install failed"; exit 1; }
-R[prereqs]="PASS"; ok "prereqs installed"
+R_prereqs="PASS"; ok "prereqs installed"
 
 # 3. seed Vault -------------------------------------------------------------
 # Point service DSNs/RABBIT_URL at the in-cluster devDependencies (Bitnami
@@ -148,9 +151,9 @@ VAULT_PF_PID=$!
 for _ in $(seq 1 20); do curl -sf http://127.0.0.1:8200/v1/sys/health >/dev/null 2>&1 && break; sleep 1; done
 if VAULT_ADDR=http://127.0.0.1:8200 VAULT_TOKEN="${VAULT_ROOT_TOKEN}" \
      USE_DOCKER_VAULT=0 "${SCRIPTS_DIR}/seed-vault.sh"; then
-  R[vault_seeded]="PASS"; ok "Vault seeded"
+  R_vault_seeded="PASS"; ok "Vault seeded"
 else
-  R[vault_seeded]="FAIL"; err "Vault seeding failed"; exit 1
+  R_vault_seeded="FAIL"; err "Vault seeding failed"; exit 1
 fi
 kill "${VAULT_PF_PID}" 2>/dev/null || true
 
@@ -187,17 +190,17 @@ log "Installing events-platform (values-kind.yaml, devDependencies on)"
 if helm upgrade --install events-platform "${PLATFORM}" \
      -n "${NS}" --create-namespace -f "${PLATFORM}/values-kind.yaml" \
      --timeout 6m; then
-  R[platform_installed]="PASS"; ok "platform installed"
+  R_platform_installed="PASS"; ok "platform installed"
 else
-  R[platform_installed]="PARTIAL"; warn "helm install returned non-zero (pods may still be settling); continuing"
+  R_platform_installed="PARTIAL"; warn "helm install returned non-zero (pods may still be settling); continuing"
 fi
 
 # 5. wait for Deployments ---------------------------------------------------
 log "Waiting for all Deployments to be Available (bounded 5m)"
 if kubectl -n "${NS}" wait --for=condition=Available deploy --all --timeout=300s; then
-  R[pods_ready]="PASS"; ok "all Deployments Available"
+  R_pods_ready="PASS"; ok "all Deployments Available"
 else
-  R[pods_ready]="PARTIAL"
+  R_pods_ready="PARTIAL"
   warn "not all Deployments became Available — current state:"
   kubectl -n "${NS}" get pods -o wide 2>/dev/null | head -40 || true
 fi
@@ -245,9 +248,9 @@ kill "${RECV_PF_PID}" 2>/dev/null || true
 
 echo "  receiver responded HTTP ${HTTP_CODE} (body: $(head -c 200 /tmp/receiver-resp.txt 2>/dev/null))"
 if [ "${HTTP_CODE}" = "202" ]; then
-  R[receiver_202]="PASS"; ok "receiver returned 202 Accepted"
+  R_receiver_202="PASS"; ok "receiver returned 202 Accepted"
 else
-  R[receiver_202]="FAIL (got ${HTTP_CODE})"; warn "receiver did not return 202"
+  R_receiver_202="FAIL (got ${HTTP_CODE})"; warn "receiver did not return 202"
 fi
 
 # cleanup() runs on exit (report + teardown).

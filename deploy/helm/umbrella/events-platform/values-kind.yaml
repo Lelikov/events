@@ -75,10 +75,17 @@ event-receiver:
     tls:
       enabled: false
 
+# DB-owning services: the migration Helm hook (pre-install, weight -5) runs
+# BEFORE the in-cluster Postgres devDependency and the ESO-managed env Secret
+# exist, so it cannot succeed in a from-scratch kind cluster and would block
+# `helm install` until timeout. Disable it here (kind only). The receiver-202
+# smoke path does not depend on these services' schemas; prod keeps migrations on.
 event-saver:
   replicas: 1
   image:
     tag: latest
+  migration:
+    enabled: false
 
 event-booking:
   replicas: 1
@@ -111,16 +118,22 @@ event-users:
   replicas: 1
   image:
     tag: latest
+  migration:
+    enabled: false
 
 event-notifier:
   replicas: 1
   image:
     tag: latest
+  migration:
+    enabled: false
 
 event-shortener:
   replicas: 1
   image:
     tag: latest
+  migration:
+    enabled: false
   ingress:
     enabled: true
     host: s.127.0.0.1.nip.io
