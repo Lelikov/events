@@ -86,6 +86,8 @@ Host ports:
 | 3001 | Grafana *(observability profile; admin/admin; dashboards: System Overview, Booking Flow)* |
 | 9093 | Alertmanager *(observability profile; 127.0.0.1 only; routes Prometheus alerts → ops Telegram)* |
 | 9428 | VictoriaLogs *(observability profile; 127.0.0.1 only; container logs collected by Vector; LogsQL UI + API)* |
+| 3200 | Tempo *(observability profile; 127.0.0.1 only; distributed trace storage; Grafana datasource uid `tempo`)* |
+| 4317 | OTel Collector *(observability profile; 127.0.0.1 only; OTLP/gRPC; Python services → collector → Tempo)* |
 
 Observability (in the `observability` profile): every Python service serves `GET /metrics` (prometheus-client);
 Prometheus config lives in `docker/prometheus/prometheus.yml`, the
@@ -97,8 +99,13 @@ provisioned dashboards in `docker/grafana/dashboards/` (uids
 Logs: **Vector** collects every container's stdout via the Docker socket into
 **VictoriaLogs** (7d retention), queryable in Grafana via the `victorialogs`
 datasource and the Logs dashboard; config in `docker/vector/vector.yaml`.
+Tracing: every Python service exports OpenTelemetry spans via OTLP/gRPC to **otel-collector**
+→ **Tempo** (datasource uid `tempo`); off by default (`OTEL_SDK_DISABLED=true`); enable with
+`OTEL_SDK_DISABLED=false docker compose --profile observability up -d --build`. Configs:
+`docker/tempo/tempo.yaml`, `docker/otel-collector/config.yaml`.
 See `docs/architecture/ONBOARDING.md` § Observability for what's collected, the
-alert set, and how to add a metric or rule.
+alert set, how to add a metric or rule, and the full tracing guide (TraceQL, manual spans,
+logs↔traces correlation).
 
 ### Симуляция событий cal.com
 

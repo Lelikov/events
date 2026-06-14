@@ -8,6 +8,7 @@ All inter-service messages use the **CloudEvents specification v1.0** in **binar
 - **Exchange:** `events` (topic, durable)
 - **Routing:** Routing key = queue name; first-match glob pattern rules in event-receiver
 - **Headers:** `ce-type`, `ce-source`, `ce-id`, `ce-time`, `ce-bookingid`, `ce-specversion`, `ce-idempotencykey`, `ce-traceid`, `ce-spanid`, `ce-dataschema`
+- **Trace propagation:** W3C `traceparent` (and optionally `tracestate`) is injected by the OpenTelemetry instrumentation on every outbound HTTP call and every RabbitMQ publish, and extracted on every inbound HTTP request and RabbitMQ consume. It travels **alongside** the `ce-*` headers — on HTTP requests as a standard HTTP header, on AMQP messages as an additional message header. `ce-traceid`/`ce-spanid` are derived from the W3C trace/span id of the active span whenever one exists.
 - **Body:** JSON event payload wrapped in `{"original": {...}, "normalized": {"participants": [...]}}`
 
 The `original` key contains the raw source payload unchanged. The `normalized` key contains enriched participant data (with `user_id` UUIDs resolved from event-users). All consumers MUST read source-specific fields from `original`, not from the top-level body.

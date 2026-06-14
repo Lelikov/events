@@ -91,6 +91,8 @@ Every published host port is an env var with the default above — override in
 | `ALERTMANAGER_PORT` | 9093 | alertmanager (127.0.0.1 only) |
 | `VICTORIALOGS_PORT` | 9428 | victorialogs (127.0.0.1 only; logs UI + LogsQL API) |
 | `LOGS_RETENTION_PERIOD` | 7d | victorialogs log retention |
+| `TEMPO_PORT` | 3200 | Tempo (127.0.0.1 only; trace storage + Grafana datasource) |
+| `OTEL_COLLECTOR_PORT` | 4317 | OTel Collector (127.0.0.1 only; OTLP/gRPC; services → collector → Tempo) |
 
 CORS origins, `MEETING_HOST_URL` and `VITE_WEBHOOK_URL` defaults are derived
 from these vars inside `docker-compose.yml`, and `scripts/calcom_sim.py`
@@ -304,6 +306,90 @@ routes them to a dedicated **ops** Telegram chat. Design spec:
   prom/prometheus promtool check rules /rules/*.yml`; Prometheus reloads on
   restart (or `POST /-/reload`). Verify in Prometheus → Alerts and at
   http://localhost:9093.
+
+### Tracing (OpenTelemetry → Tempo)
+
+Distributed tracing is bundled in the same `observability` profile and is **off by default**
+(`OTEL_SDK_DISABLED=true` on every Python service). To enable it, start the profile with the
+flag flipped:
+
+```bash
+OTEL_SDK_DISABLED=false docker compose --profile observability up -d --build
+```
+
+**Pipeline:** each Python service → OTLP/gRPC → **otel-collector** (batches, rate-limits,
+stamps `deployment.environment=docker-compose`) → **Tempo** → **Grafana** (datasource uid
+`tempo`). Tempo stores trace data locally for 7 days (same retention as VictoriaLogs).
+
+**New loopback ports** (observability profile):
+
+| Variable | Default | Component |
+|---|---|---|
+| `TEMPO_PORT` | 3200 | Tempo HTTP API + Grafana data source |
+| `OTEL_COLLECTOR_PORT` | 4317 | OTel Collector OTLP/gRPC receiver (services → collector) |
+
+Configs: `docker/tempo/tempo.yaml`, `docker/otel-collector/config.yaml`.
+
+**Per-service env knobs** (all have defaults; only override when needed):
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `OTEL_SDK_DISABLED` | `true` | Set to `false` to activate tracing |
+| `OTEL_SERVICE_NAME` | *(service name)* | Identifies the service in Tempo |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | `http://otel-collector:4317` | Collector endpoint |
+| `OTEL_TRACES_SAMPLER` | `parentbased_always_on` | Dev: sample everything; prod: use `parentbased_traceidratio` + `OTEL_TRACES_SAMPLER_ARG=0.1` |
+
+**Instrumentation:** every Python service has an identical `telemetry.py` bootstrap that
+auto-instruments FastAPI (HTTP SERVER/CLIENT spans), httpx (outbound HTTP CLIENT spans),
+asyncpg (DB CLIENT spans), and FastStream RabbitMQ (PRODUCER/CONSUMER spans). Tracing is
+fully no-op when disabled — no overhead in the base stack.
+
+**Manual spans** are added around key business operations using the same `telemetry.py`
+tracer. Pattern:
+
+```python
+from opentelemetry import trace
+_tracer = trace.get_tracer(__name__)
+
+with _tracer.start_as_current_span("booking.blacklist_check") as span:
+    span.set_attribute("booking.uid", booking_uid)
+    ... existing logic ...
+```
+
+Named manual spans in this codebase: `booking.blacklist_check`, `booking.chat_create`,
+`booking.meeting_url_mint`, `booking.publish_followup` (event-booking);
+`notifier.outbox_claim`, `notifier.channel_send` (event-notifier);
+`saver.projection_execute` (event-saver); `receiver.validate_webhook` (event-receiver).
+
+**Querying traces in Grafana:** open http://localhost:3001 → Explore → select the
+**Tempo** datasource → Search. Example TraceQL queries:
+
+```
+{ resource.service.name = "event-receiver" }
+{ resource.service.name = "event-booking" && span.booking.uid = "<uid>" }
+{ duration > 500ms }
+```
+
+A verified end-to-end trace spans event-receiver → event-saver → event-booking →
+event-shortener → event-notifier with HTTP SERVER/CLIENT, RabbitMQ PRODUCER/CONSUMER, and
+DB CLIENT spans.
+
+**Logs ↔ traces correlation:** structlog stamps `trace_id` and `span_id` (W3C 32-hex / 16-hex)
+on every log line when a span is active. The VictoriaLogs datasource has a `trace_id` derived
+field configured to jump from any log line directly to the matching Tempo trace. In practice
+this means: find an error in the Logs dashboard → click the `trace_id` link → see the full
+distributed trace.
+
+Known minor limitation: a small number of event-receiver controller log calls are emitted
+outside an active span (e.g. early startup lines); those lines retain a legacy UUID-format
+`trace_id` rather than a W3C hex id. All log lines emitted during request handling carry the
+correct W3C `trace_id` because a FastAPI server span is always active then.
+
+**Trace context propagation:** W3C `traceparent` is injected by the OTel instrumentation on
+every outbound HTTP call and every RabbitMQ publish, and extracted on every inbound HTTP
+request and every RabbitMQ consume. It travels alongside the `ce-*` CloudEvent headers (see
+`docs/architecture/MESSAGE_CONTRACTS.md` § Overview). `ce-traceid`/`ce-spanid` are derived
+from the active span whenever one exists.
 
 ### Logging (Vector + VictoriaLogs)
 
