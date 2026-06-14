@@ -16,6 +16,54 @@
 # cert-manager is not assumed in a bare kind cluster, so the cluster-issuer
 # annotation is cleared and TLS is disabled on the ingresses below.
 
+# devDependencies: a single in-cluster Postgres (with an initdb script that
+# creates the 4 logical DBs + roles) and a single RabbitMQ. These exist ONLY
+# for the kind smoke; prod keeps them off and uses managed instances. The
+# smoke's seed-vault step points every service's DSN/RABBIT_URL at these
+# (release name "events-platform", alias case preserved):
+#   Postgres host: events-platform-devPostgresql.<ns>.svc:5432 (postgres/postgres)
+#   RabbitMQ host: events-platform-devRabbitmq.<ns>.svc:5672   (guest/guest)
+# (the smoke passes those via PG_*_HOST / RABBIT_* env to seed-vault.sh).
+devDependencies:
+  postgresql:
+    enabled: true
+  rabbitmq:
+    enabled: true
+
+# Bitnami postgresql subchart (alias devPostgresql). Lightweight standalone
+# instance; initdb script provisions event_saver/event_users/event_notifier/
+# event_shortener databases (one shared "postgres" superuser for the smoke).
+devPostgresql:
+  auth:
+    postgresPassword: postgres
+    username: postgres
+    password: postgres
+    database: postgres
+  primary:
+    persistence:
+      enabled: false
+    resourcesPreset: "none"
+    initdb:
+      scripts:
+        00-create-databases.sql: |
+          CREATE DATABASE event_saver;
+          CREATE DATABASE event_users;
+          CREATE DATABASE event_notifier;
+          CREATE DATABASE event_shortener;
+          CREATE DATABASE calcom;
+
+# Bitnami rabbitmq subchart (alias devRabbitmq). Single node, no persistence.
+devRabbitmq:
+  auth:
+    username: guest
+    password: guest
+  persistence:
+    enabled: false
+  resourcesPreset: "none"
+  clustering:
+    enabled: false
+  replicaCount: 1
+
 event-receiver:
   replicas: 1
   image:

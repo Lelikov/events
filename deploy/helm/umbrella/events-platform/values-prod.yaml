@@ -4,6 +4,13 @@
 # as placeholders. Hostnames are TODO placeholders to be replaced with real
 # production DNS. Replicas 2, HPA enabled for public/throughput services.
 
+# In-cluster Postgres/RabbitMQ are NEVER deployed in prod — managed/external.
+devDependencies:
+  postgresql:
+    enabled: false
+  rabbitmq:
+    enabled: false
+
 event-receiver:
   replicas: 2
   image:

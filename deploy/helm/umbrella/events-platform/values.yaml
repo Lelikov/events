@@ -6,6 +6,15 @@
 #
 # Environment overlays: values-prod.yaml, values-staging.yaml, values-kind.yaml.
 
+# devDependencies: in-cluster Postgres + RabbitMQ for the kind smoke ONLY.
+# OFF by default (and in prod/staging) — prod uses EXTERNAL/managed instances
+# and the charts consume DSN/URL from Vault. values-kind.yaml flips these on.
+devDependencies:
+  postgresql:
+    enabled: false
+  rabbitmq:
+    enabled: false
+
 event-receiver:
   replicas: 1
   image:

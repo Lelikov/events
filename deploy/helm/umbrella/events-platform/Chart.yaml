@@ -36,3 +36,17 @@ dependencies:
   - name: jitsi-chat
     version: 0.1.0
     repository: "file://../../charts/jitsi-chat"
+  # --- devDependencies (kind smoke / local clusters only) -------------------
+  # In PROD these are EXTERNAL/managed (charts consume DSN/URL from Vault and
+  # never create databases). For a real in-cluster smoke we need Postgres +
+  # RabbitMQ, gated behind devDependencies.* so prod renders nothing extra.
+  - name: postgresql
+    alias: devPostgresql
+    version: "15.5.38"
+    repository: "https://charts.bitnami.com/bitnami"
+    condition: devDependencies.postgresql.enabled
+  - name: rabbitmq
+    alias: devRabbitmq
+    version: "14.7.0"
+    repository: "https://charts.bitnami.com/bitnami"
+    condition: devDependencies.rabbitmq.enabled
