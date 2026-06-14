@@ -35,6 +35,12 @@ devDependencies:
 # instance; initdb script provisions event_saver/event_users/event_notifier/
 # event_shortener databases (one shared "postgres" superuser for the smoke).
 devpostgresql:
+  # Bitnami removed the free Debian tags from docker.io/bitnami in 2025; the
+  # pinned tag now only exists under docker.io/bitnamilegacy. The smoke also
+  # `kind load`s this image so IfNotPresent finds it locally.
+  image:
+    registry: docker.io
+    repository: bitnamilegacy/postgresql
   auth:
     postgresPassword: postgres
     username: postgres
@@ -56,6 +62,10 @@ devpostgresql:
 # Bitnami rabbitmq subchart (alias devrabbitmq — lowercase, see above).
 # Single node, no persistence.
 devrabbitmq:
+  # See devpostgresql above — the pinned tag lives under bitnamilegacy now.
+  image:
+    registry: docker.io
+    repository: bitnamilegacy/rabbitmq
   auth:
     username: guest
     password: guest
