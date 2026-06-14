@@ -183,6 +183,25 @@ Each service has its own `CLAUDE.md` (commands, architecture) and `docs/` direct
 | `event-schemas/` | event types, priorities, versioning | SERVICE_OVERVIEW, API_CONTRACTS, DEPENDENCIES, AUDIT |
 | `jitsi-chat/` | Jitsi video + Stream Chat SPA | SERVICE_OVERVIEW, API_CONTRACTS, DEPENDENCIES |
 
+## Production (Kubernetes)
+
+docker-compose is for **local dev**; production runs on Kubernetes from `deploy/`:
+
+- `deploy/helm/` — `events-common` library chart, thin per-service charts, and the
+  `events-platform` + `events-observability` umbrella charts. All config/secrets come from
+  **Vault via External Secrets Operator** — ConfigMaps hold no values.
+- `deploy/argocd/` — ArgoCD **app-of-apps** (`app-of-apps.yaml` → `apps/`); prereqs +
+  umbrellas roll out by sync-wave (cert-manager 0 → ingress-nginx/vault 1 → ESO 2 →
+  platform/observability 3). See `deploy/argocd/README.md` for the **Vault init → seed →
+  sync** gotcha.
+- `deploy/scripts/` — `Makefile` (`lint`/`template`/`bootstrap`/`seed`/`smoke`/`clean`),
+  `smoke.sh` (kind end-to-end), `seed-vault.sh`.
+- **Dual CI**: every deployable service repo builds + pushes `ghcr.io/lelikov/<service>` via
+  **both** GitHub Actions (`.github/workflows/publish-image.yml`) and GitLab CI
+  (`.gitlab-ci.yml`); `event-schemas` (library) gets lint/test CI only.
+
+Deployment walkthrough: `docs/architecture/ONBOARDING.md` § "Deploying to Kubernetes".
+
 ## RabbitMQ Queue Routing
 
 Canonical topology lives in `event-schemas/event_schemas/queues.py` (**single source of truth** — `QueueSpec`, `ALL_QUEUES`, `ROUTING_RULES`). **One queue per consumer service**; fan-out = several queues bound to the same routing key. Every queue dead-letters to `events.dlx` with a `<queue>.dlq` companion (24h TTL).

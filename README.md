@@ -120,6 +120,27 @@ Prometheus собирает метрики сервисов + RabbitMQ + postgre
 (конфиг — `docker/vector/vector.yaml`).
 Подробности — [`docs/architecture/ONBOARDING.md`](docs/architecture/ONBOARDING.md) § Observability.
 
+## Production (Kubernetes)
+
+Docker Compose — для локальной разработки; для production есть Kubernetes-инфраструктура
+в каталоге [`deploy/`](deploy/):
+
+- **Helm** ([`deploy/helm/`](deploy/helm/)) — библиотечный чарт `events-common`, тонкие
+  per-service чарты, umbrella-чарты `events-platform` (9 сервисов) и `events-observability`
+  (kube-prometheus-stack + VictoriaLogs + Vector). Конфиг и секреты — только из Vault через
+  External Secrets Operator (ConfigMap'ы значений не хранят).
+- **ArgoCD app-of-apps** ([`deploy/argocd/`](deploy/argocd/)) — GitOps-развёртывание
+  prerequisites и обоих umbrella по sync-wave (cert-manager → ingress-nginx/vault → ESO →
+  platform/observability).
+- **Скрипты** ([`deploy/scripts/`](deploy/scripts/)) — `Makefile` (`lint`/`template`/
+  `bootstrap`/`seed`/`smoke`/`clean`) + `smoke.sh` (kind-смоук) + `seed-vault.sh`.
+- **CI**: каждый деплоимый сервис собирает и пушит образ `ghcr.io/lelikov/<service>` через
+  GitHub Actions (`publish-image.yml`) **и** GitLab CI (`.gitlab-ci.yml`).
+
+Порядок развёртывания и нюанс с инициализацией Vault — см.
+[`docs/architecture/ONBOARDING.md`](docs/architecture/ONBOARDING.md) § «Deploying to Kubernetes»
+и [`deploy/argocd/README.md`](deploy/argocd/README.md).
+
 ## Технические соглашения
 
 **Python-сервисы**: Python 3.14, `uv`, FastAPI, Dishka (DI), FastStream (консьюмеры),

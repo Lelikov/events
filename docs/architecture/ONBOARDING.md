@@ -482,6 +482,74 @@ The frontend calls `GET /api/users/${id}` for user lookups but event-users expec
 
 ---
 
+## Deploying to Kubernetes
+
+docker-compose is for local development. Production runs on Kubernetes from the root
+[`deploy/`](../../deploy/) directory. The full design is in
+`docs/superpowers/specs/2026-06-14-kubernetes-infrastructure-design.md`.
+
+### Layout
+
+```
+deploy/
+  helm/
+    library/events-common/         # named templates (Deployment/Service/Ingress/HPA/ExternalSecret/migration Job)
+    charts/<service>/              # 9 thin per-service charts
+    umbrella/events-platform/      # the 9 services + values-{prod,staging,kind}.yaml
+    umbrella/events-observability/ # kube-prometheus-stack + VictoriaLogs + Vector
+    prereqs/                       # cert-manager / ingress-nginx / Vault / ESO values + manifests
+  argocd/                          # app-of-apps.yaml + apps/ (sync-waved Applications)
+  scripts/                         # Makefile + smoke.sh + seed-vault.sh
+```
+
+### Config & secrets (Vault-only)
+
+**No ConfigMap holds config values.** Every runtime env var (secret AND non-secret) lives in
+Vault under `secret/events/<service>`. Each service has one ESO `ExternalSecret` that maps the
+Vault path → a k8s Secret consumed via `envFrom`. Seed Vault with `deploy/scripts/seed-vault.sh`
+(dev defaults from `.env.example`; DB DSNs / RabbitMQ URL are managed/external placeholders in
+prod, overridable via env for the kind smoke).
+
+### Prerequisites — install order
+
+cert-manager → ingress-nginx → Vault → ESO. With GitOps this is the ArgoCD sync-wave order
+(0 → 1/1 → 2); manually it is `make -C deploy/scripts bootstrap`. See
+`deploy/helm/prereqs/README.md`.
+
+### Vault init → seed → sync gotcha
+
+ArgoCD (or `helm install`) brings Vault **up** but cannot init/unseal/seed it. After Vault is
+running an operator must, **once**: init + unseal, enable KV-v2, write the `events-read` policy,
+enable + bind the `kubernetes` auth role, apply the `ClusterSecretStore` + `ClusterIssuers`, then
+run `seed-vault.sh`. Until Vault is seeded the platform pods stay in
+`CreateContainerConfigError`/`CrashLoopBackOff` — expected, self-resolves on the next ESO refresh.
+Dev-mode Vault (the kind smoke) auto-initializes + unseals, so those steps are skipped there.
+Full commands: `deploy/helm/prereqs/manifests/vault-bootstrap.md` and `deploy/argocd/README.md`.
+
+### ArgoCD sync
+
+Apply the root app once (`kubectl apply -n argocd -f deploy/argocd/app-of-apps.yaml`); it creates
+every child Application in `deploy/argocd/apps/`. Sync-waves: cert-manager (0) →
+ingress-nginx + vault (1) → ESO (2) → events-platform + events-observability (3). CI bumps image
+tags by writing the new sha into `values-prod.yaml` (PR) → ArgoCD syncs.
+
+### kind smoke
+
+`make -C deploy/scripts smoke` (needs `kind` + a running Docker). It creates a throwaway cluster,
+installs the prereqs + dev-mode Vault, enables the platform's `devDependencies` (in-cluster
+Bitnami Postgres/RabbitMQ — managed/external in prod), deploys `events-platform` with
+`values-kind.yaml`, waits (bounded) for all Deployments, POSTs a real HMAC-signed cal.com
+`BOOKING_CREATED` to event-receiver expecting **202**, then tears the cluster down.
+
+### Dual CI
+
+Every deployable service repo builds + pushes `ghcr.io/lelikov/<service>:{sha,latest}` on push to
+`main` + version tags via **both** GitHub Actions (`.github/workflows/publish-image.yml`) and
+GitLab CI (`.gitlab-ci.yml`) — functionally identical pipelines. `event-schemas` is a library, so
+it gets a lint+test pipeline only (no image).
+
+---
+
 ## Glossary
 
 | Term | Definition |
