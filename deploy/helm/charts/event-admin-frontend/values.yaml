@@ -66,3 +66,21 @@ migration:
 
 podAnnotations: {}
 readOnlyRootFilesystem: false
+
+# nginx official image runs its master process as root, binds :80, and its
+# entrypoint chowns the cache dirs (/var/cache/nginx/*) to the worker uid 101
+# before dropping privileges to the worker. The library securityContext drops
+# ALL capabilities, which strips both NET_BIND_SERVICE (can't bind :80) and
+# CHOWN/SETUID/SETGID (can't chown the cache or drop to the worker uid -> the
+# entrypoint dies with chown "Operation not permitted"). Add exactly those caps
+# back and do NOT force runAsNonRoot. seccompProfile stays RuntimeDefault.
+capabilitiesAdd:
+  - NET_BIND_SERVICE
+  - CHOWN
+  - SETUID
+  - SETGID
+  - DAC_OVERRIDE
+
+podSecurityContext:
+  seccompProfile:
+    type: RuntimeDefault

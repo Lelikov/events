@@ -66,3 +66,14 @@ migration:
 
 podAnnotations: {}
 readOnlyRootFilesystem: false
+
+# Caddy official image runs its master process as root and binds :80. The
+# library securityContext drops ALL capabilities, which strips NET_BIND_SERVICE
+# and prevents binding privileged port 80. Add it back and do NOT force
+# runAsNonRoot so the root master can bind. seccompProfile stays RuntimeDefault.
+capabilitiesAdd:
+  - NET_BIND_SERVICE
+
+podSecurityContext:
+  seccompProfile:
+    type: RuntimeDefault

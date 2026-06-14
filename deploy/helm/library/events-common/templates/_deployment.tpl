@@ -70,9 +70,13 @@ spec:
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
           securityContext:
-            allowPrivilegeEscalation: false
+            allowPrivilegeEscalation: {{ .Values.allowPrivilegeEscalation | default false }}
             readOnlyRootFilesystem: {{ .Values.readOnlyRootFilesystem | default false }}
             capabilities:
               drop:
                 - ALL
+              {{- with .Values.capabilitiesAdd }}
+              add:
+                {{- toYaml . | nindent 16 }}
+              {{- end }}
 {{- end -}}
