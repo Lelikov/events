@@ -252,9 +252,19 @@ open(sys.argv[2], 'w').write(json.dumps(created, separators=(',', ':')))
 PY
 SIG="$(python3 -c "import hmac,hashlib,sys;print(hmac.new(sys.argv[1].encode(),open(sys.argv[2],'rb').read(),hashlib.sha256).hexdigest())" "${RECEIVER_SECRET}" "${BODY_FILE}")"
 
-kubectl -n "${NS}" port-forward svc/event-receiver 18888:8888 >/tmp/receiver-pf.log 2>&1 &
+# The umbrella release prefixes every resource with the release name, so the
+# Service is "events-platform-event-receiver", not "event-receiver". Discover it
+# by label rather than hardcoding the (prefixed) name.
+RECV_SVC="$(kubectl -n "${NS}" get svc -l app.kubernetes.io/name=event-receiver \
+  -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)"
+RECV_SVC="${RECV_SVC:-events-platform-event-receiver}"
+# Wait for the receiver pod to be Ready first (it can't start until RabbitMQ is
+# up, so it may CrashLoop a few times before settling — bounded).
+kubectl -n "${NS}" wait --for=condition=Ready pod \
+  -l app.kubernetes.io/name=event-receiver --timeout=180s 2>/dev/null || true
+kubectl -n "${NS}" port-forward "svc/${RECV_SVC}" 18888:8888 >/tmp/receiver-pf.log 2>&1 &
 RECV_PF_PID=$!
-for _ in $(seq 1 20); do curl -sf http://127.0.0.1:18888/health >/dev/null 2>&1 && break; sleep 1; done
+for _ in $(seq 1 30); do curl -sf http://127.0.0.1:18888/health >/dev/null 2>&1 && break; sleep 1; done
 
 HTTP_CODE="$(curl -s -o /tmp/receiver-resp.txt -w '%{http_code}' \
   -X POST http://127.0.0.1:18888/event/calcom \
