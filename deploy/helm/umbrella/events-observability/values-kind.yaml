@@ -1,0 +1,73 @@
+# events-observability — KIND / CI-smoke overlay.
+# Tiny footprint, ephemeral storage (emptyDir), no ingress. Phase 4 kind-smoke
+# applies this with -f values.yaml -f values-kind.yaml. The ESO ExternalSecret
+# is left enabled so the seeded dev-Vault path is exercised end-to-end.
+
+platformServiceMonitor:
+  namespaces:
+    - events
+
+kube-prometheus-stack:
+  # Drop the cluster-control-plane scrape jobs that don't exist / aren't
+  # reachable in kind, to keep the smoke quiet.
+  kubeEtcd:
+    enabled: false
+  kubeControllerManager:
+    enabled: false
+  kubeScheduler:
+    enabled: false
+  kubeProxy:
+    enabled: false
+
+  prometheus:
+    prometheusSpec:
+      retention: 2h
+      resources:
+        requests:
+          cpu: 50m
+          memory: 256Mi
+      # Ephemeral: no PVC in kind.
+      storageSpec: null
+
+  grafana:
+    persistence:
+      enabled: false
+    resources:
+      requests:
+        cpu: 25m
+        memory: 64Mi
+    ingress:
+      enabled: false
+
+  alertmanager:
+    alertmanagerSpec:
+      resources:
+        requests:
+          cpu: 10m
+          memory: 32Mi
+      # Ephemeral: no PVC in kind.
+      storage: null
+
+  node-exporter:
+    enabled: false
+  kube-state-metrics:
+    resources:
+      requests:
+        cpu: 10m
+        memory: 32Mi
+
+victoria-logs-single:
+  server:
+    retentionPeriod: 1d
+    persistentVolume:
+      enabled: false # emptyDir in kind
+    resources:
+      requests:
+        cpu: 25m
+        memory: 64Mi
+
+vector:
+  resources:
+    requests:
+      cpu: 25m
+      memory: 64Mi

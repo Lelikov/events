@@ -1,0 +1,29 @@
+{{/*
+One ConfigMap per Grafana dashboard JSON under dashboards/. The kube-prometheus-stack
+Grafana sidecar (grafana.sidecar.dashboards, label grafana_dashboard="1") discovers
+these across all namespaces and loads them into Grafana, preserving each dashboard's
+original uid (events-system-overview, events-booking-flow, events-logs).
+
+These JSON files are copied verbatim from docker/grafana/dashboards/ — the docker-compose
+Grafana provisioning and this chart share the exact same dashboards. The datasource uids
+they reference (prometheus, victorialogs) are provisioned in values.yaml so the panels
+resolve identically under k8s.
+*/}}
+{{- range $path, $_ := .Files.Glob "dashboards/*.json" }}
+{{- $name := base $path | trimSuffix ".json" }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ printf "%s-dashboard-%s" (include "events-observability.fullname" $) $name | trunc 63 | trimSuffix "-" }}
+  namespace: {{ $.Release.Namespace }}
+  labels:
+    {{- include "events-observability.labels" $ | nindent 4 }}
+    grafana_dashboard: "1"
+  annotations:
+    # Sidecar drops the dashboard into this Grafana folder.
+    k8s-sidecar-target-directory: "/tmp/dashboards/events"
+data:
+  {{ printf "%s.json" $name }}: |-
+{{ $.Files.Get $path | indent 4 }}
+{{- end }}

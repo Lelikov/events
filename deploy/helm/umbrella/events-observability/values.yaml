@@ -1,0 +1,239 @@
+# events-observability — base values (production-shaped defaults).
+# Overlays: values-prod.yaml (prod hosts/retention) and values-kind.yaml
+# (tiny CI resources, no persistence). Subchart values are nested under each
+# dependency's name; umbrella-owned CRs are under the *ServiceMonitor /
+# prometheusRule / alertmanagerTelegram keys at the top level.
+
+# ---------------------------------------------------------------------------
+# Platform metrics scrape — ServiceMonitor selecting the events-platform
+# Services. Migrated from docker/prometheus/prometheus.yml per-service jobs.
+# ---------------------------------------------------------------------------
+platformServiceMonitor:
+  enabled: true
+  # The 7 services that serve GET /metrics on internal port 8888. The two
+  # frontends (event-admin-frontend, jitsi-chat) listen on :80 and expose no
+  # metrics, so they are excluded via the matchExpressions In-list.
+  services:
+    - event-receiver
+    - event-saver
+    - event-booking
+    - event-notifier
+    - event-users
+    - event-admin
+    - event-shortener
+  portName: http # events-common Service names its port "http" (== containerPort 8888)
+  path: /metrics
+  interval: 15s # matches the docker-compose scrape_interval
+  namespaces: [] # empty -> any namespace; set to [events] in overlays to scope
+
+# ---------------------------------------------------------------------------
+# Alert rules — PrometheusRule migrated from docker/prometheus/rules/*.yml.
+# ---------------------------------------------------------------------------
+prometheusRule:
+  enabled: true
+
+# ---------------------------------------------------------------------------
+# Alertmanager Telegram credentials (bot token from Vault via ESO).
+# ---------------------------------------------------------------------------
+alertmanagerTelegram:
+  # k8s Secret name (== ExternalSecret target) holding key `bot-token`.
+  secretName: alertmanager-telegram
+  externalSecret:
+    enabled: true
+    vaultPath: secret/data/events/alertmanager
+    storeKind: ClusterSecretStore
+    storeName: vault-backend
+    refreshInterval: 1h
+
+# ===========================================================================
+# kube-prometheus-stack — Prometheus Operator + Prometheus + Grafana +
+# Alertmanager + node-exporter + kube-state-metrics.
+# ===========================================================================
+kube-prometheus-stack:
+  fullnameKubeStateMetricsOverride: ""
+
+  prometheus:
+    prometheusSpec:
+      retention: 15d
+      # Discover our umbrella-owned ServiceMonitor/PrometheusRule (release-labelled)
+      # AND any others, rather than only Helm-managed ones.
+      serviceMonitorSelectorNilUsesHelmValues: false
+      podMonitorSelectorNilUsesHelmValues: false
+      ruleSelectorNilUsesHelmValues: false
+      probeSelectorNilUsesHelmValues: false
+      storageSpec:
+        volumeClaimTemplate:
+          spec:
+            accessModes: ["ReadWriteOnce"]
+            resources:
+              requests:
+                storage: 20Gi
+
+  alertmanager:
+    alertmanagerSpec:
+      # Mount the ESO-populated Telegram secret at
+      # /etc/alertmanager/secrets/alertmanager-telegram/bot-token so the config's
+      # bot_token_file can read it.
+      secrets:
+        - alertmanager-telegram
+      storage:
+        volumeClaimTemplate:
+          spec:
+            accessModes: ["ReadWriteOnce"]
+            resources:
+              requests:
+                storage: 2Gi
+    # Telegram routing + receiver migrated from
+    # docker/alertmanager/alertmanager.tmpl.yml. bot_token via the ESO-mounted
+    # secret file; chat_id is a non-credential destination id set inline here and
+    # overridden per-environment in the overlays (values-prod.yaml).
+    config:
+      route:
+        group_by: ["alertname", "job"]
+        group_wait: 30s
+        group_interval: 5m
+        repeat_interval: 4h
+        receiver: telegram
+        routes:
+          - matchers:
+              - severity = critical
+            receiver: telegram
+            group_wait: 10s
+            group_interval: 5m
+            repeat_interval: 1h
+          - matchers:
+              - severity = warning
+            receiver: telegram
+            group_wait: 1m
+            group_interval: 10m
+            repeat_interval: 12h
+      receivers:
+        - name: telegram
+          telegram_configs:
+            - send_resolved: true
+              bot_token_file: /etc/alertmanager/secrets/alertmanager-telegram/bot-token
+              chat_id: 0 # placeholder; set the real chat id in values-prod.yaml
+              parse_mode: HTML
+              api_url: https://api.telegram.org
+              message: |
+                {{ if eq .Status "firing" }}{{ if eq .CommonLabels.severity "critical" }}🔴{{ else }}🟠{{ end }}{{ else }}✅{{ end }} <b>[{{ .Status | toUpper }}{{ if eq .Status "firing" }}:{{ .Alerts.Firing | len }}{{ end }}] {{ .CommonLabels.alertname }}</b>
+                {{ range .Alerts }}
+                <b>severity:</b> {{ .Labels.severity }}
+                <b>job:</b> {{ .Labels.job }}{{ if .Labels.instance }} ({{ .Labels.instance }}){{ end }}
+                <b>summary:</b> {{ .Annotations.summary }}
+                {{ .Annotations.description }}
+                {{ end }}
+
+  grafana:
+    defaultDashboardsEnabled: true
+    # victoriametrics-logs-datasource plugin so the `victorialogs` datasource and
+    # the Events — Logs dashboard's LogsQL queries resolve.
+    plugins:
+      - victoriametrics-logs-datasource
+    sidecar:
+      dashboards:
+        enabled: true
+        label: grafana_dashboard
+        labelValue: "1"
+        searchNamespace: ALL
+        folder: /tmp/dashboards
+        provider:
+          foldersFromFilesStructure: true
+    # In-stack Prometheus datasource is auto-provisioned with uid `prometheus`
+    # (kube-prometheus-stack default) — the dashboards reference exactly that uid.
+    additionalDataSources:
+      - name: VictoriaLogs
+        uid: victorialogs # dashboards reference datasource uid `victorialogs`
+        type: victoriametrics-logs-datasource
+        access: proxy
+        # In-cluster VictoriaLogs server (victoria-logs-single Service).
+        url: http://events-observability-victoria-logs-single-server:9428
+        isDefault: false
+        jsonData:
+          maxLines: 1000
+
+# ===========================================================================
+# VictoriaLogs server (logs store + query backend for the victorialogs DS).
+# Its bundled vector subchart stays OFF — we run our own DaemonSet below.
+# ===========================================================================
+victoria-logs-single:
+  server:
+    retentionPeriod: 7d # values-driven; 7d default per spec
+    persistentVolume:
+      enabled: true
+      size: 10Gi
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+  # Disable the chart's bundled vector — we ship our own Agent DaemonSet so the
+  # docker/vector structlog VRL transform carries over verbatim.
+  vector:
+    enabled: false
+
+# ===========================================================================
+# Vector — DaemonSet (Agent) collecting pod logs via kubernetes_logs (replacing
+# docker_logs) and shipping to VictoriaLogs' ES bulk endpoint. The remap is the
+# k8s port of docker/vector/vector.yaml's structlog parser.
+# ===========================================================================
+vector:
+  role: Agent
+  customConfig:
+    data_dir: /vector-data-dir
+    api:
+      enabled: false
+    sources:
+      kubernetes_logs:
+        type: kubernetes_logs
+        # Skip Vector's own pods to avoid a log feedback loop.
+        extra_label_selector: app.kubernetes.io/name!=vector
+    transforms:
+      parse:
+        type: remap
+        inputs: [kubernetes_logs]
+        source: |-
+          # Derive `service` from the pod's app label (the platform Deployments
+          # set app.kubernetes.io/name to the service name), falling back to the
+          # pod name. kubernetes_logs exposes pod metadata under .kubernetes.
+          .service = .kubernetes.pod_labels."app.kubernetes.io/name" || .kubernetes.pod_name || "unknown"
+          .container = .kubernetes.container_name
+          .stream = .stream
+
+          # Parse the raw line as structlog JSON (Python services emit JSON when
+          # DEBUG=false). On failure keep the raw line as `_msg`.
+          raw_msg = to_string(.message) ?? ""
+          parsed, err = parse_json(.message)
+          if err == null && is_object(parsed) {
+              obj = object!(parsed)
+              . = merge(., obj)
+              msg = to_string(obj.event) ?? to_string(obj.message) ?? raw_msg
+              ._msg = msg
+              if exists(obj.level) {
+                  .level = downcase(to_string(obj.level) ?? "")
+              }
+              if exists(obj.timestamp) {
+                  ts, tserr = parse_timestamp(to_string(obj.timestamp) ?? "", "%+")
+                  if tserr == null {
+                      .timestamp = ts
+                  }
+              }
+          } else {
+              ._msg = raw_msg
+          }
+
+          # Drop raw fields the sink doesn't need.
+          del(.message)
+    sinks:
+      victorialogs:
+        type: elasticsearch
+        inputs: [parse]
+        endpoints:
+          - http://events-observability-victoria-logs-single-server:9428/insert/elasticsearch/
+        api_version: v8
+        compression: gzip
+        healthcheck:
+          enabled: false
+        query:
+          _msg_field: _msg
+          _time_field: timestamp
+          _stream_fields: service,container

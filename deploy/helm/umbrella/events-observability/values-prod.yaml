@@ -1,0 +1,92 @@
+# events-observability — PRODUCTION overlay.
+# Layered on top of values.yaml: real hosts, fuller retention, persistence on,
+# real Telegram chat id. Apply with -f values.yaml -f values-prod.yaml (ArgoCD
+# lists both). The bot token still comes from Vault via ESO; only chat_id (a
+# non-credential destination id) is set here.
+
+platformServiceMonitor:
+  # Scope discovery to the namespace the platform is deployed in.
+  namespaces:
+    - events
+
+kube-prometheus-stack:
+  prometheus:
+    prometheusSpec:
+      retention: 30d
+      resources:
+        requests:
+          cpu: 500m
+          memory: 2Gi
+        limits:
+          memory: 4Gi
+      storageSpec:
+        volumeClaimTemplate:
+          spec:
+            accessModes: ["ReadWriteOnce"]
+            resources:
+              requests:
+                storage: 100Gi
+
+  grafana:
+    # Real admin password comes from Vault/ESO in the cluster (operator wires
+    # grafana.admin.existingSecret); kept out of git here.
+    adminPassword: "" # set via existingSecret in the cluster, not in git
+    persistence:
+      enabled: true
+      size: 10Gi
+    ingress:
+      enabled: false # exposed via the platform ingress / port-forward by default
+
+  alertmanager:
+    alertmanagerSpec:
+      resources:
+        requests:
+          cpu: 50m
+          memory: 128Mi
+      storage:
+        volumeClaimTemplate:
+          spec:
+            accessModes: ["ReadWriteOnce"]
+            resources:
+              requests:
+                storage: 5Gi
+    config:
+      receivers:
+        - name: telegram
+          telegram_configs:
+            - send_resolved: true
+              bot_token_file: /etc/alertmanager/secrets/alertmanager-telegram/bot-token
+              # Real production Telegram chat id. Not a credential; the bot token
+              # (the secret) is mounted from Vault via ESO.
+              chat_id: 123456789
+              parse_mode: HTML
+              api_url: https://api.telegram.org
+              message: |
+                {{ if eq .Status "firing" }}{{ if eq .CommonLabels.severity "critical" }}🔴{{ else }}🟠{{ end }}{{ else }}✅{{ end }} <b>[{{ .Status | toUpper }}{{ if eq .Status "firing" }}:{{ .Alerts.Firing | len }}{{ end }}] {{ .CommonLabels.alertname }}</b>
+                {{ range .Alerts }}
+                <b>severity:</b> {{ .Labels.severity }}
+                <b>job:</b> {{ .Labels.job }}{{ if .Labels.instance }} ({{ .Labels.instance }}){{ end }}
+                <b>summary:</b> {{ .Annotations.summary }}
+                {{ .Annotations.description }}
+                {{ end }}
+
+victoria-logs-single:
+  server:
+    retentionPeriod: 7d
+    persistentVolume:
+      enabled: true
+      size: 50Gi
+    resources:
+      requests:
+        cpu: 250m
+        memory: 512Mi
+      limits:
+        memory: 1Gi
+
+vector:
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      memory: 256Mi

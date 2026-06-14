@@ -1,0 +1,130 @@
+{{/*
+PrometheusRule migrated from docker/prometheus/rules/{infra,business}.yml.
+
+Alert names, exprs, `for:` durations, severities and annotations are kept
+IDENTICAL to the docker-compose rules — the only difference is the wrapping in a
+PrometheusRule CR. The `{{ $labels.job }}` references still resolve because the
+platform ServiceMonitor relabels each target's `job` to the Kubernetes Service
+name (event-receiver/event-saver/...), exactly matching the old job_name targets.
+
+Note on managed deps: under k8s, RabbitMQ and the per-DB Postgres are
+managed/external (design decision) and are NOT scraped by this umbrella's
+ServiceMonitor. The RabbitMQDown / DLQGrowing / PostgresDown rules are migrated
+verbatim and will fire once those exporters are pointed at Prometheus via their
+own ServiceMonitor (operator task); they no-op until then rather than false-fire.
+*/}}
+{{- if .Values.prometheusRule.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: {{ printf "%s-rules" (include "events-observability.fullname" .) | trunc 63 | trimSuffix "-" }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "events-observability.labels" . | nindent 4 }}
+    # Picked up by the kube-prometheus-stack Prometheus (release selector).
+    release: {{ .Release.Name }}
+spec:
+  groups:
+    - name: infra
+      rules:
+        - alert: ServiceDown
+          expr: up == 0
+          for: 1m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Target {{ "{{ $labels.job }}" }} is down"
+            description: "Prometheus target {{ "{{ $labels.job }}" }} ({{ "{{ $labels.instance }}" }}) has been unreachable for over 1m."
+
+        - alert: HighErrorRate
+          expr: |
+            (
+              sum by (job) (rate(http_requests_total{status=~"5.."}[5m]))
+              /
+              sum by (job) (rate(http_requests_total[5m]))
+            ) > 0.05
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "High 5xx error rate on {{ "{{ $labels.job }}" }}"
+            description: "{{ "{{ $labels.job }}" }} is serving {{ "{{ $value | humanizePercentage }}" }} 5xx responses (>5%) over the last 5m."
+
+        - alert: HighLatencyP95
+          expr: |
+            histogram_quantile(
+              0.95,
+              sum by (job, route, le) (rate(http_request_duration_seconds_bucket[5m]))
+            ) > 1
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "High p95 latency on {{ "{{ $labels.job }}" }} {{ "{{ $labels.route }}" }}"
+            description: "p95 latency for {{ "{{ $labels.job }}" }} route {{ "{{ $labels.route }}" }} is {{ "{{ $value | humanizeDuration }}" }} (>1s) over 5m."
+
+        - alert: DLQGrowing
+          expr: rabbitmq_queue_messages{queue=~".*\\.dlq"} > 0
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Dead-letter queue {{ "{{ $labels.queue }}" }} is non-empty"
+            description: "DLQ {{ "{{ $labels.queue }}" }} holds {{ "{{ $value }}" }} message(s) for over 5m — investigate poison messages."
+
+        - alert: OutboxBacklog
+          expr: notifier_outbox_depth{status="pending"} > 100
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Notifier outbox backlog is high"
+            description: "event-notifier has {{ "{{ $value }}" }} pending outbox rows (>100) for over 10m — delivery is falling behind."
+
+        - alert: OutboxStalled
+          expr: notifier_outbox_oldest_pending_age_seconds > 300
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Notifier outbox is stalled"
+            description: "Oldest pending outbox row is {{ "{{ $value | humanizeDuration }}" }} old (>5m) — the outbox sender appears stuck."
+
+        - alert: RabbitMQDown
+          expr: up{job="rabbitmq"} == 0
+          for: 1m
+          labels:
+            severity: critical
+          annotations:
+            summary: "RabbitMQ is down"
+            description: "RabbitMQ metrics endpoint (job rabbitmq) has been unreachable for over 1m."
+
+        - alert: PostgresDown
+          expr: pg_up == 0
+          for: 1m
+          labels:
+            severity: critical
+          annotations:
+            summary: "PostgreSQL ({{ "{{ $labels.db }}" }}) is down"
+            description: "postgres_exporter for db={{ "{{ $labels.db }}" }} reports pg_up=0 for over 1m — the database is unreachable."
+
+    - name: business
+      rules:
+        - alert: BookingRejectionSpike
+          expr: sum by (rejection_type) (rate(booking_rejections_total[10m])) > 0.2
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Booking rejection spike ({{ "{{ $labels.rejection_type }}" }})"
+            description: "Bookings are being rejected at {{ "{{ $value | humanize }}" }}/s for type '{{ "{{ $labels.rejection_type }}" }}' over 10m."
+
+        - alert: NotificationDeliveryFailures
+          expr: sum by (channel) (rate(notifier_deliveries_total{outcome="failed"}[5m])) > 0
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Notification delivery failures on {{ "{{ $labels.channel }}" }}"
+            description: "event-notifier is failing {{ "{{ $value | humanize }}" }}/s deliveries on channel '{{ "{{ $labels.channel }}" }}' over 5m."
+{{- end }}

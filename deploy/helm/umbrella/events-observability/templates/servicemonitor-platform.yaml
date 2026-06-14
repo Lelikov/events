@@ -1,0 +1,56 @@
+{{/*
+ServiceMonitor migrating docker/prometheus/prometheus.yml's per-service scrape
+jobs (event-receiver/saver/booking/notifier/users/admin/shortener — the 7
+services that serve GET /metrics on internal port 8888, same app as /health).
+
+Selection is label-based against the Services the events-common library emits:
+every platform Service carries `app.kubernetes.io/part-of: events-platform`
+(events-common.labels) and a `http` named port == containerPort. We further
+restrict to the 7 metrics-exposing names via matchExpressions so the two
+frontends (event-admin-frontend, jitsi-chat — port 80, no /metrics) are excluded.
+
+The Prometheus Operator's serviceMonitorSelector is configured in values.yaml
+(serviceMonitorSelectorNilUsesHelmValues:false + a release-matching label) so
+this CR is actually picked up across namespaces.
+*/}}
+{{- if .Values.platformServiceMonitor.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ printf "%s-platform" (include "events-observability.fullname" .) | trunc 63 | trimSuffix "-" }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "events-observability.labels" . | nindent 4 }}
+    # Picked up by the kube-prometheus-stack Prometheus (release selector).
+    release: {{ .Release.Name }}
+spec:
+  namespaceSelector:
+    {{- if .Values.platformServiceMonitor.namespaces }}
+    matchNames:
+      {{- toYaml .Values.platformServiceMonitor.namespaces | nindent 6 }}
+    {{- else }}
+    any: true
+    {{- end }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/part-of: events-platform
+    matchExpressions:
+      - key: app.kubernetes.io/name
+        operator: In
+        values:
+          {{- range .Values.platformServiceMonitor.services }}
+          - {{ . }}
+          {{- end }}
+  endpoints:
+    - port: {{ .Values.platformServiceMonitor.portName | quote }}
+      path: {{ .Values.platformServiceMonitor.path | quote }}
+      interval: {{ .Values.platformServiceMonitor.interval | quote }}
+      scheme: http
+      relabelings:
+        # Expose the Kubernetes Service name as the classic `job` label so the
+        # migrated alert rules (which page by {{ "{{ $labels.job }}" }}) and the
+        # dashboards keep matching event-receiver/event-saver/... exactly as the
+        # docker-compose job_name targets did.
+        - sourceLabels: [__meta_kubernetes_service_label_app_kubernetes_io_name]
+          targetLabel: job
+{{- end }}
