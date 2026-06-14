@@ -1,0 +1,30 @@
+# cert-manager — sync-wave 0 (must exist before ingress TLS / ClusterIssuers).
+# Installed straight from the upstream OCI chart; CRDs installed in-chart.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: cert-manager
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: oci://quay.io/jetstack/charts/cert-manager
+    chart: cert-manager
+    targetRevision: v1.19.5
+    helm:
+      values: |
+        installCRDs: true
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: cert-manager
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true # large cert-manager CRDs need SSA

@@ -1,0 +1,51 @@
+# events-observability — sync-wave 3 (alongside the platform). kube-prometheus-
+# stack + VictoriaLogs + Vector DaemonSet, tracking the in-repo umbrella with the
+# production overlay.
+#
+# kube-prometheus-stack ships very large CRDs (Prometheus/Alertmanager/etc.):
+# ServerSideApply avoids the client-side-apply annotation size limit, and the
+# ignoreDifferences below stops ArgoCD from fighting the operator over
+# controller-managed CRD fields.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: events-observability
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "3"
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    # TODO: same repoURL as app-of-apps.yaml.
+    repoURL: https://github.com/lelikov/events
+    targetRevision: main
+    path: deploy/helm/umbrella/events-observability
+    helm:
+      valueFiles:
+        - values-prod.yaml
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: observability
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true
+  ignoreDifferences:
+    - group: apiextensions.k8s.io
+      kind: CustomResourceDefinition
+      jsonPointers:
+        - /spec/conversion/webhook/clientConfig/caBundle
+        - /status
+    - group: admissionregistration.k8s.io
+      kind: ValidatingWebhookConfiguration
+      jqPathExpressions:
+        - .webhooks[].clientConfig.caBundle
+    - group: admissionregistration.k8s.io
+      kind: MutatingWebhookConfiguration
+      jqPathExpressions:
+        - .webhooks[].clientConfig.caBundle

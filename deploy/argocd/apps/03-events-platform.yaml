@@ -1,0 +1,36 @@
+# events-platform — sync-wave 3 (after cert-manager + ingress-nginx + Vault +
+# ESO, and after Vault is seeded so the ExternalSecrets resolve).
+#
+# Tracks the in-repo umbrella chart with the PRODUCTION overlay. CI bumps image
+# tags by writing the new sha into values-prod.yaml (PR) -> ArgoCD syncs it.
+# devDependencies (in-cluster Postgres/RabbitMQ) stay OFF here — prod uses
+# managed/external instances.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: events-platform
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "3"
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    # TODO: same repoURL as app-of-apps.yaml.
+    repoURL: https://github.com/lelikov/events
+    targetRevision: main
+    path: deploy/helm/umbrella/events-platform
+    helm:
+      valueFiles:
+        - values-prod.yaml
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: events-platform
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true

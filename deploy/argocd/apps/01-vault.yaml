@@ -1,0 +1,42 @@
+# Vault — sync-wave 1 (in parallel with ingress-nginx; must be up + bootstrapped
+# before ESO's ClusterSecretStore validates in wave 2).
+#
+# IMPORTANT: ArgoCD installs Vault but CANNOT init/unseal/seed it. After this
+# Application is Healthy, an operator runs the manual one-time bootstrap:
+#   1. vault operator init / unseal       (deploy/helm/prereqs/manifests/vault-bootstrap.md)
+#   2. enable KV-v2, write events-read policy, enable + bind kubernetes auth role
+#   3. deploy/scripts/seed-vault.sh        (populate secret/events/<service>)
+# Only THEN do the platform ExternalSecrets resolve. See deploy/argocd/README.md.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: vault
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://helm.releases.hashicorp.com
+    chart: vault
+    targetRevision: 0.30.1
+    # Keep in sync with deploy/helm/prereqs/vault-values.yaml (file storage,
+    # single instance — production HA/auto-unseal is an operator task).
+    helm:
+      values: |
+        server:
+          standalone:
+            enabled: true
+          dataStorage:
+            enabled: true
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: vault
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true

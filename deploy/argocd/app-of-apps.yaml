@@ -1,0 +1,34 @@
+# app-of-apps — the single root Application an operator applies once. It points
+# ArgoCD at deploy/argocd/apps/ in this repo; every child Application in that
+# directory is then created + synced by ArgoCD (the "app of apps" pattern).
+#
+# Bootstrap:
+#   kubectl apply -n argocd -f deploy/argocd/app-of-apps.yaml
+#
+# PLACEHOLDERS to replace for your environment:
+#   spec.source.repoURL         -> your fork/clone of this monorepo
+#   spec.source.targetRevision  -> the branch/tag ArgoCD should track (e.g. main)
+# (Child Applications inherit the same repoURL; edit them together.)
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: events-root
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    # TODO: point at your repo. Documented placeholder per the design.
+    repoURL: https://github.com/lelikov/events
+    targetRevision: main
+    path: deploy/argocd/apps
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: argocd
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
