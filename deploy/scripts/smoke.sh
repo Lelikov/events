@@ -104,31 +104,47 @@ helm repo add hashicorp https://helm.releases.hashicorp.com >/dev/null 2>&1 || t
 helm repo add external-secrets https://charts.external-secrets.io >/dev/null 2>&1 || true
 helm repo update ingress-nginx hashicorp external-secrets >/dev/null 2>&1 || true
 
+# helm's client-side `--wait` readiness watcher hangs indefinitely against this
+# kind cluster (the informer never reports Ready even after pods are Running),
+# so we install WITHOUT `--wait` and gate readiness with bounded
+# `kubectl rollout status`, which polls the API server directly and returns.
+roll() {  # roll <ns> <kind/name> ...  (each bounded; non-fatal warnings)
+  local ns="$1"; shift
+  local res
+  for res in "$@"; do
+    kubectl -n "$ns" rollout status "$res" --timeout=180s 2>/dev/null \
+      || warn "$res in $ns not Ready within timeout"
+  done
+}
+
 log "Installing cert-manager (OCI registry — the jetstack HTTP index throttles)"
 helm upgrade --install cert-manager oci://quay.io/jetstack/charts/cert-manager --version "${CERT_MANAGER_VER}" \
-  --namespace cert-manager --create-namespace --set installCRDs=true --wait --timeout 5m \
+  --namespace cert-manager --create-namespace --set installCRDs=true --timeout 5m \
   || { err "cert-manager install failed"; exit 1; }
+roll cert-manager deploy/cert-manager deploy/cert-manager-cainjector deploy/cert-manager-webhook
 
 log "Installing ingress-nginx"
 helm upgrade --install ingress-nginx ingress-nginx/ingress-nginx --version "${INGRESS_VER}" \
   --namespace ingress-nginx --create-namespace \
-  --set controller.service.type=ClusterIP --wait --timeout 5m \
-  || warn "ingress-nginx not fully ready (smoke port-forwards the receiver Service directly, so this is non-fatal)"
+  --set controller.service.type=ClusterIP --timeout 5m \
+  || warn "ingress-nginx install returned non-zero (smoke port-forwards the receiver Service directly, so this is non-fatal)"
+roll ingress-nginx deploy/ingress-nginx-controller
 
 log "Installing Vault (dev mode — auto unseal, root token '${VAULT_ROOT_TOKEN}')"
 helm upgrade --install vault hashicorp/vault --version "${VAULT_VER}" \
   --namespace "${VAULT_NS}" --create-namespace \
   --set "server.dev.enabled=true" \
   --set "server.dev.devRootToken=${VAULT_ROOT_TOKEN}" \
-  --set "injector.enabled=false" --wait --timeout 5m \
+  --set "injector.enabled=false" --timeout 5m \
   || { err "vault install failed"; exit 1; }
-kubectl -n "${VAULT_NS}" rollout status statefulset/vault --timeout=120s 2>/dev/null \
-  || kubectl -n "${VAULT_NS}" wait --for=condition=Ready pod/vault-0 --timeout=120s || true
+kubectl -n "${VAULT_NS}" rollout status statefulset/vault --timeout=180s 2>/dev/null \
+  || kubectl -n "${VAULT_NS}" wait --for=condition=Ready pod/vault-0 --timeout=180s || true
 
 log "Installing External Secrets Operator"
 helm upgrade --install external-secrets external-secrets/external-secrets --version "${ESO_VER}" \
-  --namespace "${ESO_NS}" --create-namespace --set installCRDs=true --wait --timeout 5m \
+  --namespace "${ESO_NS}" --create-namespace --set installCRDs=true --timeout 5m \
   || { err "ESO install failed"; exit 1; }
+roll "${ESO_NS}" deploy/external-secrets deploy/external-secrets-webhook deploy/external-secrets-cert-controller
 R_prereqs="PASS"; ok "prereqs installed"
 
 # 3. seed Vault -------------------------------------------------------------
