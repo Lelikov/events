@@ -1,0 +1,38 @@
+apiVersion: v2
+name: events-platform
+description: >-
+  Umbrella chart deploying all 9 events-platform services. Per-subchart
+  overrides (image.tag, ingress.host, replicas, hpa) live in the
+  values-{prod,staging,kind}.yaml files. Secrets/config come from Vault via
+  External Secrets Operator (phase 2).
+type: application
+version: 0.1.0
+appVersion: "latest"
+dependencies:
+  - name: event-receiver
+    version: 0.1.0
+    repository: "file://../../charts/event-receiver"
+  - name: event-saver
+    version: 0.1.0
+    repository: "file://../../charts/event-saver"
+  - name: event-booking
+    version: 0.1.0
+    repository: "file://../../charts/event-booking"
+  - name: event-admin
+    version: 0.1.0
+    repository: "file://../../charts/event-admin"
+  - name: event-admin-frontend
+    version: 0.1.0
+    repository: "file://../../charts/event-admin-frontend"
+  - name: event-users
+    version: 0.1.0
+    repository: "file://../../charts/event-users"
+  - name: event-notifier
+    version: 0.1.0
+    repository: "file://../../charts/event-notifier"
+  - name: event-shortener
+    version: 0.1.0
+    repository: "file://../../charts/event-shortener"
+  - name: jitsi-chat
+    version: 0.1.0
+    repository: "file://../../charts/jitsi-chat"

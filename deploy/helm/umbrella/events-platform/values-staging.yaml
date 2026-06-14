@@ -1,0 +1,64 @@
+# events-platform — STAGING overlay (stub).
+#
+# Single replica, HPA off. Hostnames are placeholders; fill in real staging
+# DNS when the environment is provisioned. Image tags set by CI.
+
+event-receiver:
+  replicas: 1
+  image:
+    tag: TODO-set-by-ci
+  ingress:
+    enabled: true
+    host: TODO-receiver.staging.example.com
+
+event-saver:
+  replicas: 1
+  image:
+    tag: TODO-set-by-ci
+
+event-booking:
+  replicas: 1
+  image:
+    tag: TODO-set-by-ci
+
+event-admin:
+  replicas: 1
+  image:
+    tag: TODO-set-by-ci
+  ingress:
+    enabled: true
+    host: TODO-admin-api.staging.example.com
+
+event-admin-frontend:
+  replicas: 1
+  image:
+    tag: TODO-set-by-ci
+  ingress:
+    enabled: true
+    host: TODO-admin.staging.example.com
+
+event-users:
+  replicas: 1
+  image:
+    tag: TODO-set-by-ci
+
+event-notifier:
+  replicas: 1
+  image:
+    tag: TODO-set-by-ci
+
+event-shortener:
+  replicas: 1
+  image:
+    tag: TODO-set-by-ci
+  ingress:
+    enabled: true
+    host: TODO-s.staging.example.com
+
+jitsi-chat:
+  replicas: 1
+  image:
+    tag: TODO-set-by-ci
+  ingress:
+    enabled: true
+    host: TODO-meet.staging.example.com

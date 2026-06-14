@@ -1,0 +1,52 @@
+# events-platform umbrella — base defaults.
+#
+# Each top-level key matches a subchart name and overrides that subchart's
+# values.yaml. Only k8s spec is set here (image tags, hosts, replicas, hpa);
+# all app config + secrets come from Vault via ESO.
+#
+# Environment overlays: values-prod.yaml, values-staging.yaml, values-kind.yaml.
+
+event-receiver:
+  replicas: 1
+  image:
+    tag: latest
+
+event-saver:
+  replicas: 1
+  image:
+    tag: latest
+
+event-booking:
+  replicas: 1
+  image:
+    tag: latest
+
+event-admin:
+  replicas: 1
+  image:
+    tag: latest
+
+event-admin-frontend:
+  replicas: 1
+  image:
+    tag: latest
+
+event-users:
+  replicas: 1
+  image:
+    tag: latest
+
+event-notifier:
+  replicas: 1
+  image:
+    tag: latest
+
+event-shortener:
+  replicas: 1
+  image:
+    tag: latest
+
+jitsi-chat:
+  replicas: 1
+  image:
+    tag: latest

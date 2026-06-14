@@ -1,0 +1,93 @@
+# events-platform — PRODUCTION overlay.
+#
+# Image tags are written by CI (image bump PR -> ArgoCD sync), so they start
+# as placeholders. Hostnames are TODO placeholders to be replaced with real
+# production DNS. Replicas 2, HPA enabled for public/throughput services.
+
+event-receiver:
+  replicas: 2
+  image:
+    tag: TODO-set-by-ci
+  ingress:
+    enabled: true
+    host: TODO-receiver.prod.example.com # TODO: real production host
+  hpa:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 5
+
+event-saver:
+  replicas: 2
+  image:
+    tag: TODO-set-by-ci
+  hpa:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 5
+
+event-booking:
+  replicas: 2
+  image:
+    tag: TODO-set-by-ci
+  hpa:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 5
+
+event-admin:
+  replicas: 2
+  image:
+    tag: TODO-set-by-ci
+  ingress:
+    enabled: true
+    host: TODO-admin-api.prod.example.com # TODO: real production host
+  hpa:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 5
+
+event-admin-frontend:
+  replicas: 2
+  image:
+    tag: TODO-set-by-ci
+  ingress:
+    enabled: true
+    host: TODO-admin.prod.example.com # TODO: real production host
+
+event-users:
+  replicas: 2
+  image:
+    tag: TODO-set-by-ci
+  hpa:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 5
+
+event-notifier:
+  replicas: 2
+  image:
+    tag: TODO-set-by-ci
+  hpa:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 5
+
+event-shortener:
+  replicas: 2
+  image:
+    tag: TODO-set-by-ci
+  ingress:
+    enabled: true
+    host: TODO-s.prod.example.com # TODO: real production host
+  hpa:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 5
+
+jitsi-chat:
+  replicas: 2
+  image:
+    tag: TODO-set-by-ci
+  ingress:
+    enabled: true
+    host: TODO-meet.prod.example.com # TODO: real production host
