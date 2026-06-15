@@ -27,9 +27,14 @@ Every Python service uses:
 - **Frozen dataclasses** as DTOs between layers
 - **Ruff** (line length 120) for linting/formatting
 
-### 5. event-notifier is new and incomplete
+### 5. event-notifier manages channel config in the database
 
-event-notifier is the newest service. It has no migration framework (raw SQL bootstrap only), no delivery result publishing (documented but not implemented), and requires FCM credentials even though push notifications are disabled. The queue name mismatch with event-receiver (C-3) has been resolved — it now correctly defaults to `events.notification.commands`. Treat it as pre-alpha.
+event-notifier's `notification_bindings` table controls which channels fire for each trigger
+event and which template to use. The table is seeded by Alembic migration
+`003_notification_bindings` (from `UNISENDER_TEMPLATE_IDS` env + repo `.j2` files) and is
+then edited at runtime through the event-admin "Уведомления" UI — no redeploy needed. An
+in-memory cache (`BINDINGS_CACHE_TTL_SECONDS`, default 30 s) keeps delivery fast; admin edits
+invalidate it immediately.
 
 ---
 
@@ -206,7 +211,7 @@ Each service needs its own `.env`. Copy from `.env.example` where available. Key
 | event-saver | `POSTGRES_DSN`, `RABBIT_URL` |
 | event-admin | `POSTGRES_DSN` (same DB as event-saver), `JWT_SECRET_KEY` |
 | event-users | `POSTGRES_DSN` (separate DB), `JWT_SECRET_KEY`, `CRM_ENCRYPTION_KEY` |
-| event-notifier | `RABBIT_URL`, `EVENT_RECEIVER_URL`, `EVENT_USERS_URL`, `UNISENDER_API_KEY`, `TELEGRAM_BOT_TOKEN`, `FCM_PROJECT_ID`, `FCM_SERVICE_ACCOUNT_JSON` |
+| event-notifier | `RABBIT_URL`, `EVENT_RECEIVER_URL`, `EVENT_USERS_URL`, `UNISENDER_API_KEY`, `TELEGRAM_BOT_TOKEN`, `NOTIFIER_ADMIN_TOKEN`, `FCM_PROJECT_ID`, `FCM_SERVICE_ACCOUNT_JSON` |
 | event-admin-frontend | `VITE_API_BASE_URL`, `VITE_USERS_API_BASE_URL` |
 
 ---
@@ -471,6 +476,44 @@ when `DEBUG=false`.
   stack; for production, harden both (least-privilege socket proxy or a
   log-driver instead of the raw socket, and auth/TLS in front of VictoriaLogs).
 
+## Managing Notification Templates
+
+Per-trigger-event channel enablement and template selection are **admin-managed at runtime** —
+no redeploy needed. Configuration is stored in `event-notifier`'s `notification_bindings`
+table and edited through the **event-admin-frontend "Уведомления" page** (accessible to any
+`admin`-role user after login).
+
+### What the admin can do
+
+- Enable or disable email / Telegram delivery per trigger event (7 events × 2 channels = 14
+  controls).
+- Pick the UniSender Go email template from a dropdown populated from the UniSender API
+  (cached 1 h; "Обновить" forces a fresh fetch).
+- Edit the Telegram Jinja2 message body inline and preview the rendered output before saving.
+
+### Where config lives
+
+`notification_bindings` in `pg-notifier` (the event-notifier PostgreSQL database). The table
+is seeded once by Alembic migration `003_notification_bindings` from the
+`UNISENDER_TEMPLATE_IDS` env and the `.j2` template files shipped in the repo. After seeding,
+the DB is authoritative — the `.j2` files are not read at runtime.
+
+### Env knobs
+
+| Variable | Service | Default | Purpose |
+|----------|---------|---------|---------|
+| `NOTIFIER_ADMIN_TOKEN` | event-notifier + event-admin | *(required)* | Static service token for the notifier admin API; must match in both services |
+| `BINDINGS_CACHE_TTL_SECONDS` | event-notifier | `30` | How long the in-memory bindings cache is valid before a DB re-read; admin `PUT` invalidates it immediately |
+| `NOTIFIER_SERVICE_URL` | event-admin | `http://event-notifier:8888` | URL event-admin uses to reach event-notifier's admin API |
+
+### v1 caveat — single locale
+
+The current implementation stores one template per `trigger_event × channel`. The seed
+uses `DEFAULT_LOCALE` (default `ru`). Selecting a different language or managing per-locale
+templates is out of scope for v1.
+
+---
+
 ## Minimum Viable Setup
 
 Not every service is needed for every task. Use this table to decide what to run:
@@ -493,11 +536,11 @@ Not every service is needed for every task. Use this table to decide what to run
 
 | Service | Command | Notes |
 |---|---|---|
-| event-notifier | `cd event-notifier && uv run pytest` | Has test infrastructure with pytest-asyncio, respx, and mocks |
+| event-notifier | `cd event-notifier && uv run pytest` | Has test infrastructure with pytest-asyncio, respx, and mocks; includes bindings + admin API tests |
 | event-receiver | No test suite | No tests exist |
 | event-saver | No test suite | No tests exist |
-| event-admin | No test suite | No tests exist |
-| event-admin-frontend | No test runner configured | `npm run build` does type-checking only |
+| event-admin | `cd event-admin && uv run pytest` | Notifications proxy tests added in `tests/test_notifications_proxy.py` |
+| event-admin-frontend | `cd event-admin-frontend && npm run test` | vitest; includes `NotificationsPage.test.tsx` |
 | event-users | No test suite | No tests exist |
 | event-schemas | No test suite | Relies on strict typing; no runtime tests |
 
@@ -558,9 +601,17 @@ alembic revision --autogenerate -m "description"
 alembic downgrade -1
 ```
 
-### event-notifier (no migration framework)
+### event-notifier (Alembic)
 
-event-notifier uses raw SQL in `db/schema.py` to bootstrap its tables. There is no Alembic setup, no version tracking, and no rollback capability.
+event-notifier uses Alembic for schema management (migrations in `alembic/versions/`). Apply with:
+
+```bash
+cd event-notifier && uv run alembic upgrade head
+```
+
+Migration `003_notification_bindings` creates the `notification_bindings` table and seeds it
+from the `UNISENDER_TEMPLATE_IDS` env and `event_notifier/templates/<locale>/telegram/` files.
+Run it whenever deploying the notification-template-config feature for the first time.
 
 ---
 
