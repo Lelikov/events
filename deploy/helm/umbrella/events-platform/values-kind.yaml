@@ -1,3 +1,9 @@
+# kind loads locally-built images (smoke.sh: docker build + kind load), so the
+# pull secret is OFF by default. Opt in by re-deploying with:
+#   --set ghcrPullSecret.enabled=true --set global.imagePullSecrets[0].name=ghcr-pull
+ghcrPullSecret:
+  enabled: false
+
 # events-platform — KIND overlay (CI smoke / local cluster).
 #
 # Single replica everywhere. Ingress hosts use the *.127.0.0.1.nip.io wildcard

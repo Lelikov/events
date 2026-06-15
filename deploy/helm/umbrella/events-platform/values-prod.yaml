@@ -1,3 +1,10 @@
+# Pull the private ghcr.io/lelikov/* images using the ESO-materialized ghcr-pull secret.
+ghcrPullSecret:
+  enabled: true
+global:
+  imagePullSecrets:
+    - name: ghcr-pull
+
 # events-platform — PRODUCTION overlay.
 #
 # Image tags are written by CI (image bump PR -> ArgoCD sync), so they start
