@@ -6,6 +6,12 @@
 #
 # Environment overlays: values-prod.yaml, values-staging.yaml, values-kind.yaml.
 
+# GHCR image pull secret: an ESO-materialized dockerconfigjson from
+# secret/events/ghcr. OFF by default; values-prod.yaml turns it on and sets
+# global.imagePullSecrets so all subcharts reference it.
+ghcrPullSecret:
+  enabled: false
+
 # devDependencies: in-cluster Postgres + RabbitMQ for the kind smoke ONLY.
 # OFF by default (and in prod/staging) — prod uses EXTERNAL/managed instances
 # and the charts consume DSN/URL from Vault. values-kind.yaml flips these on.
