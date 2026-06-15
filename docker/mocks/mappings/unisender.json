@@ -11,9 +11,10 @@
         "headers": { "Content-Type": "application/json" },
         "jsonBody": {
           "status": "success",
-          "job_id": "1devmockjobid",
+          "job_id": "{{randomValue type='UUID'}}",
           "emails": ["recipient@example.com"]
-        }
+        },
+        "transformers": ["response-template"]
       }
     }
   ]
