@@ -24,6 +24,7 @@ spec:
       labels:
         {{- include "events-common.selectorLabels" . | nindent 8 }}
     spec:
+      {{- include "events-common.imagePullSecrets" . | nindent 6 }}
       restartPolicy: Never
       securityContext:
         runAsNonRoot: true

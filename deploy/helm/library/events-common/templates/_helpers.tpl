@@ -63,3 +63,17 @@ and the ExternalSecret target. Phase 2 (ESO) must populate THIS secret name.
 {{- define "events-common.envSecretName" -}}
 {{- printf "%s-env" (include "events-common.fullname" .) -}}
 {{- end -}}
+
+{{/*
+events-common.imagePullSecrets — renders an imagePullSecrets block from
+.Values.global.imagePullSecrets (set once by the umbrella for all subcharts),
+falling back to a per-chart .Values.imagePullSecrets. Emits nothing when unset.
+Include with a pod-spec indent, e.g. `{{- include "events-common.imagePullSecrets" . | nindent 6 }}`.
+*/}}
+{{- define "events-common.imagePullSecrets" -}}
+{{- $secrets := (default dict .Values.global).imagePullSecrets | default .Values.imagePullSecrets -}}
+{{- with $secrets }}
+imagePullSecrets:
+  {{- toYaml . | nindent 2 }}
+{{- end }}
+{{- end -}}
