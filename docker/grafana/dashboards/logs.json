@@ -105,7 +105,7 @@
             "type": "victoriametrics-logs-datasource",
             "uid": "victorialogs"
           },
-          "expr": "service:=~\"$service\" | stats by (level, _time:1m) count() as logs",
+          "expr": "service:~\"${service:pipe}\" | stats by (level, _time:1m) count() as logs",
           "queryType": "stats",
           "refId": "A"
         }
@@ -169,7 +169,7 @@
             "type": "victoriametrics-logs-datasource",
             "uid": "victorialogs"
           },
-          "expr": "service:=~\"$service\" | stats by (service) count() as lines",
+          "expr": "service:~\"${service:pipe}\" | stats by (service) count() as lines",
           "queryType": "stats",
           "refId": "A"
         }
@@ -206,7 +206,7 @@
             "type": "victoriametrics-logs-datasource",
             "uid": "victorialogs"
           },
-          "expr": "service:=~\"$service\"",
+          "expr": "service:~\"${service:pipe}\"",
           "queryType": "instant",
           "refId": "A"
         }
@@ -237,6 +237,7 @@
           "type": "victoriametrics-logs-datasource",
           "uid": "victorialogs"
         },
+        "allValue": ".*",
         "definition": "service",
         "includeAll": true,
         "label": "Service",
