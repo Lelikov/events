@@ -71,6 +71,34 @@ VAULT_ADDR=http://127.0.0.1:8200 VAULT_TOKEN=<root> deploy/scripts/seed-vault.sh
 # Now deploy the platform (see ../README.md).
 ```
 
+### GHCR image pull secret
+
+Private `ghcr.io/lelikov/*` images are pulled in prod via a Vault-sourced
+`dockerconfigjson` secret (`ghcr-pull`) materialized by ESO. To enable it:
+
+1. **Create a GitHub PAT** with the `read:packages` scope.
+
+2. **Store the credential in Vault** — either directly:
+   ```bash
+   vault kv put secret/events/ghcr username=Lelikov token=<pat>
+   ```
+   or via environment variables when running `seed-vault.sh`:
+   ```bash
+   GHCR_USERNAME=Lelikov GHCR_TOKEN=<pat> \
+     VAULT_ADDR=http://127.0.0.1:8200 VAULT_TOKEN=<root> \
+     deploy/scripts/seed-vault.sh
+   ```
+   (The script seeds `secret/events/ghcr` only when `GHCR_TOKEN` is set; it
+   prints a skip message otherwise so the default build+load path is unaffected.)
+
+3. **Prod** (`values-prod.yaml`) sets `ghcrPullSecret.enabled=true` and
+   `global.imagePullSecrets[].name=ghcr-pull` — ESO materializes the secret and
+   every Deployment + migration Job references it automatically.
+
+> **Rejected alternative:** making the GHCR packages public would avoid the
+> pull-secret machinery but exposes private images unconditionally. The
+> credential-in-Vault approach was chosen to keep images private.
+
 ## Files here
 
 ```
