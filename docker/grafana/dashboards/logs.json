@@ -247,7 +247,7 @@
         "query": {
           "field": "service",
           "query": "*",
-          "type": "field_values"
+          "type": "fieldValue"
         },
         "refresh": 2,
         "regex": "",
