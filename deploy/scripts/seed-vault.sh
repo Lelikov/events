@@ -277,6 +277,18 @@ put jitsi-chat \
   VITE_SENTRY_TRACES_SAMPLE_RATE="0.1" \
   VITE_SENTRY_BACKEND_URL=""
 
+# GHCR image pull credential (optional): only seeded when a token is supplied.
+# username defaults to the GitHub owner; token must be a PAT with read:packages.
+if [ -n "${GHCR_TOKEN:-}" ]; then
+  GHCR_USERNAME="${GHCR_USERNAME:-Lelikov}"
+  put "ghcr" \
+    "username=${GHCR_USERNAME}" \
+    "token=${GHCR_TOKEN}"
+  echo "seeded secret/events/ghcr (user ${GHCR_USERNAME})"
+else
+  echo "GHCR_TOKEN not set — skipping secret/events/ghcr (build+load path)"
+fi
+
 echo "Done. Seeded 9 services under secret/events/*."
 echo "NOTE: VITE_SENTRY_DSN is empty in event-admin-frontend and jitsi-chat — set the real DSN"
 echo "  in Vault after creating a Sentry project (VITE_SENTRY_ENABLED=true gates on a non-empty DSN)."
