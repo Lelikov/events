@@ -85,14 +85,16 @@ services:
       retries: 10
     restart: unless-stopped
 
-  # event-shortener's database. Internal only (no host port); the service runs
-  # its own `alembic upgrade head` on start.
+  # event-shortener's database. The service runs its own `alembic upgrade head`
+  # on start. Host port is bound to 127.0.0.1 only (local DB clients), like pg-calcom.
   pg-shortener:
     image: postgres:16
     environment:
       POSTGRES_USER: ${PG_SHORTENER_USER:-postgres}
       POSTGRES_PASSWORD: ${PG_SHORTENER_PASSWORD:-postgres}
       POSTGRES_DB: ${PG_SHORTENER_DB:-event_shortener}
+    ports:
+      - "127.0.0.1:${PG_SHORTENER_PORT:-5436}:5432"
     volumes:
       - pg-shortener-data:/var/lib/postgresql/data
     healthcheck:
@@ -565,6 +567,9 @@ services:
       # Notifier admin API proxy (must match NOTIFIER_ADMIN_TOKEN in event-notifier).
       NOTIFIER_SERVICE_URL: http://event-notifier:8888
       NOTIFIER_ADMIN_TOKEN: ${NOTIFIER_ADMIN_TOKEN:-dev-notifier-admin-7c2f9e4b1a83d650}
+      # Shortener stats API (must match event-shortener SHORTENER_API_KEY).
+      SHORTENER_URL: ${SHORTENER_URL:-http://event-shortener:8888}
+      SHORTENER_API_KEY: ${SHORTENER_API_KEY:-dev-shortify-api-key-8c4e1f7b2a93d650}
     ports:
       - "${ADMIN_PORT:-8002}:8888"
     depends_on:
