@@ -1,0 +1,23 @@
+{
+  "mappings": [
+    {
+      "name": "UniSender Go — template list (dev stub)",
+      "request": {
+        "method": "POST",
+        "url": "/unisender/ru/transactional/api/v1/template/list.json"
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "jsonBody": {
+          "templates": [
+            {"id": 1, "title": "Booking created (dev)"},
+            {"id": 2, "title": "Booking cancelled (dev)"}
+          ]
+        }
+      }
+    }
+  ]
+}
