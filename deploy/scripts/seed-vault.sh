@@ -96,7 +96,9 @@ OTEL_COLLECTOR_ENDPOINT="http://events-observability-opentelemetry-collector:431
 : "${PG_NOTIFIER_DSN_PH:=postgresql+asyncpg://USER:PASSWORD@CHANGE-ME-notifier-host:5432/event_notifier}"
 : "${PG_SHORTENER_DSN_PH:=postgresql+asyncpg://USER:PASSWORD@CHANGE-ME-shortener-host:5432/event_shortener}"
 : "${CALCOM_DSN_PH:=postgresql+asyncpg://USER:PASSWORD@CHANGE-ME-calcom-host:5432/calcom}"
-: "${RABBIT_URL_PH:=amqp://USER:PASSWORD@CHANGE-ME-rabbit-host:5672/}"
+# RabbitMQ runs on a self-managed VPS — Beget offers no managed RabbitMQ. Point
+# RABBIT_URL_PH at that VPS: amqp://<user>:<pass>@<VPS-IP-or-DNS>:5672/<vhost>.
+: "${RABBIT_URL_PH:=amqp://events:CHANGE-ME-rabbit-password@CHANGE-ME-rabbit-vps:5672/events}"
 
 put() {
   local svc="$1"; shift

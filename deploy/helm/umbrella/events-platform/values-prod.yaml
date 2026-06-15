@@ -10,7 +10,19 @@ global:
 # Image tags are written by CI (image bump PR -> ArgoCD sync), so they start
 # as placeholders. Hostnames are TODO placeholders to be replaced with real
 # production DNS. Replicas 2, HPA enabled for public/throughput services.
-
+#
+# Target cluster (Beget Managed K8s), sized for this overlay:
+#   - control plane: 1 managed master (HA 3-master optional)
+#   - workers: 2 x (4 vCPU / 8 GB / 80 GB NVMe)  ->  8 vCPU / 16 GB total
+#   Baseline app requests ~1.8 vCPU / 2.3 GB (9 svc x HPA min 2 x 100m/128Mi);
+#   the rest covers ingress-nginx/cert-manager/ESO + HPA scale-up (x5) and the
+#   loss of one node. Add a 3rd worker + HA control plane for full HA.
+#
+# Stateful pieces live OUTSIDE the cluster:
+#   - PostgreSQL: Beget Managed PostgreSQL (5 DBs) — DSNs in Vault.
+#   - RabbitMQ:   self-managed on a VPS (Beget has no managed RabbitMQ); the
+#     AMQP URL lives in Vault (RABBIT_URL, deploy/scripts/seed-vault.sh).
+#
 # In-cluster Postgres/RabbitMQ are NEVER deployed in prod — managed/external.
 devDependencies:
   postgresql:
@@ -67,6 +79,14 @@ event-admin-frontend:
   ingress:
     enabled: true
     host: TODO-admin.prod.example.com # TODO: real production host
+  # Static SPA served by nginx — far lighter than the Python services.
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 128Mi
 
 event-users:
   replicas: 2
@@ -105,3 +125,11 @@ jitsi-chat:
   ingress:
     enabled: true
     host: TODO-meet.prod.example.com # TODO: real production host
+  # Static SPA served by Caddy — far lighter than the Python services.
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 128Mi
