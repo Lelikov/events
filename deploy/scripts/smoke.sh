@@ -203,9 +203,30 @@ ok "ClusterSecretStore applied"
 log "helm dependency build (pull devDependencies + service charts)"
 helm dependency build "${PLATFORM}" >/dev/null 2>&1 || helm dependency update "${PLATFORM}" >/dev/null 2>&1 || true
 
+# GHCR pull-secret opt-in: when GHCR_TOKEN is set, enable the ESO-materialized
+# ghcr-pull secret and set pullPolicy=Always so kind fetches images from GHCR
+# instead of requiring a local build+load. The no-token path is unchanged.
+EXTRA_HELM_ARGS=""
+if [ -n "${GHCR_TOKEN:-}" ]; then
+  log "GHCR_TOKEN set — enabling pull secret (ghcr-pull); pods will pull from GHCR"
+  EXTRA_HELM_ARGS="--set ghcrPullSecret.enabled=true \
+    --set global.imagePullSecrets[0].name=ghcr-pull \
+    --set event-receiver.image.pullPolicy=Always \
+    --set event-saver.image.pullPolicy=Always \
+    --set event-booking.image.pullPolicy=Always \
+    --set event-admin.image.pullPolicy=Always \
+    --set event-admin-frontend.image.pullPolicy=Always \
+    --set event-users.image.pullPolicy=Always \
+    --set event-notifier.image.pullPolicy=Always \
+    --set event-shortener.image.pullPolicy=Always \
+    --set jitsi-chat.image.pullPolicy=Always"
+fi
+
 log "Installing events-platform (values-kind.yaml, devDependencies on)"
+# shellcheck disable=SC2086
 if helm upgrade --install events-platform "${PLATFORM}" \
      -n "${NS}" --create-namespace -f "${PLATFORM}/values-kind.yaml" \
+     ${EXTRA_HELM_ARGS} \
      --timeout 6m; then
   R_platform_installed="PASS"; ok "platform installed"
 else
