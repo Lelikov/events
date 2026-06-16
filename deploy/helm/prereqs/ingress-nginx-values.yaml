@@ -17,6 +17,16 @@ controller:
 
   replicaCount: 2
 
+  # Beget's cluster enforces a ValidatingAdmissionPolicy `pdb-sane-limits` that
+  # REJECTS a PodDisruptionBudget with minAvailable=1 (it can block node drain for
+  # near-singleton workloads). This chart auto-creates a PDB when replicaCount > 1
+  # and defaults to minAvailable: 1 — which fails the policy and aborts the install
+  # (cascading into a broken admission webhook). Setting maxUnavailable flips the
+  # PDB to `maxUnavailable: 1` (policy-allowed) while still keeping >=1 controller
+  # up during voluntary disruptions. (Chart key is controller.maxUnavailable, NOT
+  # controller.podDisruptionBudget.*.)
+  maxUnavailable: 1
+
   service:
     type: LoadBalancer
     # externalTrafficPolicy Local preserves the client source IP (useful for
@@ -29,6 +39,9 @@ controller:
     # externalTrafficPolicy=Local isn't honored by the LB, switch to PROXY
     # protocol: add `lb.beget.com/proxy-protocol: v2` here AND set
     # controller.config.use-proxy-protocol: "true" below.
+    # NOTE: Beget assigns the LB's public IP ITSELF and IGNORES the k8s
+    # spec.loadBalancerIP field — after install, point DNS at whatever shows up in
+    # `kubectl -n ingress-nginx get svc ingress-nginx-controller` EXTERNAL-IP.
     annotations:
       lb.beget.com/type: external
       lb.beget.com/algorithm: round_robin
