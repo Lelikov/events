@@ -99,6 +99,51 @@ Private `ghcr.io/lelikov/*` images are pulled in prod via a Vault-sourced
 > pull-secret machinery but exposes private images unconditionally. The
 > credential-in-Vault approach was chosen to keep images private.
 
+## Beget Managed Kubernetes — verified findings
+
+Validated end-to-end on a live Beget Cloud K8s cluster (June 2026) with a throwaway
+probe: the full topology works — in-cluster pods reach **Managed PostgreSQL** and a
+**VPS** over the Beget private network (`10.16.0.0/16`), and a public **external
+LoadBalancer** fronts ingress-nginx. Three Beget-specific gotchas to know:
+
+1. **`pdb-sane-limits` admission policy → PDB must use `maxUnavailable`.**
+   The cluster ships a `ValidatingAdmissionPolicy` that **rejects any
+   PodDisruptionBudget with `minAvailable=1`** (it can block node drain for
+   near-singleton workloads). The ingress-nginx chart auto-creates a PDB
+   (`minAvailable: 1`) when `replicaCount > 1`, so the install **fails** — and the
+   failure cascades into a **broken admission webhook** (Ingress creation then dies
+   with `x509: certificate signed by unknown authority`). Fix is already applied in
+   `ingress-nginx-values.yaml`: set `controller.maxUnavailable: 1` (chart key is
+   `controller.maxUnavailable`, **not** `controller.podDisruptionBudget.*`). Any
+   other chart that renders a `minAvailable=1` PDB needs the same treatment
+   (our `events-common` charts render no PDB, so app services are unaffected).
+
+2. **`spec.loadBalancerIP` is IGNORED.** Beget assigns the LoadBalancer's public IP
+   itself; a pre-reserved IP set via k8s `loadBalancerIP` is not honored. After
+   install, read the assigned IP and point DNS at it:
+   ```bash
+   kubectl -n ingress-nginx get svc ingress-nginx-controller \
+     -o jsonpath='{.status.loadBalancer.ingress[0].ip}'
+   ```
+
+3. **LoadBalancer teardown is NOT automatic.** Deleting a `type: LoadBalancer`
+   Service does **not** release the Beget LB — the
+   `service.kubernetes.io/load-balancer-cleanup` finalizer hangs and **blocks
+   namespace deletion**. Worse, a freshly created LoadBalancer Service can sit at
+   `EXTERNAL-IP: <pending>` while an orphaned LB still holds the IP/quota. Teardown:
+   ```bash
+   # 1) unstick the finalizer (orphans the cloud LB on Beget's side)
+   kubectl patch svc <lb-svc> -n <ns> -p '{"metadata":{"finalizers":null}}' --type=merge
+   # 2) THEN delete the dangling load balancer (and any reserved IP) in the Beget panel.
+   ```
+   Always finish LB teardown in the Beget control panel; don't assume `kubectl
+   delete` freed it.
+
+> Private network: both Cloud K8s **nodes** and **Managed PostgreSQL** attach to the
+> `10.16.0.0/16` private network and are reachable from in-cluster pods — even
+> though Beget's KB documents only VPS↔VPS. RabbitMQ has no managed offering, so it
+> runs on a VPS in the same private network (see `deploy/scripts/seed-vault.sh`).
+
 ## Files here
 
 ```
