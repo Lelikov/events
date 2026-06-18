@@ -18,19 +18,19 @@ metadata:
     - resources-finalizer.argocd.argoproj.io
 spec:
   project: default
-  source:
-    repoURL: https://helm.releases.hashicorp.com
-    chart: vault
-    targetRevision: 0.30.1
-    # Keep in sync with deploy/helm/prereqs/vault-values.yaml (file storage,
-    # single instance — production HA/auto-unseal is an operator task).
-    helm:
-      values: |
-        server:
-          standalone:
-            enabled: true
-          dataStorage:
-            enabled: true
+  # Multi-source: upstream chart + values from THIS repo
+  # (deploy/helm/prereqs/vault-values.yaml — file storage, single instance;
+  # production HA/auto-unseal is an operator task).
+  sources:
+    - repoURL: https://helm.releases.hashicorp.com
+      chart: vault
+      targetRevision: 0.30.1
+      helm:
+        valueFiles:
+          - $values/deploy/helm/prereqs/vault-values.yaml
+    - repoURL: https://github.com/lelikov/events # TODO: same repoURL as app-of-apps.yaml
+      targetRevision: main
+      ref: values
   destination:
     server: https://kubernetes.default.svc
     namespace: vault

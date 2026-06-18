@@ -11,13 +11,19 @@ metadata:
     - resources-finalizer.argocd.argoproj.io
 spec:
   project: default
-  source:
-    repoURL: oci://quay.io/jetstack/charts/cert-manager
-    chart: cert-manager
-    targetRevision: v1.19.5
-    helm:
-      values: |
-        installCRDs: true
+  # Multi-source: upstream chart + values from THIS repo, so the overlay is the
+  # single source of truth (deploy/helm/prereqs/cert-manager-values.yaml) instead
+  # of a hand-synced inline copy.
+  sources:
+    - repoURL: oci://quay.io/jetstack/charts/cert-manager
+      chart: cert-manager
+      targetRevision: v1.19.5
+      helm:
+        valueFiles:
+          - $values/deploy/helm/prereqs/cert-manager-values.yaml
+    - repoURL: https://github.com/lelikov/events # TODO: same repoURL as app-of-apps.yaml
+      targetRevision: main
+      ref: values
   destination:
     server: https://kubernetes.default.svc
     namespace: cert-manager

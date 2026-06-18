@@ -11,18 +11,20 @@ metadata:
     - resources-finalizer.argocd.argoproj.io
 spec:
   project: default
-  source:
-    repoURL: https://kubernetes.github.io/ingress-nginx
-    chart: ingress-nginx
-    targetRevision: 4.15.1
-    # Reuses the same overlay the phase-2 prereqs/ uses. Inline here so ArgoCD
-    # does not need a second source; keep in sync with
-    # deploy/helm/prereqs/ingress-nginx-values.yaml.
-    helm:
-      values: |
-        controller:
-          ingressClassResource:
-            default: true
+  # Multi-source: upstream chart + the full overlay from THIS repo
+  # (deploy/helm/prereqs/ingress-nginx-values.yaml) — carries the Beget external-LB
+  # annotations, externalTrafficPolicy, proxy-body-size, and the PDB maxUnavailable
+  # fix. No more hand-synced inline copy that silently drifts.
+  sources:
+    - repoURL: https://kubernetes.github.io/ingress-nginx
+      chart: ingress-nginx
+      targetRevision: 4.15.1
+      helm:
+        valueFiles:
+          - $values/deploy/helm/prereqs/ingress-nginx-values.yaml
+    - repoURL: https://github.com/lelikov/events # TODO: same repoURL as app-of-apps.yaml
+      targetRevision: main
+      ref: values
   destination:
     server: https://kubernetes.default.svc
     namespace: ingress-nginx
