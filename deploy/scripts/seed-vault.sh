@@ -97,10 +97,11 @@ OTEL_COLLECTOR_ENDPOINT="http://events-observability-opentelemetry-collector:431
 #   10.16.0.11/12  k8s worker nodes
 #   10.16.0.20     VPS — RabbitMQ (no managed RabbitMQ at Beget)
 #   10.16.0.30     VPS — observability backend (optional)
-#   10.16.0.40     Managed PostgreSQL — 4 app DBs on ONE instance (per-DB user)
+#   10.16.0.40     Managed PostgreSQL — 5 app DBs on ONE instance, per-DB login
+#                  (event_saver, event_users, event_notifier, event_shortener, event_db_sync)
 #   10.16.0.41     PostgreSQL — cal.com (separate; only if self-hosted)
 #
-# All four app DBs live on the SAME managed instance (10.16.0.40); each gets its
+# All five app DBs live on the SAME managed instance (10.16.0.40); each gets its
 # own DB + login role. Confirm with Beget that Cloud K8s nodes + Managed
 # PostgreSQL can attach to the private network (KB documents VPS<->VPS only).
 : "${PG_SAVER_DSN_PH:=postgresql+asyncpg://event_saver:CHANGE-ME-saver-pass@10.16.0.40:5432/event_saver}"

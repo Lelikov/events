@@ -61,7 +61,7 @@ cal.com DB ──(AFTER INSERT/UPDATE trigger → pg_notify 'user_sync')──�
 
 ## Quick Start (Docker Compose)
 
-The whole system — 10 services, RabbitMQ, 5 PostgreSQL instances, and WireMock
+The whole system — 11 services, RabbitMQ, one shared app PostgreSQL + one cal.com PostgreSQL, and WireMock
 stand-ins for the remaining external HTTP APIs — runs with one command from the
 repo root:
 
@@ -90,8 +90,8 @@ Host ports:
 | 8080 | jitsi-chat SPA |
 | 8089 | WireMock mocks (journal: `http://localhost:8089/__admin/requests`) |
 | 5672 / 15672 | RabbitMQ (AMQP / management UI) |
-| 5433 | pg-calcom (fixture cal.com DB, used by `scripts/calcom_sim.py`) |
-| 5437 | pg-db-sync (event-db-sync `sync_state` DB; 127.0.0.1 only) |
+| 5432 | postgres (shared app DB: event_saver, event_users, event_notifier, event_shortener, event_db_sync; 127.0.0.1 only) |
+| 5433 | pg-calcom (fixture cal.com DB; used by `scripts/calcom_sim.py`) |
 | 9090 | Prometheus *(observability profile; 127.0.0.1 only; scrapes services + RabbitMQ + postgres exporters)* |
 | 3001 | Grafana *(observability profile; admin/admin; dashboards: System Overview, Booking Flow)* |
 | 9093 | Alertmanager *(observability profile; 127.0.0.1 only; routes Prometheus alerts → ops Telegram)* |
