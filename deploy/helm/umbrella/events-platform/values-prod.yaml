@@ -106,6 +106,13 @@ event-notifier:
     minReplicas: 2
     maxReplicas: 5
 
+# Singleton worker (LISTEN + watermark + reconcile): 1 replica, NO HPA — a second
+# pod would create a duplicate LISTENer and a second reconcile loop.
+event-db-sync:
+  replicas: 1
+  image:
+    tag: TODO-set-by-ci
+
 event-shortener:
   replicas: 2
   image:

@@ -1,7 +1,7 @@
 apiVersion: v2
 name: events-platform
 description: >-
-  Umbrella chart deploying all 9 events-platform services. Per-subchart
+  Umbrella chart deploying all 10 events-platform services. Per-subchart
   overrides (image.tag, ingress.host, replicas, hpa) live in the
   values-{prod,staging,kind}.yaml files. Secrets/config come from Vault via
   External Secrets Operator (phase 2).
@@ -30,6 +30,9 @@ dependencies:
   - name: event-notifier
     version: 0.1.0
     repository: "file://../../charts/event-notifier"
+  - name: event-db-sync
+    version: 0.1.0
+    repository: "file://../../charts/event-db-sync"
   - name: event-shortener
     version: 0.1.0
     repository: "file://../../charts/event-shortener"

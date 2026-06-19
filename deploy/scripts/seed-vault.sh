@@ -107,9 +107,14 @@ OTEL_COLLECTOR_ENDPOINT="http://events-observability-opentelemetry-collector:431
 : "${PG_USERS_DSN_PH:=postgresql+asyncpg://event_users:CHANGE-ME-users-pass@10.16.0.40:5432/event_users}"
 : "${PG_NOTIFIER_DSN_PH:=postgresql+asyncpg://event_notifier:CHANGE-ME-notifier-pass@10.16.0.40:5432/event_notifier}"
 : "${PG_SHORTENER_DSN_PH:=postgresql+asyncpg://event_shortener:CHANGE-ME-shortener-pass@10.16.0.40:5432/event_shortener}"
+: "${PG_DB_SYNC_DSN_PH:=postgresql+asyncpg://event_db_sync:CHANGE-ME-dbsync-pass@10.16.0.40:5432/event_db_sync}"
 : "${CALCOM_DSN_PH:=postgresql+asyncpg://calcom:CHANGE-ME-calcom-pass@10.16.0.41:5432/calcom}"
+# event-db-sync reads cal.com over plain psycopg (no +asyncpg driver suffix).
+: "${CALCOM_PLAIN_DSN_PH:=postgresql://calcom:CHANGE-ME-calcom-pass@10.16.0.41:5432/calcom}"
 # RabbitMQ on a self-managed VPS (Beget has no managed RabbitMQ), private IP.
 : "${RABBIT_URL_PH:=amqp://events:CHANGE-ME-rabbit-password@10.16.0.20:5672/events}"
+# event-db-sync admin API token (guards its /admin endpoints).
+: "${SYNC_ADMIN_TOKEN:=CHANGE-ME-sync-admin-token}"
 
 put() {
   local svc="$1"; shift
@@ -257,6 +262,27 @@ put event-notifier \
   OTEL_TRACES_SAMPLER="parentbased_traceidratio" \
   OTEL_TRACES_SAMPLER_ARG="0.1"
 
+# --- event-db-sync ----------------------------------------------------------
+# Own DB (event_db_sync, alembic) + reads the cal.com DB over PLAIN postgresql://
+# (no +asyncpg). Singleton worker: LISTEN + watermark + reconcile loop.
+put event-db-sync \
+  DEBUG="false" \
+  LOG_LEVEL="${LOG_LEVEL}" \
+  DATABASE_URL="${PG_DB_SYNC_DSN_PH}" \
+  CALCOM_DATABASE_URL="${CALCOM_PLAIN_DSN_PH}" \
+  RABBIT_URL="${RABBIT_URL_PH}" \
+  SYNC_ADMIN_TOKEN="${SYNC_ADMIN_TOKEN}" \
+  APPLY_TRIGGERS="true" \
+  RECONCILE_ENABLED="true" \
+  RECONCILE_INTERVAL_SECONDS="300" \
+  FULL_SYNC_BATCH_SIZE="500" \
+  FULL_SYNC_BATCH_PAUSE_SECONDS="0.1" \
+  OTEL_SDK_DISABLED="false" \
+  OTEL_EXPORTER_OTLP_ENDPOINT="${OTEL_COLLECTOR_ENDPOINT}" \
+  OTEL_SERVICE_NAME="event-db-sync" \
+  OTEL_TRACES_SAMPLER="parentbased_traceidratio" \
+  OTEL_TRACES_SAMPLER_ARG="0.1"
+
 # --- event-shortener --------------------------------------------------------
 put event-shortener \
   DEBUG="false" \
@@ -308,7 +334,7 @@ else
   echo "GHCR_TOKEN not set — skipping secret/events/ghcr (build+load path)"
 fi
 
-echo "Done. Seeded 9 services under secret/events/*."
+echo "Done. Seeded 10 services under secret/events/*."
 echo "NOTE: VITE_SENTRY_DSN is empty in event-admin-frontend and jitsi-chat — set the real DSN"
 echo "  in Vault after creating a Sentry project (VITE_SENTRY_ENABLED=true gates on a non-empty DSN)."
 echo "NOTE: VITE_SENTRY_BACKEND_URL is empty in jitsi-chat — set to the deployed event-receiver"

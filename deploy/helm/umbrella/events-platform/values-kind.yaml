@@ -63,6 +63,7 @@ devpostgresql:
           CREATE DATABASE event_users;
           CREATE DATABASE event_notifier;
           CREATE DATABASE event_shortener;
+          CREATE DATABASE event_db_sync;
           CREATE DATABASE calcom;
 
 # Bitnami rabbitmq subchart (alias devrabbitmq — lowercase, see above).
@@ -182,6 +183,23 @@ event-users:
     enabled: false
 
 event-notifier:
+  replicas: 1
+  image:
+    tag: latest
+  # The locally-built images run as root (the Dockerfiles add no non-root user),
+  # so relax the library's default runAsNonRoot for the kind smoke ONLY. Prod
+  # (values-prod.yaml) leaves this unset and keeps runAsNonRoot: true.
+  podSecurityContext:
+    runAsNonRoot: false
+    seccompProfile:
+      type: RuntimeDefault
+  migration:
+    enabled: false
+
+# Singleton worker: 1 replica, no HPA (handled by chart defaults). Migration Helm
+# hook disabled in kind for the same reason as the other own-DB services above —
+# the hook runs before the in-cluster Postgres devDependency + ESO Secret exist.
+event-db-sync:
   replicas: 1
   image:
     tag: latest

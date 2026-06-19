@@ -47,6 +47,11 @@ event-notifier:
   image:
     tag: TODO-set-by-ci
 
+event-db-sync:
+  replicas: 1
+  image:
+    tag: TODO-set-by-ci
+
 event-shortener:
   replicas: 1
   image:

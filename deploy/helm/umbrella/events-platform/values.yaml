@@ -56,6 +56,11 @@ event-notifier:
   image:
     tag: latest
 
+event-db-sync:
+  replicas: 1
+  image:
+    tag: latest
+
 event-shortener:
   replicas: 1
   image:
