@@ -5,9 +5,10 @@
 # ///
 """cal.com webhook simulator: signed BOOKING_CREATED/CANCELLED/RESCHEDULED webhooks + fixture DB rows.
 
-Payloads mirror the real captures in event-booking/requests.jsonl. The cal.com fixture DB
-(pg-calcom, published on localhost:5433) is written first because event-booking enriches
-bookings straight from that DB. Defaults come from the root .env / .env.example.
+Payloads mirror the real captures in event-booking/requests.jsonl. The cal.com DB
+(calcom database in the shared postgres instance, published on localhost:5432) is written
+first because event-booking enriches bookings straight from that DB. Defaults come from
+the root .env / .env.example.
 
     uv run scripts/calcom_sim.py create [--starts-in 2h] [--locale ru] [--attendee-email x@y.z]
     uv run scripts/calcom_sim.py cancel <uid> [--reason "..."]
@@ -37,7 +38,7 @@ import httpx
 ROOT = Path(__file__).resolve().parent.parent
 SIGNATURE_HEADER = "X-Cal-Signature-256"
 DEFAULT_SECRET = "dev-calcom-webhook-9d2c4f7a1e6b8350"
-DEFAULT_DSN = "postgresql://calcom:calcom@localhost:5433/calcom"
+DEFAULT_DSN = "postgresql://calcom:calcom@localhost:5432/calcom"
 
 # Seeded fixture rows (docker/calcom-init/01-schema.sql) — event-booking enriches by these ids.
 ORGANIZER = {
@@ -98,11 +99,11 @@ def default_url(env: dict[str, str]) -> str:
 
 
 def default_dsn(env: dict[str, str]) -> str:
-    """Map the docker-internal CALCOM_DATABASE_URL onto the published host port (PG_CALCOM_PORT)."""
-    host_port = env.get("PG_CALCOM_PORT", "5433")
-    dsn = env.get("CALCOM_DATABASE_URL", DEFAULT_DSN.replace(":5433/", f":{host_port}/"))
+    """Map the docker-internal CALCOM_DATABASE_URL onto the published host port (PG_PORT)."""
+    host_port = env.get("PG_PORT", "5432")
+    dsn = env.get("CALCOM_DATABASE_URL", DEFAULT_DSN.replace(":5432/", f":{host_port}/"))
     dsn = dsn.replace("postgresql+asyncpg://", "postgresql://")
-    return dsn.replace("@pg-calcom:5432", f"@localhost:{host_port}")
+    return dsn.replace("@postgres:5432", f"@localhost:{host_port}")
 
 
 def parse_starts_in(value: str) -> timedelta:
