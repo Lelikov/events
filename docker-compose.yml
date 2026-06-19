@@ -36,88 +36,34 @@ services:
       retries: 10
     restart: unless-stopped
 
-  pg-saver:
+  postgres:
     image: postgres:16
     environment:
-      POSTGRES_USER: ${PG_SAVER_USER:-postgres}
-      POSTGRES_PASSWORD: ${PG_SAVER_PASSWORD:-postgres}
-      POSTGRES_DB: ${PG_SAVER_DB:-event_saver}
+      POSTGRES_USER: ${PG_SUPERUSER:-postgres}
+      POSTGRES_PASSWORD: ${PG_SUPERUSER_PASSWORD:-postgres}
+      POSTGRES_DB: ${PG_SUPERUSER_DB:-postgres}
+      PG_SAVER_USER: ${PG_SAVER_USER:-event_saver}
+      PG_SAVER_PASSWORD: ${PG_SAVER_PASSWORD:-event_saver}
+      PG_SAVER_DB: ${PG_SAVER_DB:-event_saver}
+      PG_USERS_USER: ${PG_USERS_USER:-event_users}
+      PG_USERS_PASSWORD: ${PG_USERS_PASSWORD:-event_users}
+      PG_USERS_DB: ${PG_USERS_DB:-event_users}
+      PG_NOTIFIER_USER: ${PG_NOTIFIER_USER:-event_notifier}
+      PG_NOTIFIER_PASSWORD: ${PG_NOTIFIER_PASSWORD:-event_notifier}
+      PG_NOTIFIER_DB: ${PG_NOTIFIER_DB:-event_notifier}
+      PG_SHORTENER_USER: ${PG_SHORTENER_USER:-event_shortener}
+      PG_SHORTENER_PASSWORD: ${PG_SHORTENER_PASSWORD:-event_shortener}
+      PG_SHORTENER_DB: ${PG_SHORTENER_DB:-event_shortener}
+      PG_DB_SYNC_USER: ${PG_DB_SYNC_USER:-event_db_sync}
+      PG_DB_SYNC_PASSWORD: ${PG_DB_SYNC_PASSWORD:-event_db_sync}
+      PG_DB_SYNC_DB: ${PG_DB_SYNC_DB:-event_db_sync}
     volumes:
-      - pg-saver-data:/var/lib/postgresql/data
-      # admin_users (event-admin panel logins) is created by event-saver's
-      # alembic branch ea_0001 — do NOT also mount event-admin/scripts/
-      # admin_users.sql as initdb, the migration fails on the existing table.
-      # Seed panel logins manually after first start if you need to log in.
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${PG_SAVER_USER:-postgres} -d ${PG_SAVER_DB:-event_saver}"]
-      interval: 5s
-      timeout: 5s
-      retries: 10
-    restart: unless-stopped
-
-  pg-users:
-    image: postgres:16
-    environment:
-      POSTGRES_USER: ${PG_USERS_USER:-postgres}
-      POSTGRES_PASSWORD: ${PG_USERS_PASSWORD:-postgres}
-      POSTGRES_DB: ${PG_USERS_DB:-event_users}
-    volumes:
-      - pg-users-data:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${PG_USERS_USER:-postgres} -d ${PG_USERS_DB:-event_users}"]
-      interval: 5s
-      timeout: 5s
-      retries: 10
-    restart: unless-stopped
-
-  pg-notifier:
-    image: postgres:16
-    environment:
-      POSTGRES_USER: ${PG_NOTIFIER_USER:-postgres}
-      POSTGRES_PASSWORD: ${PG_NOTIFIER_PASSWORD:-postgres}
-      POSTGRES_DB: ${PG_NOTIFIER_DB:-event_notifier}
-    volumes:
-      - pg-notifier-data:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${PG_NOTIFIER_USER:-postgres} -d ${PG_NOTIFIER_DB:-event_notifier}"]
-      interval: 5s
-      timeout: 5s
-      retries: 10
-    restart: unless-stopped
-
-  # event-shortener's database. The service runs its own `alembic upgrade head`
-  # on start. Host port is bound to 127.0.0.1 only (local DB clients), like pg-calcom.
-  pg-shortener:
-    image: postgres:16
-    environment:
-      POSTGRES_USER: ${PG_SHORTENER_USER:-postgres}
-      POSTGRES_PASSWORD: ${PG_SHORTENER_PASSWORD:-postgres}
-      POSTGRES_DB: ${PG_SHORTENER_DB:-event_shortener}
+      - pg-data:/var/lib/postgresql/data
+      - ./docker/postgres-init:/docker-entrypoint-initdb.d:ro
     ports:
-      - "127.0.0.1:${PG_SHORTENER_PORT:-5436}:5432"
-    volumes:
-      - pg-shortener-data:/var/lib/postgresql/data
+      - "127.0.0.1:${PG_PORT:-5432}:5432"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${PG_SHORTENER_USER:-postgres} -d ${PG_SHORTENER_DB:-event_shortener}"]
-      interval: 5s
-      timeout: 5s
-      retries: 10
-    restart: unless-stopped
-
-  # event-db-sync's own DB (sync_state watermarks). The service runs its own
-  # `alembic upgrade head` on start. Host port bound to 127.0.0.1 only, like pg-shortener.
-  pg-db-sync:
-    image: postgres:16
-    environment:
-      POSTGRES_USER: ${PG_DB_SYNC_USER:-postgres}
-      POSTGRES_PASSWORD: ${PG_DB_SYNC_PASSWORD:-postgres}
-      POSTGRES_DB: ${PG_DB_SYNC_DB:-event_db_sync}
-    ports:
-      - "127.0.0.1:${PG_DB_SYNC_PORT:-5437}:5432"
-    volumes:
-      - pg-db-sync-data:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${PG_DB_SYNC_USER:-postgres} -d ${PG_DB_SYNC_DB:-event_db_sync}"]
+      test: ["CMD-SHELL", "pg_isready -U ${PG_SUPERUSER:-postgres}"]
       interval: 5s
       timeout: 5s
       retries: 10
@@ -768,11 +714,7 @@ services:
     restart: unless-stopped
 
 volumes:
-  pg-saver-data:
-  pg-users-data:
-  pg-notifier-data:
-  pg-shortener-data:
-  pg-db-sync-data:
+  pg-data:
   pg-calcom-data:
   prometheus-data:
   alertmanager-data:
