@@ -1,0 +1,172 @@
+# Observability stack (profile: observability). Included by docker-compose.yml.
+services:
+  # --------------------------------------------------------------------------
+  # Observability: Prometheus + Grafana + exporters
+  # (design: docs/superpowers/specs/2026-06-13-prometheus-grafana-metrics-design.md)
+  # --------------------------------------------------------------------------
+  # Shared postgres_exporter for all DBs on the `postgres` container (incl.
+  # cal.com); auto-discovers all non-template databases. Scraped by prometheus
+  # in-network on :9187 (no host ports).
+  pg-exporter:
+    image: quay.io/prometheuscommunity/postgres-exporter:v0.17.1
+    profiles: ["observability"]
+    environment:
+      DATA_SOURCE_NAME: postgresql://${PG_SUPERUSER:-postgres}:${PG_SUPERUSER_PASSWORD:-postgres}@postgres:5432/${PG_SUPERUSER_DB:-postgres}?sslmode=disable
+      PG_EXPORTER_AUTO_DISCOVER_DATABASES: "true"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  prometheus:
+    image: prom/prometheus:v3.4.1
+    profiles: ["observability"]
+    volumes:
+      - ./docker/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./docker/prometheus/rules:/etc/prometheus/rules:ro
+      - prometheus-data:/prometheus
+    ports:
+      - "127.0.0.1:${PROMETHEUS_PORT:-9090}:9090"
+    healthcheck:
+      # 127.0.0.1, not localhost: prometheus listens on 0.0.0.0 (IPv4) and
+      # busybox wget resolves localhost to ::1 without falling back.
+      test: ["CMD-SHELL", "wget -qO /dev/null http://127.0.0.1:9090/-/healthy"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:11.6.3
+    profiles: ["observability"]
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      # VictoriaLogs datasource plugin (provisioned in datasources/victorialogs.yml).
+      GF_INSTALL_PLUGINS: victoriametrics-logs-datasource
+    volumes:
+      # Datasource (uid `prometheus`) + the two dashboards are provisioned
+      # from the repo — no clicking required after `docker compose up`.
+      - ./docker/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./docker/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    ports:
+      - "${GRAFANA_PORT:-3001}:3000"
+    depends_on:
+      prometheus:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO /dev/null http://127.0.0.1:3000/api/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    restart: unless-stopped
+
+  alertmanager:
+    image: prom/alertmanager:v0.28.0
+    profiles: ["observability"]
+    # The image does no env interpolation in its YAML, so entrypoint.sh renders
+    # alertmanager.tmpl.yml -> /tmp/alertmanager.yml (sed substitution of the
+    # ops Telegram token/chat + Grafana port) then execs alertmanager.
+    entrypoint: ["/bin/sh", "/etc/alertmanager/entrypoint.sh"]
+    environment:
+      # Empty/placeholder values => graceful degrade: AM loads and stays up,
+      # failed Telegram sends only appear in its log. Set both in .env for
+      # real delivery.
+      ALERT_TELEGRAM_BOT_TOKEN: ${ALERT_TELEGRAM_BOT_TOKEN:-}
+      ALERT_TELEGRAM_CHAT_ID: ${ALERT_TELEGRAM_CHAT_ID:-}
+      GRAFANA_PORT: ${GRAFANA_PORT:-3001}
+    volumes:
+      - ./docker/alertmanager/alertmanager.tmpl.yml:/etc/alertmanager/alertmanager.tmpl.yml:ro
+      - ./docker/alertmanager/entrypoint.sh:/etc/alertmanager/entrypoint.sh:ro
+      - alertmanager-data:/alertmanager
+    ports:
+      # Loopback-only, same as Prometheus/Grafana ops endpoints.
+      - "127.0.0.1:${ALERTMANAGER_PORT:-9093}:9093"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO /dev/null http://127.0.0.1:9093/-/healthy"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+
+  # --------------------------------------------------------------------------
+  # Logging: Vector (collector) -> VictoriaLogs (storage), queried in Grafana.
+  # (design: docs/superpowers/specs/2026-06-13-log-aggregation-vector-victorialogs-design.md)
+  # --------------------------------------------------------------------------
+  victorialogs:
+    image: victoriametrics/victoria-logs:v1.50.0
+    profiles: ["observability"]
+    command:
+      - "-retentionPeriod=${LOGS_RETENTION_PERIOD:-7d}"
+      - "-storageDataPath=/victoria-logs-data"
+    volumes:
+      - victorialogs-data:/victoria-logs-data
+    ports:
+      # Loopback-only: built-in UI + LogsQL API (/select/logsql/query) on :9428.
+      - "127.0.0.1:${VICTORIALOGS_PORT:-9428}:9428"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO /dev/null http://127.0.0.1:9428/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+
+  # Vector tails every container's stdout via the Docker socket (read-only),
+  # parses structlog JSON, and ships to VictoriaLogs. No app changes needed.
+  vector:
+    image: timberio/vector:0.56.0-alpine
+    profiles: ["observability"]
+    volumes:
+      - ./docker/vector/vector.yaml:/etc/vector/vector.yaml:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    depends_on:
+      victorialogs:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # --------------------------------------------------------------------------
+  # Distributed tracing: Grafana Tempo (storage) + OTel Collector (ingest).
+  # (design: docs/superpowers/plans/2026-06-14-distributed-tracing-opentelemetry.md)
+  # Tracing is OFF by default (OTEL_SDK_DISABLED=true); enable via the
+  # observability profile and set OTEL_SDK_DISABLED=false.
+  # --------------------------------------------------------------------------
+  tempo:
+    image: grafana/tempo:2.7.1
+    command: ["-config.file=/etc/tempo/tempo.yaml"]
+    profiles: ["observability"]
+    volumes:
+      - ./docker/tempo/tempo.yaml:/etc/tempo/tempo.yaml:ro
+      - tempo-data:/var/tempo
+    ports:
+      - "127.0.0.1:${TEMPO_PORT:-3200}:3200"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O- http://localhost:3200/ready | grep -q ready || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    restart: unless-stopped
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.121.0
+    command: ["--config=/etc/otelcol/config.yaml"]
+    profiles: ["observability"]
+    volumes:
+      - ./docker/otel-collector/config.yaml:/etc/otelcol/config.yaml:ro
+    ports:
+      - "127.0.0.1:${OTEL_COLLECTOR_PORT:-4317}:4317"
+    depends_on:
+      tempo:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  prometheus-data:
+  alertmanager-data:
+  victorialogs-data:
+  tempo-data:

@@ -1,0 +1,372 @@
+# Application services. Included by docker-compose.yml.
+services:
+  # --------------------------------------------------------------------------
+  # Services
+  # --------------------------------------------------------------------------
+  event-receiver:
+    build:
+      context: ./event-receiver
+      dockerfile: Dockerfile
+    environment:
+      DEBUG: "false"
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      OTEL_SERVICE_NAME: event-receiver
+      OTEL_SDK_DISABLED: ${OTEL_SDK_DISABLED:-true}
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-http://otel-collector:4317}
+      OTEL_EXPORTER_OTLP_PROTOCOL: grpc
+      OTEL_TRACES_SAMPLER: ${OTEL_TRACES_SAMPLER:-parentbased_always_on}
+      RABBIT_URL: amqp://${RABBITMQ_USER:-events}:${RABBITMQ_PASSWORD:-dev-rabbit-password-01}@rabbitmq:5672/
+      CORS_ORIGINS: http://localhost:${ADMIN_FRONTEND_PORT:-3000},http://localhost:${JITSI_CHAT_PORT:-8080}
+      # Jitsi webhook JWTs are minted by event-booking — keys/claims must match.
+      AUTHORIZATION_JWT_VERIFY_KEY: ${JITSI_JWT_SECRET:-dev-jitsi-jwt-5b8e2d9c4f7a1360}
+      AUTHORIZATION_JWT_ALGORITHM: HS256
+      AUTHORIZATION_JWT_ISSUER: ${JITSI_JWT_ISS:-event-booking}
+      AUTHORIZATION_JWT_AUDIENCE: ${JITSI_JWT_AUD:-jitsi}
+      EMAIL_API_KEY: ${EMAIL_API_KEY:-dev-unisender-webhook-5c1f8e3b7a92d460}
+      GETSTREAM_API_KEY: ${CHAT_API_KEY:-devgetstreamkey0123456789}
+      GETSTREAM_API_SECRET: ${CHAT_API_SECRET:-devgetstreamapisecret0123456789}
+      GETSTREAM_USER_ID_ENCRYPTION_KEY: ${CHAT_USER_ID_ENCRYPTION_KEY:-devchatencryption6b2e9d4c8f1a7350}
+      BOOKING_API_KEY: ${BOOKING_API_KEY:-dev-booking-api-key-7f3a9c1e24b85d60}
+      ADMIN_API_KEY: ${ADMIN_API_KEY:-dev-admin-api-key-4e8b2f6a91c73d50}
+      CALCOM_WEBHOOK_SECRET: ${CALCOM_WEBHOOK_SECRET:-dev-calcom-webhook-9d2c4f7a1e6b8350}
+      EVENT_USERS_API_URL: http://event-users:8888
+      EVENT_USERS_API_TOKEN: ${USERS_API_BEARER_TOKEN:-dev-users-bearer-2a7d9e4f8c1b6350}
+    ports:
+      - "${RECEIVER_PORT:-8888}:8888"
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      event-users:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8888/health', timeout=5)\""]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      start_period: 20s
+    restart: unless-stopped
+
+  event-saver:
+    build:
+      context: ./event-saver
+      dockerfile: Dockerfile
+    environment:
+      DEBUG: "false"
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      OTEL_SERVICE_NAME: event-saver
+      OTEL_SDK_DISABLED: ${OTEL_SDK_DISABLED:-true}
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-http://otel-collector:4317}
+      OTEL_EXPORTER_OTLP_PROTOCOL: grpc
+      OTEL_TRACES_SAMPLER: ${OTEL_TRACES_SAMPLER:-parentbased_always_on}
+      RABBIT_URL: amqp://${RABBITMQ_USER:-events}:${RABBITMQ_PASSWORD:-dev-rabbit-password-01}@rabbitmq:5672/
+      POSTGRES_DSN: postgresql+asyncpg://${PG_SAVER_USER:-event_saver}:${PG_SAVER_PASSWORD:-event_saver}@postgres:5432/${PG_SAVER_DB:-event_saver}
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8888/health', timeout=5)\""]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+    restart: unless-stopped
+
+  event-booking:
+    build:
+      context: ./event-booking
+      dockerfile: Dockerfile
+    environment:
+      DEBUG: "false"
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      OTEL_SERVICE_NAME: event-booking
+      OTEL_SDK_DISABLED: ${OTEL_SDK_DISABLED:-true}
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-http://otel-collector:4317}
+      OTEL_EXPORTER_OTLP_PROTOCOL: grpc
+      OTEL_TRACES_SAMPLER: ${OTEL_TRACES_SAMPLER:-parentbased_always_on}
+      # Override CALCOM_DATABASE_URL in .env to use an external cal.com DB.
+      CALCOM_POSTGRES_DSN: ${CALCOM_DATABASE_URL:-postgresql+asyncpg://calcom:calcom@postgres:5432/calcom}
+      RABBIT_URL: amqp://${RABBITMQ_USER:-events}:${RABBITMQ_PASSWORD:-dev-rabbit-password-01}@rabbitmq:5672/
+      EVENTS_ENDPOINT_URL: http://event-receiver:8888/event/booking
+      EVENTS_API_KEY: ${BOOKING_API_KEY:-dev-booking-api-key-7f3a9c1e24b85d60}
+      JITSI_JWT_SECRET: ${JITSI_JWT_SECRET:-dev-jitsi-jwt-5b8e2d9c4f7a1360}
+      JITSI_JWT_AUD: ${JITSI_JWT_AUD:-jitsi}
+      JITSI_JWT_ISS: ${JITSI_JWT_ISS:-event-booking}
+      JITSI_JWT_SUB: ${JITSI_JWT_SUB:-meet.jit.si}
+      MEETING_HOST_URL: ${MEETING_HOST_URL:-http://localhost:${JITSI_CHAT_PORT:-8080}}
+      CHAT_API_KEY: ${CHAT_API_KEY:-devgetstreamkey0123456789}
+      CHAT_API_SECRET: ${CHAT_API_SECRET:-devgetstreamapisecret0123456789}
+      CHAT_USER_ID_ENCRYPTION_KEY: ${CHAT_USER_ID_ENCRYPTION_KEY:-devchatencryption6b2e9d4c8f1a7350}
+      CHAT_BASE_URL: ${CHAT_BASE_URL:-http://mocks:8080/getstream}
+      SHORTENER_URL: ${SHORTENER_URL:-http://event-shortener:8888}
+      SHORTENER_API_KEY: ${SHORTENER_API_KEY:-dev-shortify-api-key-8c4e1f7b2a93d650}
+      IS_ENABLE_BOOKING_CONSTRAINTS: ${IS_ENABLE_BOOKING_CONSTRAINTS:-false}
+      # Booking blacklist (read from event-admin; fail-open, so no hard depends_on).
+      BLACKLIST_ENABLED: ${BLACKLIST_ENABLED:-true}
+      EVENT_ADMIN_API_URL: http://event-admin:8888
+      BLACKLIST_SERVICE_TOKEN: ${BLACKLIST_SERVICE_TOKEN:-dev-blacklist-service-9d4f2c7b1e8a6350}
+      BLACKLIST_CACHE_TTL: ${BLACKLIST_CACHE_TTL:-300}
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      event-receiver:
+        condition: service_healthy
+      mocks:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8888/health', timeout=5)\""]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      start_period: 20s
+    restart: unless-stopped
+
+  event-users:
+    build:
+      context: ./event-users
+      dockerfile: Dockerfile
+    environment:
+      DEBUG: "false"
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      OTEL_SERVICE_NAME: event-users
+      OTEL_SDK_DISABLED: ${OTEL_SDK_DISABLED:-true}
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-http://otel-collector:4317}
+      OTEL_EXPORTER_OTLP_PROTOCOL: grpc
+      OTEL_TRACES_SAMPLER: ${OTEL_TRACES_SAMPLER:-parentbased_always_on}
+      POSTGRES_DSN: postgresql+asyncpg://${PG_USERS_USER:-event_users}:${PG_USERS_PASSWORD:-event_users}@postgres:5432/${PG_USERS_DB:-event_users}
+      JWT_SECRET_KEY: ${ADMIN_JWT_SECRET:-dev-admin-jwt-8f2c6a1d9e4b7350a3c5d7e9}
+      API_BEARER_TOKEN: ${USERS_API_BEARER_TOKEN:-dev-users-bearer-2a7d9e4f8c1b6350}
+      CORS_ORIGINS: '["http://localhost:${ADMIN_FRONTEND_PORT:-3000}"]'
+      RABBIT_URL: amqp://${RABBITMQ_USER:-events}:${RABBITMQ_PASSWORD:-dev-rabbit-password-01}@rabbitmq:5672/
+      IS_CONSUMER_ENABLED: "true"
+      # CRM sync/webhook stay off in the local stack (no CRM mock by design).
+      IS_SYNC_ENABLED: "false"
+      IS_WEBHOOK_ENABLED: "false"
+      CRM_API_URL: ${CRM_API_URL:-http://mocks:8080/crm}
+      CRM_API_TOKEN: ${CRM_API_TOKEN:-dev-crm-api-token-1c7e4f9b2a83d650}
+      CRM_ENCRYPTION_KEY: ${CRM_ENCRYPTION_KEY:-9f1e8d7c6b5a49382716059483726150aabbccddeeff00112233445566778899}
+      EVENT_ADMIN_URL: http://event-admin:8888
+      EVENT_ADMIN_CACHE_TOKEN: ${CACHE_INVALIDATION_TOKEN:-dev-cache-invalidation-3e9f1c7b4a82d650}
+    ports:
+      - "${USERS_PORT:-8001}:8888"
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8888/health', timeout=5)\""]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+    restart: unless-stopped
+
+  event-admin:
+    build:
+      context: ./event-admin
+      dockerfile: Dockerfile
+    environment:
+      DEBUG: "false"
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      OTEL_SERVICE_NAME: event-admin
+      OTEL_SDK_DISABLED: ${OTEL_SDK_DISABLED:-true}
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-http://otel-collector:4317}
+      OTEL_EXPORTER_OTLP_PROTOCOL: grpc
+      OTEL_TRACES_SAMPLER: ${OTEL_TRACES_SAMPLER:-parentbased_always_on}
+      # Read-only view over event-saver's database (+ its own admin_users table).
+      POSTGRES_DSN: postgresql+asyncpg://${PG_SAVER_USER:-event_saver}:${PG_SAVER_PASSWORD:-event_saver}@postgres:5432/${PG_SAVER_DB:-event_saver}
+      JWT_SECRET_KEY: ${ADMIN_JWT_SECRET:-dev-admin-jwt-8f2c6a1d9e4b7350a3c5d7e9}
+      CORS_ORIGINS: '["http://localhost:${ADMIN_FRONTEND_PORT:-3000}"]'
+      USERS_SERVICE_URL: http://event-users:8888
+      USERS_SERVICE_API_TOKEN: ${USERS_API_BEARER_TOKEN:-dev-users-bearer-2a7d9e4f8c1b6350}
+      CACHE_INVALIDATION_TOKEN: ${CACHE_INVALIDATION_TOKEN:-dev-cache-invalidation-3e9f1c7b4a82d650}
+      EVENT_RECEIVER_URL: http://event-receiver:8888
+      EVENT_RECEIVER_API_KEY: ${ADMIN_API_KEY:-dev-admin-api-key-4e8b2f6a91c73d50}
+      # Static token for GET /api/blacklist/active (must match event-booking).
+      BLACKLIST_SERVICE_TOKEN: ${BLACKLIST_SERVICE_TOKEN:-dev-blacklist-service-9d4f2c7b1e8a6350}
+      # Notifier admin API proxy (must match NOTIFIER_ADMIN_TOKEN in event-notifier).
+      NOTIFIER_SERVICE_URL: http://event-notifier:8888
+      NOTIFIER_ADMIN_TOKEN: ${NOTIFIER_ADMIN_TOKEN:-dev-notifier-admin-7c2f9e4b1a83d650}
+      # Shortener stats API (must match event-shortener SHORTENER_API_KEY).
+      SHORTENER_URL: ${SHORTENER_URL:-http://event-shortener:8888}
+      SHORTENER_API_KEY: ${SHORTENER_API_KEY:-dev-shortify-api-key-8c4e1f7b2a93d650}
+    ports:
+      - "${ADMIN_PORT:-8002}:8888"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      event-users:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8888/health', timeout=5)\""]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      start_period: 20s
+    restart: unless-stopped
+
+  event-notifier:
+    build:
+      context: ./event-notifier
+      dockerfile: Dockerfile
+    environment:
+      DEBUG: "false"
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      OTEL_SERVICE_NAME: event-notifier
+      OTEL_SDK_DISABLED: ${OTEL_SDK_DISABLED:-true}
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-http://otel-collector:4317}
+      OTEL_EXPORTER_OTLP_PROTOCOL: grpc
+      OTEL_TRACES_SAMPLER: ${OTEL_TRACES_SAMPLER:-parentbased_always_on}
+      RABBIT_URL: amqp://${RABBITMQ_USER:-events}:${RABBITMQ_PASSWORD:-dev-rabbit-password-01}@rabbitmq:5672/
+      DATABASE_URL: postgresql+asyncpg://${PG_NOTIFIER_USER:-event_notifier}:${PG_NOTIFIER_PASSWORD:-event_notifier}@postgres:5432/${PG_NOTIFIER_DB:-event_notifier}
+      EVENT_USERS_URL: http://event-users:8888
+      EVENT_USERS_TOKEN: ${USERS_API_BEARER_TOKEN:-dev-users-bearer-2a7d9e4f8c1b6350}
+      EVENTS_ENDPOINT_URL: http://event-receiver:8888/event/admin
+      EVENTS_API_KEY: ${ADMIN_API_KEY:-dev-admin-api-key-4e8b2f6a91c73d50}
+      DEFAULT_LOCALE: ru
+      UNISENDER_BASE_URL: ${UNISENDER_BASE_URL:-http://mocks:8080/unisender}
+      UNISENDER_API_KEY: ${UNISENDER_API_KEY:-dev-unisender-api-key-6e2c9f4b8a13d750}
+      UNISENDER_FROM_EMAIL: ${UNISENDER_FROM_EMAIL:-noreply@dev.local}
+      UNISENDER_FROM_NAME: ${UNISENDER_FROM_NAME:-Events Dev}
+      # Literal because compose ${VAR:-default} cannot contain '}'. Real template
+      # UUIDs go in a docker-compose.override.yml (see .env.example notes).
+      UNISENDER_TEMPLATE_IDS: '{"ru":{"BOOKING_CREATED":"00000000-0000-4000-8000-000000000001","BOOKING_CANCELLED":"00000000-0000-4000-8000-000000000002","BOOKING_RESCHEDULED":"00000000-0000-4000-8000-000000000003","BOOKING_REASSIGNED":"00000000-0000-4000-8000-000000000004","BOOKING_REMINDER":"00000000-0000-4000-8000-000000000005","BOOKING_REJECTED":"00000000-0000-4000-8000-000000000006","BOOKING_REJECTED_BLACKLISTED":"00000000-0000-4000-8000-000000000007"},"en":{"BOOKING_REJECTED_BLACKLISTED":"00000000-0000-4000-8000-000000000008"}}'
+      TELEGRAM_BASE_URL: ${TELEGRAM_BASE_URL:-http://mocks:8080/telegram}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-0000000000:dev-telegram-bot-token-mock}
+      # Admin API token (must match NOTIFIER_ADMIN_TOKEN in event-admin).
+      NOTIFIER_ADMIN_TOKEN: ${NOTIFIER_ADMIN_TOKEN:-dev-notifier-admin-7c2f9e4b1a83d650}
+      BINDINGS_CACHE_TTL_SECONDS: ${BINDINGS_CACHE_TTL_SECONDS:-30}
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      event-users:
+        condition: service_healthy
+      mocks:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8888/health', timeout=5)\""]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+    restart: unless-stopped
+
+  # Trigger-driven DB sync: a cal.com NOTIFY hook + watermark reconcile emit
+  # user.upserted CloudEvents (routing key events.user.email) consumed by
+  # event-users. Owns its own sync_state DB (on the shared postgres) and runs
+  # `alembic upgrade head` in its entrypoint. Reads the cal.com fixture DB read-only
+  # (the NOTIFY trigger is an additive, sanctioned hook — not a schema migration).
+  event-db-sync:
+    build:
+      context: ./event-db-sync
+      dockerfile: Dockerfile
+    environment:
+      DEBUG: "false"
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      OTEL_SERVICE_NAME: event-db-sync
+      OTEL_SDK_DISABLED: ${OTEL_SDK_DISABLED:-true}
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-http://otel-collector:4317}
+      OTEL_EXPORTER_OTLP_PROTOCOL: grpc
+      OTEL_TRACES_SAMPLER: ${OTEL_TRACES_SAMPLER:-parentbased_always_on}
+      RABBIT_URL: amqp://${RABBITMQ_USER:-events}:${RABBITMQ_PASSWORD:-dev-rabbit-password-01}@rabbitmq:5672/
+      DATABASE_URL: postgresql+asyncpg://${PG_DB_SYNC_USER:-event_db_sync}:${PG_DB_SYNC_PASSWORD:-event_db_sync}@postgres:5432/${PG_DB_SYNC_DB:-event_db_sync}
+      # Plain postgresql:// (NOT +asyncpg) — raw LISTEN/SELECT against the cal.com fixture DB.
+      CALCOM_DATABASE_URL: postgresql://${PG_CALCOM_USER:-calcom}:${PG_CALCOM_PASSWORD:-calcom}@postgres:5432/${PG_CALCOM_DB:-calcom}
+      # Static bearer token gating POST /admin/full-sync.
+      SYNC_ADMIN_TOKEN: ${SYNC_ADMIN_TOKEN:-dev-sync-admin-token}
+    ports:
+      - "${DB_SYNC_PORT:-8003}:8888"
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8888/health', timeout=5)\""]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+    restart: unless-stopped
+
+  # URL shortener (REST). Replaces the former /shortify WireMock stub; event-
+  # booking calls it to shorten meeting links. Owns its own DB (on the shared
+  # postgres) and runs `alembic upgrade head` in its entrypoint.
+  event-shortener:
+    build:
+      context: ./event-shortener
+    environment:
+      DEBUG: "false"
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      OTEL_SERVICE_NAME: event-shortener
+      OTEL_SDK_DISABLED: ${OTEL_SDK_DISABLED:-true}
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-http://otel-collector:4317}
+      OTEL_EXPORTER_OTLP_PROTOCOL: grpc
+      OTEL_TRACES_SAMPLER: ${OTEL_TRACES_SAMPLER:-parentbased_always_on}
+      POSTGRES_DSN: postgresql+asyncpg://${PG_SHORTENER_USER:-event_shortener}:${PG_SHORTENER_PASSWORD:-event_shortener}@postgres:5432/${PG_SHORTENER_DB:-event_shortener}
+      # Static bearer key event-booking sends on /api/v1/* — must match booking's SHORTENER_API_KEY.
+      SHORTENER_API_KEY: ${SHORTENER_API_KEY:-dev-shortify-api-key-8c4e1f7b2a93d650}
+    ports:
+      - "${SHORTENER_PORT:-8000}:8888"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8888/health', timeout=5)\""]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      start_period: 20s
+    restart: unless-stopped
+
+  event-admin-frontend:
+    build:
+      context: ./event-admin-frontend
+      dockerfile: Dockerfile
+      args:
+        # Empty = same-origin: nginx inside the container proxies
+        # /api, /auth, /bookings and /health to event-admin:8888.
+        VITE_API_BASE_URL: ${VITE_API_BASE_URL:-}
+    ports:
+      - "${ADMIN_FRONTEND_PORT:-3000}:80"
+    depends_on:
+      event-admin:
+        condition: service_healthy
+    healthcheck:
+      # 127.0.0.1, not localhost: nginx only listens on IPv4 and busybox
+      # wget resolves localhost to ::1 without falling back.
+      test: ["CMD-SHELL", "wget -qO /dev/null http://127.0.0.1:80/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+
+  jitsi-chat:
+    build:
+      context: ./jitsi-chat
+      dockerfile: Dockerfile
+    environment:
+      # Injected at container start by env.sh (runtime, not build time).
+      VITE_JITSI_DOMAIN: ${VITE_JITSI_DOMAIN:-meet.jit.si}
+      VITE_WEBHOOK_URL: ${VITE_WEBHOOK_URL:-http://localhost:${RECEIVER_PORT:-8888}/event/jitsi}
+      VITE_STREAM_CHAT_API_KEY: ${CHAT_API_KEY:-devgetstreamkey0123456789}
+      # Browser-side: cannot reach the in-network mock, so the real endpoint is
+      # the default (chat simply stays disconnected with dev credentials).
+      VITE_STREAM_CHAT_BASE_URL: ${VITE_STREAM_CHAT_BASE_URL:-https://chat.stream-io-api.com}
+    ports:
+      - "${JITSI_CHAT_PORT:-8080}:80"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO /dev/null http://127.0.0.1:80/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+
