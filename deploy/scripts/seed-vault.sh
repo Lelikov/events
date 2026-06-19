@@ -97,11 +97,10 @@ OTEL_COLLECTOR_ENDPOINT="http://events-observability-opentelemetry-collector:431
 #   10.16.0.11/12  k8s worker nodes
 #   10.16.0.20     VPS — RabbitMQ (no managed RabbitMQ at Beget)
 #   10.16.0.30     VPS — observability backend (optional)
-#   10.16.0.40     Managed PostgreSQL — 5 app DBs on ONE instance, per-DB login
-#                  (event_saver, event_users, event_notifier, event_shortener, event_db_sync)
-#   10.16.0.41     PostgreSQL — cal.com (separate; only if self-hosted)
+#   10.16.0.40     Managed PostgreSQL — all app DBs on ONE instance, per-DB login
+#                  (event_saver, event_users, event_notifier, event_shortener, event_db_sync, calcom)
 #
-# All five app DBs live on the SAME managed instance (10.16.0.40); each gets its
+# All app DBs incl. cal.com live on the SAME managed instance (10.16.0.40); each gets its
 # own DB + login role. Confirm with Beget that Cloud K8s nodes + Managed
 # PostgreSQL can attach to the private network (KB documents VPS<->VPS only).
 : "${PG_SAVER_DSN_PH:=postgresql+asyncpg://event_saver:CHANGE-ME-saver-pass@10.16.0.40:5432/event_saver}"
@@ -109,9 +108,9 @@ OTEL_COLLECTOR_ENDPOINT="http://events-observability-opentelemetry-collector:431
 : "${PG_NOTIFIER_DSN_PH:=postgresql+asyncpg://event_notifier:CHANGE-ME-notifier-pass@10.16.0.40:5432/event_notifier}"
 : "${PG_SHORTENER_DSN_PH:=postgresql+asyncpg://event_shortener:CHANGE-ME-shortener-pass@10.16.0.40:5432/event_shortener}"
 : "${PG_DB_SYNC_DSN_PH:=postgresql+asyncpg://event_db_sync:CHANGE-ME-dbsync-pass@10.16.0.40:5432/event_db_sync}"
-: "${CALCOM_DSN_PH:=postgresql+asyncpg://calcom:CHANGE-ME-calcom-pass@10.16.0.41:5432/calcom}"
+: "${CALCOM_DSN_PH:=postgresql+asyncpg://calcom:CHANGE-ME-calcom-pass@10.16.0.40:5432/calcom}"
 # event-db-sync reads cal.com over plain psycopg (no +asyncpg driver suffix).
-: "${CALCOM_PLAIN_DSN_PH:=postgresql://calcom:CHANGE-ME-calcom-pass@10.16.0.41:5432/calcom}"
+: "${CALCOM_PLAIN_DSN_PH:=postgresql://calcom:CHANGE-ME-calcom-pass@10.16.0.40:5432/calcom}"
 # RabbitMQ on a self-managed VPS (Beget has no managed RabbitMQ), private IP.
 : "${RABBIT_URL_PH:=amqp://events:CHANGE-ME-rabbit-password@10.16.0.20:5672/events}"
 # event-db-sync admin API token (guards its /admin endpoints).

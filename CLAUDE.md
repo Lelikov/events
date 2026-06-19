@@ -61,7 +61,7 @@ cal.com DB ──(AFTER INSERT/UPDATE trigger → pg_notify 'user_sync')──�
 
 ## Quick Start (Docker Compose)
 
-The whole system — 11 services, RabbitMQ, one shared app PostgreSQL + one cal.com PostgreSQL, and WireMock
+The whole system — 11 services, RabbitMQ, one shared PostgreSQL (app DBs + calcom), and WireMock
 stand-ins for the remaining external HTTP APIs — runs with one command from the
 repo root:
 
@@ -90,8 +90,7 @@ Host ports:
 | 8080 | jitsi-chat SPA |
 | 8089 | WireMock mocks (journal: `http://localhost:8089/__admin/requests`) |
 | 5672 / 15672 | RabbitMQ (AMQP / management UI) |
-| 5432 | postgres (shared app DB: event_saver, event_users, event_notifier, event_shortener, event_db_sync; 127.0.0.1 only) |
-| 5433 | pg-calcom (fixture cal.com DB; used by `scripts/calcom_sim.py`) |
+| 5432 | postgres (shared app DBs + calcom: event_saver, event_users, event_notifier, event_shortener, event_db_sync, calcom; 127.0.0.1 only) |
 | 9090 | Prometheus *(observability profile; 127.0.0.1 only; scrapes services + RabbitMQ + postgres exporters)* |
 | 3001 | Grafana *(observability profile; admin/admin; dashboards: System Overview, Booking Flow)* |
 | 9093 | Alertmanager *(observability profile; 127.0.0.1 only; routes Prometheus alerts → ops Telegram)* |
@@ -125,7 +124,8 @@ logs↔traces correlation), and the Frontend observability (Sentry) subsection.
 ### Симуляция событий cal.com
 
 `scripts/calcom_sim.py` генерирует реалистичные подписанные вебхуки cal.com
-(по образцу `event-booking/requests.jsonl`) и пишет фикстурные строки в pg-calcom:
+(по образцу `event-booking/requests.jsonl`) и пишет фикстурные строки в БД `calcom`
+общего postgres (фикстура в `docker/calcom-init/`):
 
 ```bash
 uv run scripts/calcom_sim.py create [--starts-in 1h] [--locale en] [--dry-run]
@@ -133,16 +133,17 @@ uv run scripts/calcom_sim.py lifecycle          # created -> rescheduled -> canc
 uv run scripts/calcom_sim.py cancel <uid>; uv run scripts/calcom_sim.py reschedule <uid>
 ```
 
+Для копирования реальных данных cal.com в dev-БД используйте `scripts/copy_calcom.sh`.
+
 Mock vs real external APIs: UniSender Go, Telegram Bot API and GetStream default
 to the WireMock container (`http://mocks:8080/<prefix>`, mappings in
 `docker/mocks/mappings/`). Point the corresponding `*_URL`/key variables in
 `.env` at real endpoints to integrate for real. (URL shortening is now the real
 in-contour `event-shortener` service, not a mock.)
 
-External cal.com: by default `event-booking` reads the seeded `pg-calcom`
-fixture DB (`docker/calcom-init/`). Set `CALCOM_DATABASE_URL` in `.env` to a
-real cal.com PostgreSQL DSN to use an external instance (the fixture container
-keeps running but is unused).
+External cal.com: by default `event-booking` reads the `calcom` DB on the shared
+postgres instance (schema/seed in `docker/calcom-init/`). Set `CALCOM_DATABASE_URL`
+in `.env` to a real cal.com PostgreSQL DSN to use an external instance.
 
 Notes:
 - `admin_users` (event-admin panel logins) is created by event-saver's alembic
