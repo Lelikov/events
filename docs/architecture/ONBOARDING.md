@@ -514,6 +514,43 @@ templates is out of scope for v1.
 
 ---
 
+## User sync (event-db-sync)
+
+`event-db-sync` (the 11th service) replaces the old HTTP CRM poll with a **trigger-driven**
+cal.com→event-users sync.
+
+**What it does**
+- Connects to the **cal.com DB** and idempotently applies (gated by `APPLY_TRIGGERS`) an additive
+  `AFTER INSERT/UPDATE` trigger on `"Attendee"` and `"users"` that fires
+  `pg_notify('user_sync', {"table","id"})`.
+- On NOTIFY it re-SELECTs the row and publishes a **`user.upserted`** CloudEvent **directly to
+  RabbitMQ** (source `db-sync`, priority CRITICAL, routing key `events.user.email` — it reuses the
+  existing event-users queue; no event-receiver HTTP hop). Mapping: `"Attendee"` → `role=client`,
+  `"users"` → `role=organizer`.
+- **Reconcile**: a watermark sweep over its own small Postgres `sync_state` DB re-emits rows missed
+  during downtime, and serves as the one-time cutover backfill.
+- **Full-sync**: `POST /admin/full-sync` (bearer `SYNC_ADMIN_TOKEN`, `?source=attendee|users|all`)
+  forces a full pass with cal.com as the source of truth.
+
+Downstream: event-users consumes `user.upserted`, upserts the user (`upsert_user_from_crm`,
+`ON CONFLICT (email, role)`, updates `time_zone`) and publishes **`user.synced`** directly to
+RabbitMQ (`events.user.synced`, saver-owned, CRITICAL) with the resolved `user_id`; event-saver
+backfills `bookings.{organizer,client}_user_id` by participant email (the HTTP-poll
+`UserIdBackfillService` stays as a slow safety net).
+
+**cal.com trigger caveat**: the NOTIFY trigger is a **sanctioned additive integration hook**, NOT a
+cal.com schema migration — it adds no columns/tables and does not alter cal.com's data model
+(cal.com still owns its schema). This is the one place a non-cal.com service touches the cal.com DB
+structure, and only via an additive trigger.
+
+**Compose**: service `event-db-sync` (host `:8003` → container `:8888`) + `pg-db-sync`
+(`127.0.0.1:5437`, the `sync_state` DB).
+
+**Env vars**: `DATABASE_URL` (own `sync_state` DB), `CALCOM_DATABASE_URL` (plain `postgresql://`),
+`RABBIT_URL`, `SYNC_ADMIN_TOKEN`, `APPLY_TRIGGERS`, `RECONCILE_*`, `FULL_SYNC_*`.
+
+---
+
 ## Minimum Viable Setup
 
 Not every service is needed for every task. Use this table to decide what to run:

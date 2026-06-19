@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Monorepo Overview
 
-This is a **multi-service event-driven system** for managing bookings and participants. Ten independent packages share this root directory; each has its own `CLAUDE.md` with service-specific commands and architecture.
+This is a **multi-service event-driven system** for managing bookings and participants. Eleven independent packages share this root directory; each has its own `CLAUDE.md` with service-specific commands and architecture.
 
 | Service | Language/Stack | Role |
 |---|---|---|
@@ -18,6 +18,7 @@ This is a **multi-service event-driven system** for managing bookings and partic
 | `event-shortener/` | Python, FastAPI | URL shortener (REST, own PostgreSQL); event-booking shortens meeting links via it. Replaced the `/shortify` WireMock stub |
 | `event-schemas/` | Python, Pydantic | Shared schema library (payloads, envelope, **canonical RabbitMQ topology**); no runtime service |
 | `jitsi-chat/` | TypeScript, React, Vite | Participant-facing video meeting + chat SPA; Sentry error+perf monitoring (gated, off by default) |
+| `event-db-sync/` | Python, FastAPI, asyncpg, FastStream | Trigger-driven cal.com→event-users sync: `pg_notify` listener, watermark reconcile, full-sync; publishes `user.upserted` directly to RabbitMQ (no event-receiver HTTP hop) |
 
 ## System Data Flow
 
@@ -45,9 +46,16 @@ cal.com webhooks / external clients     jitsi-chat SPA (Jitsi iframe events)
         │         └──► notification.*.message_sent ──► HTTP POST back to event-receiver
         │
         └──► events.user.email ──► event-users (separate DB: users, user_contacts; CRM sync)
+
+cal.com DB ──(AFTER INSERT/UPDATE trigger → pg_notify 'user_sync')──► event-db-sync
+        │   (own sync_state DB: watermark reconcile + POST /admin/full-sync; "Attendee"→client, "users"→organizer)
+        └──► user.upserted ──► events.user.email (DIRECT publish to RabbitMQ) ──► event-users
+                  └──► upsert_user_from_crm; user.synced ──► events.user.synced (DIRECT publish) ──► event-saver
+                            └──► backfills bookings.organizer_user_id / client_user_id by participant email
 ```
 
-- **Database ownership**: `event-saver` owns all main-DB schema migrations (`alembic/` lives there). `event-admin` is read-only — never create migrations in `event-admin`. `event-users` and `event-notifier` own their separate DBs. `event-booking` writes to the cal.com DB but NEVER migrates it (cal.com owns its schema).
+- **Database ownership**: `event-saver` owns all main-DB schema migrations (`alembic/` lives there). `event-admin` is read-only — never create migrations in `event-admin`. `event-users`, `event-notifier`, and `event-db-sync` own their separate DBs. `event-booking` writes to the cal.com DB but NEVER migrates it (cal.com owns its schema).
+- **Sanctioned cal.com trigger exception**: `event-db-sync` idempotently applies an **additive `AFTER INSERT/UPDATE` NOTIFY trigger** on cal.com `"Attendee"` and `"users"` (`pg_notify('user_sync', {table, id})`). This is a SANCTIONED integration hook, **NOT** a cal.com schema migration — it adds no columns/tables and does not alter cal.com's data model (cal.com still owns its schema; gated by `APPLY_TRIGGERS`).
 - **Shared schemas**: `event-schemas` (v0.2.0) is a local pip package imported by `event-receiver`, `event-saver`, `event-booking`, and `event-notifier`. Its `queues.py` is the single source of truth for the RabbitMQ topology; `envelope.py` defines the mandatory `{original, normalized}` consumer unwrap.
 - **participants.user_id** in `event-saver`'s DB references the UUID PK from `event-users`; event-receiver resolves it at ingress into `normalized.participants`.
 
@@ -76,12 +84,14 @@ Host ports:
 | 8888 | event-receiver (ingress webhooks: `/event/calcom`, `/event/jitsi`, …) |
 | 8001 | event-users API |
 | 8002 | event-admin API |
+| 8003 | event-db-sync API (→ container 8888; `POST /admin/full-sync`, health) |
 | 8000 | event-shortener API (REST URL shortener; event-booking calls it) |
 | 3000 | event-admin-frontend (nginx, same-origin proxy to event-admin) |
 | 8080 | jitsi-chat SPA |
 | 8089 | WireMock mocks (journal: `http://localhost:8089/__admin/requests`) |
 | 5672 / 15672 | RabbitMQ (AMQP / management UI) |
 | 5433 | pg-calcom (fixture cal.com DB, used by `scripts/calcom_sim.py`) |
+| 5437 | pg-db-sync (event-db-sync `sync_state` DB; 127.0.0.1 only) |
 | 9090 | Prometheus *(observability profile; 127.0.0.1 only; scrapes services + RabbitMQ + postgres exporters)* |
 | 3001 | Grafana *(observability profile; admin/admin; dashboards: System Overview, Booking Flow)* |
 | 9093 | Alertmanager *(observability profile; 127.0.0.1 only; routes Prometheus alerts → ops Telegram)* |
@@ -228,7 +238,10 @@ Canonical topology lives in `event-schemas/event_schemas/queues.py` (**single so
 | `events.notification.delivery` | `events.notification.delivery` | event-saver (delivery results) |
 | `events.jitsi` / `events.mail` | (same names) | event-saver |
 | `events.user.email` | `events.user.email` | event-users |
+| `events.user.synced` | `events.user.synced` | event-saver (backfills `bookings.{organizer,client}_user_id` by email) |
 | `events.unrouted` | `events.unrouted` | event-saver (unknown types — never a 500) |
+
+> **User-sync note**: `user.upserted` (from `event-db-sync`) **reuses** the existing `events.user.email` queue/routing key — no new queue for it. `user.synced` (from `event-users`) is the only new queue (`events.user.synced`, saver-owned). Both `user.upserted` and `user.synced` are published **directly to RabbitMQ** by their producers — they do NOT pass through event-receiver.
 
 Removed queues (audit-v2): `events.booking.reminder`, `events.notifications`. Routing rules use glob patterns on `source` and `type` fields (`ROUTING_RULES`). See `event-receiver/QUEUES_DIGEST.md` and `event-saver/QUEUES_DIGEST.md` for full mappings.
 

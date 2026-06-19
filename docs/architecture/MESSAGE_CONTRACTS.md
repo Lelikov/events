@@ -53,7 +53,8 @@ startup; event-receiver declares the full topology.
 | `events.notification.delivery` | `events.notification.delivery` | event-saver | Delivery result events |
 | `events.jitsi` | `events.jitsi` | event-saver | Jitsi meeting events |
 | `events.mail` | `events.mail` | event-saver | UniSender status callbacks |
-| `events.user.email` | `events.user.email` | event-users | Email change requests |
+| `events.user.email` | `events.user.email` | event-users | Email change requests; `user.upserted` user-sync (reused queue) |
+| `events.user.synced` | `events.user.synced` | event-saver | `user.synced` → backfill `bookings.{organizer,client}_user_id` by email |
 | `events.unrouted` | `events.unrouted` | event-saver | Unmatched / unknown-type events |
 
 **Removed (audit-v2):** `events.booking.reminder` (no producer, no consumer — reminders go via
@@ -124,6 +125,8 @@ Payload contracts per type: `event_schemas.mapping.PAYLOAD_MODELS` and
 | `jitsi.suspend.detected` | jitsi-chat (via event-receiver) | event-saver | `events.jitsi` | 5 (NORMAL) | `JitsiEventPayload` |
 | `jitsi.toolbar.button_clicked` | jitsi-chat (via event-receiver) | event-saver | `events.jitsi` | 5 (NORMAL) | `JitsiEventPayload` |
 | `user.email.change_requested` | event-admin (via event-receiver `/event/admin`) | event-users | `events.user.email` | 10 (CRITICAL) | `UserEmailChangeRequestedPayload` |
+| `user.upserted` | event-db-sync (**direct to RabbitMQ**) | event-users | `events.user.email` | 10 (CRITICAL) | `UserUpsertedPayload` |
+| `user.synced` | event-users (**direct to RabbitMQ**) | event-saver | `events.user.synced` | 10 (CRITICAL) | `UserSyncedPayload` |
 | `booking.client_reassigned` | event-admin (via event-receiver `/event/admin`) | event-saver | `events.booking.lifecycle` | 10 (CRITICAL) | `BookingClientReassignedPayload` |
 | _(unmatched)_ | event-receiver | event-saver (fallback) | `events.unrouted` | -- | raw payload |
 
@@ -165,6 +168,82 @@ Routing keys come from `event_schemas.queues.ROUTING_RULES`; `events.booking.lif
 5. Webhook outbox доставляет изменение в CRM; после успешной доставки сбрасывает `email_source='crm'`.
 
 **CRM sync protection**: поле `email_source='admin'` блокирует перезапись email при следующей синхронизации с CRM до тех пор, пока outbox не доставит изменение.
+
+---
+
+## Event Detail: `user.upserted`
+
+Trigger-driven user-sync event emitted by `event-db-sync` when a cal.com `"Attendee"` or
+`"users"` row is inserted/updated. **Published directly to RabbitMQ** — it does NOT pass
+through event-receiver.
+
+| Attribute | Value |
+|-----------|-------|
+| `ce-type` | `user.upserted` |
+| `ce-source` | `db-sync` |
+| `ce-id` | deterministic (derived from `{table, id}` + row revision) for idempotent re-emit |
+| Routing key / Queue | `events.user.email` (**reuses** the existing event-users queue) |
+| Priority | 10 (CRITICAL) |
+| Producer | event-db-sync (direct RabbitMQ publish) |
+| Consumer | event-users (`upsert_user_from_crm`) |
+
+**Payload schema (`UserUpsertedPayload`)** — wrapped in the canonical envelope; `normalized.participants` is `[]` (db-sync emits no participant resolution):
+
+```json
+{
+  "original": {
+    "email": "person@example.com",
+    "role": "client | organizer",
+    "time_zone": "Europe/Moscow",
+    "name": "Jane Doe",
+    "contacts": [ { "channel": "...", "value": "..." } ]
+  },
+  "normalized": { "participants": [] }
+}
+```
+
+**Role mapping**: cal.com `"Attendee"` → `role=client`; cal.com `"users"` → `role=organizer`.
+
+**Flow**:
+1. event-db-sync applies (idempotently, gated by `APPLY_TRIGGERS`) an additive `AFTER INSERT/UPDATE` trigger on cal.com `"Attendee"`/`"users"` that fires `pg_notify('user_sync', {"table","id"})`.
+2. On NOTIFY it re-SELECTs the row, maps role, and publishes `user.upserted` directly to RabbitMQ on `events.user.email`.
+3. A **watermark reconcile sweep** (own `sync_state` Postgres DB) re-emits rows missed during downtime and serves as the one-time cutover backfill; `POST /admin/full-sync` (bearer `SYNC_ADMIN_TOKEN`, `?source=attendee|users|all`) forces a full pass with cal.com as source of truth.
+4. event-users consumes it from `events.user.email`, upserts the user (`ON CONFLICT (email, role)`, updates `time_zone`), then emits `user.synced`.
+
+---
+
+## Event Detail: `user.synced`
+
+Emitted by `event-users` after it upserts a user from a `user.upserted` event, carrying the
+resolved `user_id`. **Published directly to RabbitMQ** — it does NOT pass through event-receiver.
+
+| Attribute | Value |
+|-----------|-------|
+| `ce-type` | `user.synced` |
+| `ce-source` | `event-users` |
+| `ce-id` | deterministic (derived from `user_id` + email/role) for idempotent backfill |
+| Routing key / Queue | `events.user.synced` (new, saver-owned) |
+| Priority | 10 (CRITICAL) |
+| Producer | event-users (direct RabbitMQ publish) |
+| Consumer | event-saver (email backfill) |
+
+**Payload schema (`UserSyncedPayload`)** — canonical envelope; `normalized.participants` may be `[]`:
+
+```json
+{
+  "original": {
+    "email": "person@example.com",
+    "role": "client | organizer",
+    "user_id": "uuid",
+    "time_zone": "Europe/Moscow"
+  }
+}
+```
+
+**Flow**:
+1. event-users upserts the user from `user.upserted` (`upsert_user_from_crm`) and publishes `user.synced` directly to RabbitMQ on `events.user.synced`.
+2. event-saver consumes it from `events.user.synced` and backfills `bookings.organizer_user_id` / `bookings.client_user_id` by matching the participant email (joined through `events.payload->'normalized'->'participants'`), NULL-guarded and idempotent.
+3. The existing HTTP-poll `UserIdBackfillService` remains as a slow safety net.
 
 ---
 

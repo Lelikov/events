@@ -21,6 +21,7 @@ An event-driven microservices system for managing bookings, participants, and no
 | event-notifier | Notification dispatcher: consumes `events.notification.commands`, transactional outbox, email/Telegram delivery, publishes `notification.*.message_sent` delivery results back via event-receiver | Python 3.14, FastAPI, FastStream, asyncpg, Dishka, Jinja2 | 80 |
 | event-shortener | REST URL shortener: shortens meeting links for event-booking (`POST/GET/PATCH/DELETE /api/v1/urls/*` + public `GET /{ident}` redirect), own PostgreSQL. Replaced the `/shortify` WireMock stub | Python 3.14, FastAPI, SQLAlchemy 2.x, Alembic, Dishka | — |
 | event-schemas | Shared Python library (v0.2.0): Pydantic payload models, EventType enum, priorities, **canonical RabbitMQ topology** (`queues.py`), envelope (`envelope.py`), CloudEvent attributes | Python, Pydantic v2 | 73 |
+| event-db-sync | Trigger-driven cal.com→event-users sync: applies an additive `AFTER INSERT/UPDATE` NOTIFY trigger on cal.com `"Attendee"`/`"users"`, listens on `pg_notify('user_sync')`, runs a watermark reconcile sweep + `POST /admin/full-sync`, and publishes `user.upserted` directly to RabbitMQ; own `sync_state` DB | Python 3.14, FastAPI, asyncpg, FastStream | — |
 
 ## System Topology
 
@@ -118,6 +119,16 @@ several queues to the same routing key — `events.booking.lifecycle.saver` (eve
 `events.booking.lifecycle`. Every queue dead-letters to `events.dlx` with a `<queue>.dlq`
 companion (24h TTL). Single source of truth: `event-schemas/event_schemas/queues.py`; full
 registry in `docs/architecture/MESSAGE_CONTRACTS.md`.
+
+**User-sync flow (event-db-sync):** `event-db-sync` replaces the old HTTP CRM poll with a
+trigger-driven path. It applies an additive `AFTER INSERT/UPDATE` NOTIFY trigger on the cal.com
+DB (`"Attendee"` → `role=client`, `"users"` → `role=organizer`; a *sanctioned integration hook*,
+not a cal.com schema migration), and on `pg_notify('user_sync')` publishes `user.upserted`
+**directly to RabbitMQ** on `events.user.email` (no event-receiver hop). event-users consumes it,
+upserts the user, and publishes `user.synced` **directly to RabbitMQ** on the new saver-owned
+`events.user.synced` queue; event-saver backfills `bookings.{organizer,client}_user_id` by
+participant email. A watermark reconcile sweep (own `sync_state` DB) plus `POST /admin/full-sync`
+re-emit rows missed during downtime / force a full cutover pass.
 
 ## Key Architectural Decisions
 
