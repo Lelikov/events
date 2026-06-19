@@ -73,28 +73,6 @@ services:
       retries: 10
     restart: unless-stopped
 
-  # cal.com fixture DB (schema + seed in docker/calcom-init). When .env sets
-  # CALCOM_DATABASE_URL to an external cal.com instance this container keeps
-  # running but is simply unused by event-booking.
-  pg-calcom:
-    image: postgres:16
-    environment:
-      POSTGRES_USER: ${PG_CALCOM_USER:-calcom}
-      POSTGRES_PASSWORD: ${PG_CALCOM_PASSWORD:-calcom}
-      POSTGRES_DB: ${PG_CALCOM_DB:-calcom}
-    volumes:
-      - pg-calcom-data:/var/lib/postgresql/data
-      - ./docker/calcom-init:/docker-entrypoint-initdb.d:ro
-    ports:
-      # Published for scripts/calcom_sim.py (writes fixture Booking/Attendee rows from the host).
-      - "127.0.0.1:${PG_CALCOM_PORT:-5433}:5432"
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${PG_CALCOM_USER:-calcom} -d ${PG_CALCOM_DB:-calcom}"]
-      interval: 5s
-      timeout: 5s
-      retries: 10
-    restart: unless-stopped
-
   # WireMock stand-ins for the external HTTP APIs (UniSender Go, Telegram Bot
   # API, GetStream) under path prefixes /unisender, /telegram, /getstream.
   # Request journal: http://localhost:8089/__admin/requests
@@ -117,9 +95,9 @@ services:
   # Observability: Prometheus + Grafana + exporters
   # (design: docs/superpowers/specs/2026-06-13-prometheus-grafana-metrics-design.md)
   # --------------------------------------------------------------------------
-  # Shared postgres_exporter for the app DBs on the `postgres` container;
-  # auto-discovers all non-template databases. Scraped by prometheus in-network
-  # on :9187 (no host ports). cal.com has its own exporter below.
+  # Shared postgres_exporter for all DBs on the `postgres` container (incl.
+  # cal.com); auto-discovers all non-template databases. Scraped by prometheus
+  # in-network on :9187 (no host ports).
   pg-exporter:
     image: quay.io/prometheuscommunity/postgres-exporter:v0.17.1
     profiles: ["observability"]
@@ -128,16 +106,6 @@ services:
       PG_EXPORTER_AUTO_DISCOVER_DATABASES: "true"
     depends_on:
       postgres:
-        condition: service_healthy
-    restart: unless-stopped
-
-  pg-exporter-calcom:
-    image: quay.io/prometheuscommunity/postgres-exporter:v0.17.1
-    profiles: ["observability"]
-    environment:
-      DATA_SOURCE_NAME: postgresql://${PG_CALCOM_USER:-calcom}:${PG_CALCOM_PASSWORD:-calcom}@pg-calcom:5432/${PG_CALCOM_DB:-calcom}?sslmode=disable
-    depends_on:
-      pg-calcom:
         condition: service_healthy
     restart: unless-stopped
 
@@ -403,7 +371,7 @@ services:
       OTEL_EXPORTER_OTLP_PROTOCOL: grpc
       OTEL_TRACES_SAMPLER: ${OTEL_TRACES_SAMPLER:-parentbased_always_on}
       # Override CALCOM_DATABASE_URL in .env to use an external cal.com DB.
-      CALCOM_POSTGRES_DSN: ${CALCOM_DATABASE_URL:-postgresql+asyncpg://calcom:calcom@pg-calcom:5432/calcom}
+      CALCOM_POSTGRES_DSN: ${CALCOM_DATABASE_URL:-postgresql+asyncpg://calcom:calcom@postgres:5432/calcom}
       RABBIT_URL: amqp://${RABBITMQ_USER:-events}:${RABBITMQ_PASSWORD:-dev-rabbit-password-01}@rabbitmq:5672/
       EVENTS_ENDPOINT_URL: http://event-receiver:8888/event/booking
       EVENTS_API_KEY: ${BOOKING_API_KEY:-dev-booking-api-key-7f3a9c1e24b85d60}
@@ -427,7 +395,7 @@ services:
     depends_on:
       rabbitmq:
         condition: service_healthy
-      pg-calcom:
+      postgres:
         condition: service_healthy
       event-receiver:
         condition: service_healthy
@@ -594,7 +562,7 @@ services:
       RABBIT_URL: amqp://${RABBITMQ_USER:-events}:${RABBITMQ_PASSWORD:-dev-rabbit-password-01}@rabbitmq:5672/
       DATABASE_URL: postgresql+asyncpg://${PG_DB_SYNC_USER:-event_db_sync}:${PG_DB_SYNC_PASSWORD:-event_db_sync}@postgres:5432/${PG_DB_SYNC_DB:-event_db_sync}
       # Plain postgresql:// (NOT +asyncpg) — raw LISTEN/SELECT against the cal.com fixture DB.
-      CALCOM_DATABASE_URL: postgresql://${PG_CALCOM_USER:-calcom}:${PG_CALCOM_PASSWORD:-calcom}@pg-calcom:5432/${PG_CALCOM_DB:-calcom}
+      CALCOM_DATABASE_URL: postgresql://${PG_CALCOM_USER:-calcom}:${PG_CALCOM_PASSWORD:-calcom}@postgres:5432/${PG_CALCOM_DB:-calcom}
       # Static bearer token gating POST /admin/full-sync.
       SYNC_ADMIN_TOKEN: ${SYNC_ADMIN_TOKEN:-dev-sync-admin-token}
     ports:
@@ -603,8 +571,6 @@ services:
       rabbitmq:
         condition: service_healthy
       postgres:
-        condition: service_healthy
-      pg-calcom:
         condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8888/health', timeout=5)\""]
@@ -691,7 +657,6 @@ services:
 
 volumes:
   pg-data:
-  pg-calcom-data:
   prometheus-data:
   alertmanager-data:
   victorialogs-data:

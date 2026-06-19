@@ -59,12 +59,9 @@ scrape_configs:
     static_configs:
       - targets: ["rabbitmq:15692"]
 
-  # Two postgres_exporter containers; `db` label tells them apart. The shared
-  # exporter auto-discovers every DB on the `postgres` container (server label
-  # distinguishes them); cal.com has its own exporter.
+  # Shared postgres_exporter auto-discovers every DB on the `postgres`
+  # container (incl. cal.com); the per-database server label distinguishes them.
   - job_name: postgres
     static_configs:
       - targets: ["pg-exporter:9187"]
         labels: { db: app }
-      - targets: ["pg-exporter-calcom:9187"]
-        labels: { db: calcom }
