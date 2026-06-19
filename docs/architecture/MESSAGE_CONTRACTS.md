@@ -53,7 +53,8 @@ startup; event-receiver declares the full topology.
 | `events.notification.delivery` | `events.notification.delivery` | event-saver | Delivery result events |
 | `events.jitsi` | `events.jitsi` | event-saver | Jitsi meeting events |
 | `events.mail` | `events.mail` | event-saver | UniSender status callbacks |
-| `events.user.email` | `events.user.email` | event-users | Email change requests; `user.upserted` user-sync (reused queue) |
+| `events.user.email` | `events.user.email` | event-users | Email change requests (`user.email.change_requested`); `user.upserted` user-sync (reused queue) |
+| `events.user.email.booking` | `events.user.email` | event-booking | Fan-out of `user.email.change_requested` — updates `Attendee.email` in cal.com when `booking_uid` is present |
 | `events.user.synced` | `events.user.synced` | event-saver | `user.synced` → backfill `bookings.{organizer,client}_user_id` by email |
 | `events.unrouted` | `events.unrouted` | event-saver | Unmatched / unknown-type events |
 
@@ -124,13 +125,13 @@ Payload contracts per type: `event_schemas.mapping.PAYLOAD_MODELS` and
 | `jitsi.peer_connection.failure` | jitsi-chat (via event-receiver) | event-saver | `events.jitsi` | 5 (NORMAL) | `JitsiEventPayload` |
 | `jitsi.suspend.detected` | jitsi-chat (via event-receiver) | event-saver | `events.jitsi` | 5 (NORMAL) | `JitsiEventPayload` |
 | `jitsi.toolbar.button_clicked` | jitsi-chat (via event-receiver) | event-saver | `events.jitsi` | 5 (NORMAL) | `JitsiEventPayload` |
-| `user.email.change_requested` | event-admin (via event-receiver `/event/admin`) | event-users | `events.user.email` | 10 (CRITICAL) | `UserEmailChangeRequestedPayload` |
+| `user.email.change_requested` | event-admin (via event-receiver `/event/admin`) | event-users, event-booking (fan-out) | `events.user.email` | 10 (CRITICAL) | `UserEmailChangeRequestedPayload` |
 | `user.upserted` | event-db-sync (**direct to RabbitMQ**) | event-users | `events.user.email` | 10 (CRITICAL) | `UserUpsertedPayload` |
 | `user.synced` | event-users (**direct to RabbitMQ**) | event-saver | `events.user.synced` | 10 (CRITICAL) | `UserSyncedPayload` |
 | `booking.client_reassigned` | event-admin (via event-receiver `/event/admin`) | event-saver | `events.booking.lifecycle` | 10 (CRITICAL) | `BookingClientReassignedPayload` |
 | _(unmatched)_ | event-receiver | event-saver (fallback) | `events.unrouted` | -- | raw payload |
 
-Routing keys come from `event_schemas.queues.ROUTING_RULES`; `events.booking.lifecycle` fans out to BOTH `events.booking.lifecycle.saver` and `events.booking.lifecycle.booking`.
+Routing keys come from `event_schemas.queues.ROUTING_RULES`; `events.booking.lifecycle` fans out to BOTH `events.booking.lifecycle.saver` and `events.booking.lifecycle.booking`; `events.user.email` fans out to BOTH `events.user.email` (event-users) and `events.user.email.booking` (event-booking).
 
 **Source:** `event-schemas/event_schemas/queues.py`, `event-schemas/event_schemas/types.py`
 
@@ -144,10 +145,11 @@ Routing keys come from `event_schemas.queues.ROUTING_RULES`; `events.booking.lif
 |---------|----------|
 | `ce-type` | `user.email.change_requested` |
 | `ce-source` | `admin` |
-| Queue | `events.user.email` |
+| Routing key | `events.user.email` |
+| Queues (fan-out) | `events.user.email` (event-users), `events.user.email.booking` (event-booking) |
 | Priority | 10 (CRITICAL) |
 | Producer | event-admin (через `POST /event/admin` в event-receiver) |
-| Consumer | event-users (FastStream RabbitMQ consumer) |
+| Consumers | event-users, event-booking (fan-out на один routing key) |
 
 **Payload schema (`UserEmailChangeRequestedPayload`)**:
 
@@ -156,18 +158,26 @@ Routing keys come from `event_schemas.queues.ROUTING_RULES`; `events.booking.lif
   "user_id": "uuid",
   "old_email": "old@example.com",
   "new_email": "new@example.com",
-  "requested_by": "admin@example.com"
+  "requested_by": "admin@example.com",
+  "booking_uid": "book-123"
 }
 ```
+
+Поле `booking_uid` — **опциональное** (`str | null`). event-receiver прозрачно пробрасывает его в data; event-users игнорирует.
+
+**Fan-out**: routing key `events.user.email` привязан к двум очередям. RabbitMQ доставляет копию сообщения каждому консьюмеру независимо.
 
 **Flow**:
 1. Admin вызывает `POST /api/users/id/{user_id}/change-email` в event-admin.
 2. event-admin публикует CloudEvent в event-receiver `POST /event/admin` (auth: `Authorization: Bearer <static API key>`).
-3. event-receiver маршрутизирует `admin` / `user.email.*` → `events.user.email`.
-4. event-users потребляет событие: обновляет `users.email`, создаёт запись в `user_email_changelog`, устанавливает `email_source='admin'`.
-5. Webhook outbox доставляет изменение в CRM; после успешной доставки сбрасывает `email_source='crm'`.
+3. event-receiver маршрутизирует `admin` / `user.email.*` → routing key `events.user.email`; изменений в event-receiver нет.
+4. **event-users** потребляет из `events.user.email`: обновляет `users.email`, создаёт запись в `user_email_changelog`, устанавливает `email_source='admin'`. `booking_uid` игнорируется.
+5. **event-booking** потребляет из `events.user.email.booking`: если `booking_uid` задан — ищет `Booking` по uid → id, обновляет `Attendee.email` по совпадению `lower(old_email)` в одной транзакции с `SET LOCAL app.sync_suppress='on'` (подавляет триггер `event-db-sync`, чтобы избежать зацикливания синхронизации). Если `booking_uid` отсутствует — событие игнорируется.
+6. Webhook outbox (event-users) доставляет изменение email в CRM; после успешной доставки сбрасывает `email_source='crm'`.
 
 **CRM sync protection**: поле `email_source='admin'` блокирует перезапись email при следующей синхронизации с CRM до тех пор, пока outbox не доставит изменение.
+
+**Trigger suppression**: `SET LOCAL app.sync_suppress='on'` в транзакции event-booking не позволяет триггеру `event-db-sync` (на таблице `Attendee`) переопубликовать `user.upserted` обратно в RabbitMQ. Функция триггера проверяет GUC `app.sync_suppress` перед вызовом `pg_notify`.
 
 ---
 
