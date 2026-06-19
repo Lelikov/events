@@ -104,6 +104,25 @@ services:
       retries: 10
     restart: unless-stopped
 
+  # event-db-sync's own DB (sync_state watermarks). The service runs its own
+  # `alembic upgrade head` on start. Host port bound to 127.0.0.1 only, like pg-shortener.
+  pg-db-sync:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: ${PG_DB_SYNC_USER:-postgres}
+      POSTGRES_PASSWORD: ${PG_DB_SYNC_PASSWORD:-postgres}
+      POSTGRES_DB: ${PG_DB_SYNC_DB:-event_db_sync}
+    ports:
+      - "127.0.0.1:${PG_DB_SYNC_PORT:-5437}:5432"
+    volumes:
+      - pg-db-sync-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${PG_DB_SYNC_USER:-postgres} -d ${PG_DB_SYNC_DB:-event_db_sync}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
   # cal.com fixture DB (schema + seed in docker/calcom-init). When .env sets
   # CALCOM_DATABASE_URL to an external cal.com instance this container keeps
   # running but is simply unused by event-booking.
@@ -633,6 +652,46 @@ services:
       start_period: 30s
     restart: unless-stopped
 
+  # Trigger-driven DB sync: a cal.com NOTIFY hook + watermark reconcile emit
+  # user.upserted CloudEvents (routing key events.user.email) consumed by
+  # event-users. Owns its own pg-db-sync (sync_state) DB and runs `alembic
+  # upgrade head` in its entrypoint. Reads the cal.com fixture DB read-only
+  # (the NOTIFY trigger is an additive, sanctioned hook — not a schema migration).
+  event-db-sync:
+    build:
+      context: ./event-db-sync
+      dockerfile: Dockerfile
+    environment:
+      DEBUG: "false"
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      OTEL_SERVICE_NAME: event-db-sync
+      OTEL_SDK_DISABLED: ${OTEL_SDK_DISABLED:-true}
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-http://otel-collector:4317}
+      OTEL_EXPORTER_OTLP_PROTOCOL: grpc
+      OTEL_TRACES_SAMPLER: ${OTEL_TRACES_SAMPLER:-parentbased_always_on}
+      RABBIT_URL: amqp://${RABBITMQ_USER:-events}:${RABBITMQ_PASSWORD:-dev-rabbit-password-01}@rabbitmq:5672/
+      DATABASE_URL: postgresql+asyncpg://${PG_DB_SYNC_USER:-postgres}:${PG_DB_SYNC_PASSWORD:-postgres}@pg-db-sync:5432/${PG_DB_SYNC_DB:-event_db_sync}
+      # Plain postgresql:// (NOT +asyncpg) — raw LISTEN/SELECT against the cal.com fixture DB.
+      CALCOM_DATABASE_URL: postgresql://${PG_CALCOM_USER:-calcom}:${PG_CALCOM_PASSWORD:-calcom}@pg-calcom:5432/${PG_CALCOM_DB:-calcom}
+      # Static bearer token gating POST /admin/full-sync.
+      SYNC_ADMIN_TOKEN: ${SYNC_ADMIN_TOKEN:-dev-sync-admin-token}
+    ports:
+      - "${DB_SYNC_PORT:-8003}:8888"
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      pg-db-sync:
+        condition: service_healthy
+      pg-calcom:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8888/health', timeout=5)\""]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+    restart: unless-stopped
+
   # URL shortener (REST). Replaces the former /shortify WireMock stub; event-
   # booking calls it to shorten meeting links. Owns its own pg-shortener DB and
   # runs `alembic upgrade head` in its entrypoint.
@@ -713,6 +772,7 @@ volumes:
   pg-users-data:
   pg-notifier-data:
   pg-shortener-data:
+  pg-db-sync-data:
   pg-calcom-data:
   prometheus-data:
   alertmanager-data:
