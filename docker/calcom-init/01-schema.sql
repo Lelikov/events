@@ -20,7 +20,7 @@ CREATE TABLE users (
     "timeZone"  text NOT NULL DEFAULT 'Europe/London',
     locale      text,
     locked      boolean NOT NULL DEFAULT false,
-    "tgChatId"  text
+    telegram_chat_id bigint
 );
 
 CREATE TABLE "EventType" (
@@ -65,8 +65,8 @@ CREATE INDEX "Attendee_bookingId_idx" ON "Attendee" ("bookingId");
 -- so that webhook can be replayed against the stack end-to-end.
 -- ---------------------------------------------------------------------------
 
-INSERT INTO users (id, username, name, email, "timeZone", locale, locked)
-VALUES (4, 'chief.bread', 'Александр', 'lelikovas@gmail.com', 'Europe/Madrid', 'ru', false);
+INSERT INTO users (id, username, name, email, "timeZone", locale, locked, telegram_chat_id)
+VALUES (4, 'chief.bread', 'Александр', 'lelikovas@gmail.com', 'Europe/Madrid', 'ru', false, 154243643);
 
 INSERT INTO "EventType" (id, title, slug, length, "userId")
 VALUES (2, 'qqqqqq', 'qqqqqq', 5, 4);
