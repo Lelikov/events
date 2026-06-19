@@ -25,4 +25,14 @@ create_db_role "${PG_USERS_DB:-event_users}"         "${PG_USERS_USER:-event_use
 create_db_role "${PG_NOTIFIER_DB:-event_notifier}"   "${PG_NOTIFIER_USER:-event_notifier}"   "${PG_NOTIFIER_PASSWORD:-event_notifier}"
 create_db_role "${PG_SHORTENER_DB:-event_shortener}" "${PG_SHORTENER_USER:-event_shortener}" "${PG_SHORTENER_PASSWORD:-event_shortener}"
 create_db_role "${PG_DB_SYNC_DB:-event_db_sync}"     "${PG_DB_SYNC_USER:-event_db_sync}"     "${PG_DB_SYNC_PASSWORD:-event_db_sync}"
+create_db_role "${PG_CALCOM_DB:-calcom}"             "${PG_CALCOM_USER:-calcom}"             "${PG_CALCOM_PASSWORD:-calcom}"
+
+# cal.com lives on the shared instance too. Load the dev fixture INTO the calcom DB
+# under the calcom role (so it owns the tables and event-db-sync can create its triggers).
+# Real data is loaded separately via scripts/copy_calcom.sh.
+if [ -f /calcom-init/01-schema.sql ]; then
+  echo "  loading cal.com fixture schema into ${PG_CALCOM_DB:-calcom}..."
+  psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "${PG_CALCOM_DB:-calcom}" \
+    -c "SET ROLE \"${PG_CALCOM_USER:-calcom}\";" -f /calcom-init/01-schema.sql
+fi
 echo "Done."
