@@ -43,14 +43,10 @@ async def run_etl(
             users = {
                 r[0]: {"email": r[1], "tz": r[2], "default": r[3]}
                 for r in (
-                    await sconn.execute(
-                        text('SELECT id, email, "timeZone", "defaultScheduleId" FROM users')
-                    )
+                    await sconn.execute(text('SELECT id, email, "timeZone", "defaultScheduleId" FROM users'))
                 ).all()
             }
-            schedules = (
-                await sconn.execute(text('SELECT id, "userId", "timeZone" FROM "Schedule"'))
-            ).all()
+            schedules = (await sconn.execute(text('SELECT id, "userId", "timeZone" FROM "Schedule"'))).all()
             for sid, uid, sched_tz in schedules:
                 user = users.get(uid)
                 if user is None or user["default"] != sid:
@@ -64,10 +60,7 @@ async def run_etl(
                     continue
                 avails = (
                     await sconn.execute(
-                        text(
-                            'SELECT days, "startTime", "endTime", date'
-                            ' FROM "Availability" WHERE "scheduleId" = :sid'
-                        ),
+                        text('SELECT days, "startTime", "endTime", date FROM "Availability" WHERE "scheduleId" = :sid'),
                         {"sid": sid},
                     )
                 ).all()
@@ -112,16 +105,17 @@ async def _write_schedule(dst: AsyncEngine, owner_uuid: UUID, tz: str, avails: l
             if date is not None:
                 await conn.execute(
                     text(
-                        "INSERT INTO date_override (schedule_id, date, start_time, end_time)"
-                        " VALUES (:s, :d, :st, :e)"
+                        "INSERT INTO date_override (schedule_id, date, start_time, end_time) VALUES (:s, :d, :st, :e)"
                     ),
                     {"s": new_sid, "d": date, "st": start, "e": end},
                 )
-                override_snap.append({
-                    "date": date.isoformat(),
-                    "start_time": start.isoformat() if start is not None else None,
-                    "end_time": end.isoformat() if end is not None else None,
-                })
+                override_snap.append(
+                    {
+                        "date": date.isoformat(),
+                        "start_time": start.isoformat() if start is not None else None,
+                        "end_time": end.isoformat() if end is not None else None,
+                    }
+                )
                 continue
             for wh in expand_weekly(list(days or []), start, end):
                 await conn.execute(
@@ -131,11 +125,13 @@ async def _write_schedule(dst: AsyncEngine, owner_uuid: UUID, tz: str, avails: l
                     ),
                     {"s": new_sid, "d": wh.day_of_week, "st": wh.start_time, "e": wh.end_time},
                 )
-                weekly_snap.append({
-                    "day_of_week": wh.day_of_week,
-                    "start_time": wh.start_time.isoformat(),
-                    "end_time": wh.end_time.isoformat(),
-                })
+                weekly_snap.append(
+                    {
+                        "day_of_week": wh.day_of_week,
+                        "start_time": wh.start_time.isoformat(),
+                        "end_time": wh.end_time.isoformat(),
+                    }
+                )
         snapshot = {
             "schedule": {"name": "Imported", "time_zone": tz},
             "weekly_hours": weekly_snap,

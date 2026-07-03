@@ -266,13 +266,9 @@ async def calcom_dsn(postgres_dsn: str) -> AsyncGenerator[str]:
             )
         )
         # Default schedule (id=10) — will be migrated
-        await conn.execute(
-            text("INSERT INTO \"Schedule\" (id, \"userId\", \"timeZone\") VALUES (10, 1, 'Europe/Berlin')")
-        )
+        await conn.execute(text('INSERT INTO "Schedule" (id, "userId", "timeZone") VALUES (10, 1, \'Europe/Berlin\')'))
         # Non-default schedule (id=11) — must be skipped with a report entry
-        await conn.execute(
-            text("INSERT INTO \"Schedule\" (id, \"userId\", \"timeZone\") VALUES (11, 1, 'Europe/Berlin')")
-        )
+        await conn.execute(text('INSERT INTO "Schedule" (id, "userId", "timeZone") VALUES (11, 1, \'Europe/Berlin\')'))
         # Recurring availability for default schedule: Mon+Wed, 09:00-17:00
         await conn.execute(
             text(

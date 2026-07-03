@@ -16,7 +16,7 @@ EXPECTED_TABLES = {
 
 
 @pytest.mark.asyncio
-async def test_all_tables_exist(_migrated: str) -> None:  # noqa: PT019
+async def test_all_tables_exist(_migrated: str) -> None:
     eng = create_async_engine(_migrated)
     async with eng.connect() as conn:
         rows = await conn.execute(text("SELECT tablename FROM pg_tables WHERE schemaname = 'public'"))
@@ -26,7 +26,7 @@ async def test_all_tables_exist(_migrated: str) -> None:  # noqa: PT019
 
 
 @pytest.mark.asyncio
-async def test_day_of_week_check_rejects_zero(_migrated: str) -> None:  # noqa: PT019
+async def test_day_of_week_check_rejects_zero(_migrated: str) -> None:
     eng = create_async_engine(_migrated)
     async with eng.begin() as conn:
         sched = (

@@ -5,9 +5,12 @@ HDRS = {"actor-source": "admin"}
 
 
 def _bundle():
-    return {"name": "s", "time_zone": "Europe/Moscow",
-            "weekly_hours": [{"day_of_week": 1, "start_time": "09:00", "end_time": "17:00"}],
-            "date_overrides": []}
+    return {
+        "name": "s",
+        "time_zone": "Europe/Moscow",
+        "weekly_hours": [{"day_of_week": 1, "start_time": "09:00", "end_time": "17:00"}],
+        "date_overrides": [],
+    }
 
 
 def test_each_put_appends_one_snapshot(client) -> None:

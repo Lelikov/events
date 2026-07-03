@@ -6,20 +6,29 @@ HDRS = {"authorization": "ignored-by-fixture"}  # client fixture already sets be
 
 def _sched_owner(client) -> tuple[str, str]:
     owner = str(uuid4())
-    client.put(f"/api/v1/schedules/{owner}", json={
-        "name": "s", "time_zone": "Europe/Moscow",
-        "weekly_hours": [{"day_of_week": 1, "start_time": "09:00", "end_time": "17:00"}],
-        "date_overrides": [],
-    }, headers={"actor-source": "admin"})
+    client.put(
+        f"/api/v1/schedules/{owner}",
+        json={
+            "name": "s",
+            "time_zone": "Europe/Moscow",
+            "weekly_hours": [{"day_of_week": 1, "start_time": "09:00", "end_time": "17:00"}],
+            "date_overrides": [],
+        },
+        headers={"actor-source": "admin"},
+    )
     sid = client.get(f"/api/v1/schedules/{owner}").json()["schedule"]["id"]
     return owner, sid
 
 
 def _payload(slug: str, owner: str, sid: str) -> dict:
     return {
-        "slug": slug, "title": "Разбор", "duration_minutes": 60,
-        "slot_interval_minutes": 30, "min_booking_notice_minutes": 120,
-        "buffer_before_minutes": 5, "buffer_after_minutes": 5,
+        "slug": slug,
+        "title": "Разбор",
+        "duration_minutes": 60,
+        "slot_interval_minutes": 30,
+        "min_booking_notice_minutes": 120,
+        "buffer_before_minutes": 5,
+        "buffer_after_minutes": 5,
         "hosts": [{"user_id": owner, "schedule_id": sid}],
         "booking_limits": [{"limit_type": "booking_count", "period": "day", "value": 3}],
     }

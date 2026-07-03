@@ -4,6 +4,7 @@ from datetime import time
 from event_scheduling.dto.event_type import BookingLimitDTO
 from event_scheduling.dto.schedule import WeeklyHourDTO
 
+
 # cal.com bookingLimits/durationLimits JSON keys → domain period
 _PERIOD_MAP = {"PER_DAY": "day", "PER_WEEK": "week", "PER_MONTH": "month", "PER_YEAR": "year"}
 

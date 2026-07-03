@@ -12,7 +12,8 @@ from scripts.etl_from_calcom import run_etl
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("_clean_db")
 async def test_etl_migrates_default_schedule_and_skips_extra(
-    _migrated: str, calcom_dsn: str  # noqa: PT019
+    _migrated: str,
+    calcom_dsn: str,
 ) -> None:
     uid = uuid4()
     report = await run_etl(
@@ -35,9 +36,7 @@ async def test_etl_migrates_default_schedule_and_skips_extra(
         do_count = (await conn.execute(text("SELECT count(*) FROM date_override"))).scalar()
         assert do_count == 1  # (a) exactly one date-override row for the migrated schedule
         snap = (
-            await conn.execute(
-                text("SELECT snapshot FROM schedule_change_log WHERE actor_source = 'etl' LIMIT 1")
-            )
+            await conn.execute(text("SELECT snapshot FROM schedule_change_log WHERE actor_source = 'etl' LIMIT 1"))
         ).scalar()
         # asyncpg deserializes jsonb columns to dict automatically
         assert snap["schedule"]["time_zone"]  # (b) time_zone present in snapshot
