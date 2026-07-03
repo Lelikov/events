@@ -5,6 +5,7 @@ migrates schedules only. The EtlReport dataclass reserves the ``event_type``
 counter for a future branch; it will remain 0 until that branch is added.
 """
 
+import json
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from uuid import UUID
@@ -71,8 +72,12 @@ async def run_etl(
                     )
                 ).all()
                 tz = resolve_time_zone(sched_tz, user["tz"])
-                await _write_schedule(dst, target_uuid, tz, avails)
-                report.migrated["schedule"] += 1
+                try:
+                    await _write_schedule(dst, target_uuid, tz, avails)
+                    report.migrated["schedule"] += 1
+                except Exception as exc:  # noqa: BLE001
+                    report.skipped["schedule"] += 1
+                    report.skips.append(("schedule", f"write-error:{exc}"))
         return report
     finally:
         await src.dispose()
@@ -96,8 +101,13 @@ async def _write_schedule(dst: AsyncEngine, owner_uuid: UUID, tz: str, avails: l
                 {"o": owner_uuid, "tz": tz},
             )
         ).scalar()
+        if new_sid is None:
+            msg = f"INSERT INTO schedule returned no id for owner {owner_uuid}"
+            raise RuntimeError(msg)
         await conn.execute(text("DELETE FROM weekly_hours WHERE schedule_id = :s"), {"s": new_sid})
         await conn.execute(text("DELETE FROM date_override WHERE schedule_id = :s"), {"s": new_sid})
+        weekly_snap: list[dict] = []
+        override_snap: list[dict] = []
         for days, start, end, date in avails:
             if date is not None:
                 await conn.execute(
@@ -107,6 +117,11 @@ async def _write_schedule(dst: AsyncEngine, owner_uuid: UUID, tz: str, avails: l
                     ),
                     {"s": new_sid, "d": date, "st": start, "e": end},
                 )
+                override_snap.append({
+                    "date": date.isoformat(),
+                    "start_time": start.isoformat() if start is not None else None,
+                    "end_time": end.isoformat() if end is not None else None,
+                })
                 continue
             for wh in expand_weekly(list(days or []), start, end):
                 await conn.execute(
@@ -116,6 +131,17 @@ async def _write_schedule(dst: AsyncEngine, owner_uuid: UUID, tz: str, avails: l
                     ),
                     {"s": new_sid, "d": wh.day_of_week, "st": wh.start_time, "e": wh.end_time},
                 )
+                weekly_snap.append({
+                    "day_of_week": wh.day_of_week,
+                    "start_time": wh.start_time.isoformat(),
+                    "end_time": wh.end_time.isoformat(),
+                })
+        snapshot = {
+            "schedule": {"name": "Imported", "time_zone": tz},
+            "weekly_hours": weekly_snap,
+            "date_overrides": override_snap,
+            "travel_schedules": [],
+        }
         await conn.execute(
             text(
                 """
@@ -123,5 +149,5 @@ async def _write_schedule(dst: AsyncEngine, owner_uuid: UUID, tz: str, avails: l
                 VALUES (:o, :s, 'etl', CAST(:snap AS jsonb))
                 """
             ),
-            {"o": owner_uuid, "s": new_sid, "snap": '{"source":"etl-baseline"}'},
+            {"o": owner_uuid, "s": new_sid, "snap": json.dumps(snapshot)},
         )

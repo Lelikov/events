@@ -32,4 +32,14 @@ async def test_etl_migrates_default_schedule_and_skips_extra(
             await conn.execute(text("SELECT count(*) FROM schedule_change_log WHERE actor_source = 'etl'"))
         ).scalar()
         assert baseline == 1  # baseline snapshot
+        do_count = (await conn.execute(text("SELECT count(*) FROM date_override"))).scalar()
+        assert do_count == 1  # (a) exactly one date-override row for the migrated schedule
+        snap = (
+            await conn.execute(
+                text("SELECT snapshot FROM schedule_change_log WHERE actor_source = 'etl' LIMIT 1")
+            )
+        ).scalar()
+        # asyncpg deserializes jsonb columns to dict automatically
+        assert snap["schedule"]["time_zone"]  # (b) time_zone present in snapshot
+        assert len(snap["weekly_hours"]) == 2  # (b) two weekly_hours entries matching [1, 3]
     await eng.dispose()
