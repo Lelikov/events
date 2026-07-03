@@ -26,6 +26,7 @@ create_db_role "${PG_NOTIFIER_DB:-event_notifier}"   "${PG_NOTIFIER_USER:-event_
 create_db_role "${PG_SHORTENER_DB:-event_shortener}" "${PG_SHORTENER_USER:-event_shortener}" "${PG_SHORTENER_PASSWORD:-event_shortener}"
 create_db_role "${PG_DB_SYNC_DB:-event_db_sync}"     "${PG_DB_SYNC_USER:-event_db_sync}"     "${PG_DB_SYNC_PASSWORD:-event_db_sync}"
 create_db_role "${PG_CALCOM_DB:-calcom}"             "${PG_CALCOM_USER:-calcom}"             "${PG_CALCOM_PASSWORD:-calcom}"
+create_db_role "${PG_SCHEDULING_DB:-event_scheduling}" "${PG_SCHEDULING_USER:-event_scheduling}" "${PG_SCHEDULING_PASSWORD:-event_scheduling}"
 
 # cal.com lives on the shared instance too. Load the dev fixture INTO the calcom DB
 # under the calcom role (so it owns the tables and event-db-sync can create its triggers).

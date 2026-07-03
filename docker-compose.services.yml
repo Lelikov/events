@@ -319,6 +319,32 @@ services:
       start_period: 20s
     restart: unless-stopped
 
+  event-scheduling:
+    build:
+      context: ./event-scheduling
+    environment:
+      DEBUG: "false"
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      OTEL_SERVICE_NAME: event-scheduling
+      OTEL_SDK_DISABLED: ${OTEL_SDK_DISABLED:-true}
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-http://otel-collector:4317}
+      OTEL_EXPORTER_OTLP_PROTOCOL: grpc
+      OTEL_TRACES_SAMPLER: ${OTEL_TRACES_SAMPLER:-parentbased_always_on}
+      POSTGRES_DSN: postgresql+asyncpg://${PG_SCHEDULING_USER:-event_scheduling}:${PG_SCHEDULING_PASSWORD:-event_scheduling}@postgres:5432/${PG_SCHEDULING_DB:-event_scheduling}
+      SCHEDULING_API_KEY: ${SCHEDULING_API_KEY:-dev-scheduling-api-key-3f9c2e1a7b64d508}
+    ports:
+      - "${SCHEDULING_PORT:-8004}:8888"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8888/health', timeout=5)\""]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      start_period: 20s
+    restart: unless-stopped
+
   event-admin-frontend:
     build:
       context: ./event-admin-frontend
