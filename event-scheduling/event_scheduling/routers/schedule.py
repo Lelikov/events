@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, Header, status
 from event_scheduling.auth import require_api_key
 from event_scheduling.dto.schedule import ActorDTO
 from event_scheduling.interfaces.schedule import IScheduleController
-from event_scheduling.schemas.schedule import ScheduleBundleResponse, UpsertScheduleRequest
+from event_scheduling.schemas.schedule import ReplaceTravelRequest, ScheduleBundleResponse, UpsertScheduleRequest
 
 
 schedule_router = APIRouter(
@@ -34,4 +34,17 @@ async def put_schedule(
 ) -> ScheduleBundleResponse:
     actor = ActorDTO(source=actor_source, user_id=actor_user_id)
     bundle = await controller.upsert_schedule(owner_user_id, body.to_dto(), actor)
+    return ScheduleBundleResponse.from_dto(bundle)
+
+
+@schedule_router.put("/{owner_user_id}/travel", response_model=ScheduleBundleResponse)
+async def put_travel(
+    owner_user_id: UUID,
+    body: ReplaceTravelRequest,
+    controller: FromDishka[IScheduleController],
+    actor_source: Annotated[str, Header()] = "admin",
+    actor_user_id: Annotated[UUID | None, Header()] = None,
+) -> ScheduleBundleResponse:
+    actor = ActorDTO(source=actor_source, user_id=actor_user_id)
+    bundle = await controller.replace_travel(owner_user_id, body.to_dtos(), actor)
     return ScheduleBundleResponse.from_dto(bundle)

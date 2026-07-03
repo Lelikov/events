@@ -59,3 +59,25 @@ def test_get_returns_bundle_after_put(client) -> None:
 def test_get_missing_returns_404(client) -> None:
     resp = client.get(f"/api/v1/schedules/{uuid4()}")
     assert resp.status_code == 404
+
+
+def test_put_travel_replaces_and_snapshots(client) -> None:
+    owner = str(uuid4())
+    client.put(f"/api/v1/schedules/{owner}", json=_bundle(), headers=HDRS)
+    travel = {"travel_schedules": [
+        {"time_zone": "Asia/Almaty", "start_date": "2026-02-01", "end_date": "2026-02-10", "prev_time_zone": "Europe/Moscow"},
+    ]}
+    resp = client.put(f"/api/v1/schedules/{owner}/travel", json=travel, headers=HDRS)
+    assert resp.status_code == 200
+    assert len(resp.json()["travel_schedules"]) == 1
+    # replace: пустой список очищает
+    empty = client.put(f"/api/v1/schedules/{owner}/travel", json={"travel_schedules": []}, headers=HDRS)
+    assert empty.json()["travel_schedules"] == []
+
+
+def test_put_travel_rejects_bad_tz(client) -> None:
+    owner = str(uuid4())
+    client.put(f"/api/v1/schedules/{owner}", json=_bundle(), headers=HDRS)
+    bad = {"travel_schedules": [{"time_zone": "Mars/Base", "start_date": "2026-02-01", "end_date": None, "prev_time_zone": None}]}
+    resp = client.put(f"/api/v1/schedules/{owner}/travel", json=bad, headers=HDRS)
+    assert resp.status_code == 422

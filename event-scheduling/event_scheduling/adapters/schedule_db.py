@@ -36,14 +36,12 @@ class ScheduleDBAdapter:
         await self._sql.execute("DELETE FROM date_override WHERE schedule_id = :sid", {"sid": sid})
         for w in dto.weekly_hours:
             await self._sql.execute(
-                "INSERT INTO weekly_hours (schedule_id, day_of_week, start_time, end_time) "
-                "VALUES (:sid, :d, :s, :e)",
+                "INSERT INTO weekly_hours (schedule_id, day_of_week, start_time, end_time) VALUES (:sid, :d, :s, :e)",
                 {"sid": sid, "d": w.day_of_week, "s": w.start_time, "e": w.end_time},
             )
         for o in dto.date_overrides:
             await self._sql.execute(
-                "INSERT INTO date_override (schedule_id, date, start_time, end_time) "
-                "VALUES (:sid, :date, :s, :e)",
+                "INSERT INTO date_override (schedule_id, date, start_time, end_time) VALUES (:sid, :date, :s, :e)",
                 {"sid": sid, "date": o.date, "s": o.start_time, "e": o.end_time},
             )
         bundle = await self.get_bundle(owner_user_id)
@@ -83,9 +81,7 @@ class ScheduleDBAdapter:
             ],
         )
 
-    async def append_change_log(
-        self, owner_user_id: UUID, schedule_id: UUID, actor: ActorDTO, snapshot: dict
-    ) -> None:
+    async def append_change_log(self, owner_user_id: UUID, schedule_id: UUID, actor: ActorDTO, snapshot: dict) -> None:
         await self._sql.execute(
             """
             INSERT INTO schedule_change_log (owner_user_id, schedule_id, actor_source, actor_user_id, snapshot)
@@ -99,3 +95,12 @@ class ScheduleDBAdapter:
                 "snap": json.dumps(snapshot),
             },
         )
+
+    async def replace_travel(self, schedule_id: UUID, travels: list[TravelDTO]) -> None:
+        await self._sql.execute("DELETE FROM travel_schedule WHERE schedule_id = :sid", {"sid": schedule_id})
+        for t in travels:
+            await self._sql.execute(
+                "INSERT INTO travel_schedule (schedule_id, time_zone, start_date, end_date, prev_time_zone) "
+                "VALUES (:sid, :tz, :sd, :ed, :prev)",
+                {"sid": schedule_id, "tz": t.time_zone, "sd": t.start_date, "ed": t.end_date, "prev": t.prev_time_zone},
+            )

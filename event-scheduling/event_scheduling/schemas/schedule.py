@@ -6,6 +6,7 @@ from pydantic import BaseModel
 from event_scheduling.dto.schedule import (
     DateOverrideDTO,
     ScheduleBundleDTO,
+    TravelDTO,
     UpsertScheduleDTO,
     WeeklyHourDTO,
 )
@@ -28,6 +29,13 @@ class TravelModel(BaseModel):
     start_date: date
     end_date: date | None = None
     prev_time_zone: str | None = None
+
+
+class ReplaceTravelRequest(BaseModel):
+    travel_schedules: list[TravelModel]
+
+    def to_dtos(self) -> list[TravelDTO]:
+        return [TravelDTO(t.time_zone, t.start_date, t.end_date, t.prev_time_zone) for t in self.travel_schedules]
 
 
 class UpsertScheduleRequest(BaseModel):
@@ -72,8 +80,7 @@ class ScheduleBundleResponse(BaseModel):
                 for w in b.weekly_hours
             ],
             date_overrides=[
-                DateOverrideModel(date=o.date, start_time=o.start_time, end_time=o.end_time)
-                for o in b.date_overrides
+                DateOverrideModel(date=o.date, start_time=o.start_time, end_time=o.end_time) for o in b.date_overrides
             ],
             travel_schedules=[
                 TravelModel(

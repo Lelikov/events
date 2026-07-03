@@ -1,6 +1,6 @@
 from uuid import UUID
 
-from event_scheduling.dto.schedule import ActorDTO, ScheduleBundleDTO, UpsertScheduleDTO
+from event_scheduling.dto.schedule import ActorDTO, ScheduleBundleDTO, TravelDTO, UpsertScheduleDTO
 from event_scheduling.errors import NotFoundError
 from event_scheduling.interfaces.schedule import IScheduleDBAdapter
 from event_scheduling.validation import validate_date_overrides, validate_time_zone, validate_weekly_hours
@@ -47,12 +47,23 @@ class ScheduleController:
             raise NotFoundError(f"schedule for owner {owner_user_id} not found")
         return bundle
 
-    async def upsert_schedule(
-        self, owner_user_id: UUID, dto: UpsertScheduleDTO, actor: ActorDTO
-    ) -> ScheduleBundleDTO:
+    async def upsert_schedule(self, owner_user_id: UUID, dto: UpsertScheduleDTO, actor: ActorDTO) -> ScheduleBundleDTO:
         validate_time_zone(dto.time_zone)
         validate_weekly_hours(dto.weekly_hours)
         validate_date_overrides(dto.date_overrides)
         bundle = await self._db.replace_schedule(owner_user_id, dto)
+        await self._db.append_change_log(owner_user_id, bundle.schedule.id, actor, _bundle_to_snapshot(bundle))
+        return bundle
+
+    async def replace_travel(self, owner_user_id: UUID, travels: list[TravelDTO], actor: ActorDTO) -> ScheduleBundleDTO:
+        existing = await self._db.get_bundle(owner_user_id)
+        if existing is None:
+            raise NotFoundError(f"schedule for owner {owner_user_id} not found")
+        for t in travels:
+            validate_time_zone(t.time_zone)
+            if t.prev_time_zone is not None:
+                validate_time_zone(t.prev_time_zone)
+        await self._db.replace_travel(existing.schedule.id, travels)
+        bundle = await self._db.get_bundle(owner_user_id)
         await self._db.append_change_log(owner_user_id, bundle.schedule.id, actor, _bundle_to_snapshot(bundle))
         return bundle
