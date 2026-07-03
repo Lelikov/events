@@ -193,3 +193,106 @@ def unauth_client(app) -> Generator:
 
     with TestClient(app) as test_client:
         yield test_client
+
+
+@pytest.fixture
+async def calcom_dsn(postgres_dsn: str) -> AsyncGenerator[str]:
+    """Create and seed a minimal cal.com-schema fixture DB; yield its asyncpg DSN; drop on teardown.
+
+    Three tables mirror the cal.com source schema that ``run_etl`` reads:
+    ``users``, ``"Schedule"``, ``"Availability"``.
+
+    Seed: one organizer (org@example.com) with a default schedule (id=10)
+    containing a recurring availability row (days={1,3}) and one date-override,
+    plus one non-default schedule (id=11) to verify it is skipped.
+    """
+    from sqlalchemy import text
+    from sqlalchemy.ext.asyncio import create_async_engine
+
+    base = postgres_dsn.rsplit("/", 1)[0]
+    fixture_dsn = base + "/calcom_fixture"
+
+    # CREATE DATABASE cannot run inside a transaction — use AUTOCOMMIT on the app DB.
+    admin_eng = create_async_engine(postgres_dsn, isolation_level="AUTOCOMMIT")
+    async with admin_eng.connect() as conn:
+        await conn.execute(text("DROP DATABASE IF EXISTS calcom_fixture"))
+        await conn.execute(text("CREATE DATABASE calcom_fixture"))
+    await admin_eng.dispose()
+
+    fix_eng = create_async_engine(fixture_dsn)
+    async with fix_eng.begin() as conn:
+        await conn.execute(
+            text(
+                """
+                CREATE TABLE users (
+                    id int PRIMARY KEY,
+                    email text NOT NULL,
+                    "timeZone" text NOT NULL,
+                    "defaultScheduleId" int
+                )
+                """
+            )
+        )
+        await conn.execute(
+            text(
+                """
+                CREATE TABLE "Schedule" (
+                    id int PRIMARY KEY,
+                    "userId" int NOT NULL,
+                    "timeZone" text
+                )
+                """
+            )
+        )
+        await conn.execute(
+            text(
+                """
+                CREATE TABLE "Availability" (
+                    id int PRIMARY KEY,
+                    "scheduleId" int NOT NULL,
+                    days int[],
+                    "startTime" time,
+                    "endTime" time,
+                    date date
+                )
+                """
+            )
+        )
+        # Organizer: email=org@example.com, defaultScheduleId=10
+        await conn.execute(
+            text(
+                'INSERT INTO users (id, email, "timeZone", "defaultScheduleId")'
+                " VALUES (1, 'org@example.com', 'UTC', 10)"
+            )
+        )
+        # Default schedule (id=10) — will be migrated
+        await conn.execute(
+            text("INSERT INTO \"Schedule\" (id, \"userId\", \"timeZone\") VALUES (10, 1, 'Europe/Berlin')")
+        )
+        # Non-default schedule (id=11) — must be skipped with a report entry
+        await conn.execute(
+            text("INSERT INTO \"Schedule\" (id, \"userId\", \"timeZone\") VALUES (11, 1, 'Europe/Berlin')")
+        )
+        # Recurring availability for default schedule: Mon+Wed, 09:00-17:00
+        await conn.execute(
+            text(
+                'INSERT INTO "Availability" (id, "scheduleId", days, "startTime", "endTime", date)'
+                " VALUES (1, 10, ARRAY[1,3]::int[], '09:00', '17:00', NULL)"
+            )
+        )
+        # Date override for default schedule: 2026-01-01, 10:00-14:00
+        await conn.execute(
+            text(
+                'INSERT INTO "Availability" (id, "scheduleId", days, "startTime", "endTime", date)'
+                " VALUES (2, 10, NULL, '10:00', '14:00', '2026-01-01')"
+            )
+        )
+    await fix_eng.dispose()
+
+    yield fixture_dsn
+
+    # Teardown: drop the fixture DB (run_etl disposes its engine so no live connections remain)
+    admin_eng2 = create_async_engine(postgres_dsn, isolation_level="AUTOCOMMIT")
+    async with admin_eng2.connect() as conn2:
+        await conn2.execute(text("DROP DATABASE IF EXISTS calcom_fixture"))
+    await admin_eng2.dispose()
