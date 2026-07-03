@@ -65,5 +65,8 @@ class ScheduleController:
                 validate_time_zone(t.prev_time_zone)
         await self._db.replace_travel(existing.schedule.id, travels)
         bundle = await self._db.get_bundle(owner_user_id)
+        if bundle is None:
+            msg = f"schedule disappeared after travel replace for owner {owner_user_id}"
+            raise RuntimeError(msg)
         await self._db.append_change_log(owner_user_id, bundle.schedule.id, actor, _bundle_to_snapshot(bundle))
         return bundle
