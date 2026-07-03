@@ -46,3 +46,16 @@ def test_put_rejects_bad_timezone(client) -> None:
     bad["time_zone"] = "Mars/Phobos"
     resp = client.put(f"/api/v1/schedules/{OWNER}", json=bad, headers=HDRS)
     assert resp.status_code == 422
+
+
+def test_get_returns_bundle_after_put(client) -> None:
+    owner = str(uuid4())
+    client.put(f"/api/v1/schedules/{owner}", json=_bundle(), headers=HDRS)
+    resp = client.get(f"/api/v1/schedules/{owner}")
+    assert resp.status_code == 200
+    assert resp.json()["schedule"]["owner_user_id"] == owner
+
+
+def test_get_missing_returns_404(client) -> None:
+    resp = client.get(f"/api/v1/schedules/{uuid4()}")
+    assert resp.status_code == 404

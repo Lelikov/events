@@ -18,6 +18,12 @@ schedule_router = APIRouter(
 )
 
 
+@schedule_router.get("/{owner_user_id}", response_model=ScheduleBundleResponse)
+async def get_schedule(owner_user_id: UUID, controller: FromDishka[IScheduleController]) -> ScheduleBundleResponse:
+    bundle = await controller.get_schedule(owner_user_id)
+    return ScheduleBundleResponse.from_dto(bundle)
+
+
 @schedule_router.put("/{owner_user_id}", response_model=ScheduleBundleResponse, status_code=status.HTTP_200_OK)
 async def put_schedule(
     owner_user_id: UUID,
