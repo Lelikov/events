@@ -68,3 +68,30 @@ def test_delete_event_type(client) -> None:
     et_id = client.post("/api/v1/event-types", json=_payload("del", owner, sid)).json()["id"]
     assert client.delete(f"/api/v1/event-types/{et_id}").status_code == 204
     assert client.get(f"/api/v1/event-types/{et_id}").status_code == 404
+
+
+def test_create_duplicate_host_user_id(client) -> None:
+    owner, sid = _sched_owner(client)
+    payload = _payload("dup-host", owner, sid)
+    payload["hosts"] = [
+        {"user_id": owner, "schedule_id": sid},
+        {"user_id": owner, "schedule_id": sid},
+    ]
+    assert client.post("/api/v1/event-types", json=payload).status_code == 422
+
+
+def test_create_duplicate_booking_limit_pair(client) -> None:
+    owner, sid = _sched_owner(client)
+    payload = _payload("dup-limit", owner, sid)
+    payload["booking_limits"] = [
+        {"limit_type": "booking_count", "period": "day", "value": 3},
+        {"limit_type": "booking_count", "period": "day", "value": 5},
+    ]
+    assert client.post("/api/v1/event-types", json=payload).status_code == 422
+
+
+def test_create_host_schedule_wrong_owner(client) -> None:
+    owner1, _sid1 = _sched_owner(client)
+    _owner2, sid2 = _sched_owner(client)
+    payload = _payload("wrong-owner", owner1, sid2)
+    assert client.post("/api/v1/event-types", json=payload).status_code == 422

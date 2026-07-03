@@ -175,3 +175,12 @@ class EventTypeDBAdapter:
             {"id": event_type_id},
         )
         return row is not None
+
+    async def get_schedule_owner(self, schedule_id: UUID) -> UUID | None:
+        row = await self._sql.fetch_one(
+            "SELECT owner_user_id FROM schedule WHERE id = :sid",
+            {"sid": schedule_id},
+        )
+        if row is None:
+            return None
+        return row["owner_user_id"]

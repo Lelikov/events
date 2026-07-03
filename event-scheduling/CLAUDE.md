@@ -15,6 +15,11 @@ uv run ruff check .
 uv run ruff format .
 ```
 
+**Install dependencies:**
+```bash
+uv sync
+```
+
 **Tests:**
 ```bash
 uv run pytest
@@ -109,7 +114,7 @@ external cal.com CRM with an in-house system inside the `events` monorepo.
 | PUT | `/api/v1/event-types/{id}` | Bearer | Replace event type (hosts + limits cascade-deleted then re-inserted) |
 | DELETE | `/api/v1/event-types/{id}` | Bearer | Delete event type; `204` |
 | GET | `/health` | public | Liveness — no deps |
-| GET | `/ready` | public | DB ping → `200`/`503` |
+| GET | `/ready` | public | Static readiness probe — returns `{"status":"ready"}` with no DB check |
 | GET | `/metrics` | public | Prometheus exposition |
 
 Error codes: `422 ValidationError`, `404 NotFoundError`, `409 ConflictError`.

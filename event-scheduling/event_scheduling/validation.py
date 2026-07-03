@@ -1,7 +1,7 @@
 from collections.abc import Sequence
 from zoneinfo import ZoneInfo, available_timezones
 
-from event_scheduling.dto.event_type import BookingLimitDTO
+from event_scheduling.dto.event_type import BookingLimitDTO, HostDTO
 from event_scheduling.dto.schedule import DateOverrideDTO, WeeklyHourDTO
 from event_scheduling.errors import ValidationError
 
@@ -36,6 +36,7 @@ def validate_date_overrides(rows: Sequence[DateOverrideDTO]) -> None:
 
 
 def validate_booking_limits(rows: Sequence[BookingLimitDTO]) -> None:
+    seen: set[tuple[str, str]] = set()
     for r in rows:
         if r.limit_type not in _LIMIT_TYPES:
             raise ValidationError(f"bad limit_type: {r.limit_type!r}")
@@ -43,3 +44,15 @@ def validate_booking_limits(rows: Sequence[BookingLimitDTO]) -> None:
             raise ValidationError(f"bad period: {r.period!r}")
         if r.value <= 0:
             raise ValidationError("booking_limit value must be > 0")
+        pair = (r.limit_type, r.period)
+        if pair in seen:
+            raise ValidationError(f"duplicate booking_limit (limit_type={r.limit_type!r}, period={r.period!r})")
+        seen.add(pair)
+
+
+def validate_hosts(hosts: Sequence[HostDTO]) -> None:
+    seen_users: set = set()
+    for h in hosts:
+        if h.user_id in seen_users:
+            raise ValidationError(f"duplicate host user_id: {h.user_id}")
+        seen_users.add(h.user_id)
