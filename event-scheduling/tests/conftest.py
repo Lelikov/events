@@ -162,6 +162,7 @@ def app(_migrated: str, _clean_db) -> Generator:
     from event_scheduling.ioc import AppProvider
     from event_scheduling.main import _domain_error_handler
     from event_scheduling.metrics import HttpMetricsMiddleware
+    from event_scheduling.routers.event_type import event_type_router
     from event_scheduling.routers.schedule import schedule_router
     from event_scheduling.routes import root_router
 
@@ -170,6 +171,7 @@ def app(_migrated: str, _clean_db) -> Generator:
     setup_dishka(container=container, app=application)
     application.include_router(root_router)
     application.include_router(schedule_router)
+    application.include_router(event_type_router)
     application.add_middleware(HttpMetricsMiddleware)
     for _err in (ValidationError, NotFoundError, ConflictError):
         application.add_exception_handler(_err, _domain_error_handler)

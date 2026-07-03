@@ -13,6 +13,7 @@ from event_scheduling.errors import ConflictError, NotFoundError, ValidationErro
 from event_scheduling.ioc import AppProvider
 from event_scheduling.logger import setup_logger
 from event_scheduling.metrics import HttpMetricsMiddleware
+from event_scheduling.routers.event_type import event_type_router
 from event_scheduling.routers.schedule import schedule_router
 from event_scheduling.routes import root_router
 from event_scheduling.telemetry import instrument_asyncpg, instrument_fastapi, setup_tracing
@@ -39,6 +40,7 @@ instrument_asyncpg()
 setup_dishka(container=container, app=app)
 app.include_router(root_router)
 app.include_router(schedule_router)
+app.include_router(event_type_router)
 app.add_middleware(HttpMetricsMiddleware)
 
 _STATUS = {ValidationError: 422, NotFoundError: 404, ConflictError: 409}
