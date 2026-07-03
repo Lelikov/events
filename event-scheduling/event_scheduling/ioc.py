@@ -4,8 +4,11 @@ import structlog
 from dishka import Provider, Scope, provide
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
+from event_scheduling.adapters.schedule_db import ScheduleDBAdapter
 from event_scheduling.adapters.sql import SqlExecutor
 from event_scheduling.config import Settings, get_settings
+from event_scheduling.controllers.schedule import ScheduleController
+from event_scheduling.interfaces.schedule import IScheduleController, IScheduleDBAdapter
 from event_scheduling.interfaces.sql import ISqlExecutor
 
 
@@ -44,3 +47,11 @@ class AppProvider(Provider):
     @provide(scope=Scope.REQUEST)
     def provide_sql_executor(self, session: AsyncSession) -> ISqlExecutor:
         return SqlExecutor(session)
+
+    @provide(scope=Scope.REQUEST)
+    def provide_schedule_db(self, sql: ISqlExecutor) -> IScheduleDBAdapter:
+        return ScheduleDBAdapter(sql)
+
+    @provide(scope=Scope.REQUEST)
+    def provide_schedule_controller(self, db: IScheduleDBAdapter) -> IScheduleController:
+        return ScheduleController(db)

@@ -158,15 +158,21 @@ def app(_migrated: str, _clean_db) -> Generator:
     from dishka.integrations.fastapi import FastapiProvider, setup_dishka
     from fastapi import FastAPI
 
+    from event_scheduling.errors import ConflictError, NotFoundError, ValidationError
     from event_scheduling.ioc import AppProvider
+    from event_scheduling.main import _domain_error_handler
     from event_scheduling.metrics import HttpMetricsMiddleware
+    from event_scheduling.routers.schedule import schedule_router
     from event_scheduling.routes import root_router
 
     container = make_async_container(AppProvider(), FastapiProvider())
     application = FastAPI()
     setup_dishka(container=container, app=application)
     application.include_router(root_router)
+    application.include_router(schedule_router)
     application.add_middleware(HttpMetricsMiddleware)
+    for _err in (ValidationError, NotFoundError, ConflictError):
+        application.add_exception_handler(_err, _domain_error_handler)
     return application
 
 
