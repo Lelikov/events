@@ -1,6 +1,6 @@
 from uuid import UUID
 
-from event_scheduling.dto.schedule import ActorDTO, ScheduleBundleDTO, TravelDTO, UpsertScheduleDTO
+from event_scheduling.dto.schedule import ActorDTO, ChangeLogEntryDTO, ScheduleBundleDTO, TravelDTO, UpsertScheduleDTO
 from event_scheduling.errors import NotFoundError
 from event_scheduling.interfaces.schedule import IScheduleDBAdapter
 from event_scheduling.validation import validate_date_overrides, validate_time_zone, validate_weekly_hours
@@ -54,6 +54,9 @@ class ScheduleController:
         bundle = await self._db.replace_schedule(owner_user_id, dto)
         await self._db.append_change_log(owner_user_id, bundle.schedule.id, actor, _bundle_to_snapshot(bundle))
         return bundle
+
+    async def list_change_log(self, owner_user_id: UUID, limit: int, offset: int) -> list[ChangeLogEntryDTO]:
+        return await self._db.list_change_log(owner_user_id, limit, offset)
 
     async def replace_travel(self, owner_user_id: UUID, travels: list[TravelDTO], actor: ActorDTO) -> ScheduleBundleDTO:
         existing = await self._db.get_bundle(owner_user_id)

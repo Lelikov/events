@@ -1,4 +1,4 @@
-from datetime import date, time
+from datetime import date, datetime, time
 from uuid import UUID
 
 from pydantic import BaseModel
@@ -58,6 +58,18 @@ class ScheduleModel(BaseModel):
     owner_user_id: UUID
     name: str
     time_zone: str
+
+
+class ChangeLogEntryModel(BaseModel):
+    id: UUID
+    at: datetime
+    actor_source: str
+    actor_user_id: UUID | None
+    snapshot: dict
+
+
+class ChangeLogResponse(BaseModel):
+    entries: list[ChangeLogEntryModel]
 
 
 class ScheduleBundleResponse(BaseModel):

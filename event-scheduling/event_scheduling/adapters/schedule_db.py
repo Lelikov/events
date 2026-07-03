@@ -3,6 +3,7 @@ from uuid import UUID
 
 from event_scheduling.dto.schedule import (
     ActorDTO,
+    ChangeLogEntryDTO,
     DateOverrideDTO,
     ScheduleBundleDTO,
     ScheduleDTO,
@@ -95,6 +96,14 @@ class ScheduleDBAdapter:
                 "snap": json.dumps(snapshot),
             },
         )
+
+    async def list_change_log(self, owner_user_id: UUID, limit: int, offset: int) -> list[ChangeLogEntryDTO]:
+        rows = await self._sql.fetch_all(
+            "SELECT id, at, actor_source, actor_user_id, snapshot FROM schedule_change_log "
+            "WHERE owner_user_id = :owner ORDER BY at DESC, id DESC LIMIT :limit OFFSET :offset",
+            {"owner": owner_user_id, "limit": limit, "offset": offset},
+        )
+        return [ChangeLogEntryDTO(r["id"], r["at"], r["actor_source"], r["actor_user_id"], r["snapshot"]) for r in rows]
 
     async def replace_travel(self, schedule_id: UUID, travels: list[TravelDTO]) -> None:
         await self._sql.execute("DELETE FROM travel_schedule WHERE schedule_id = :sid", {"sid": schedule_id})

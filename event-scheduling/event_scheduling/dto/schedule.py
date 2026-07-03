@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from datetime import date, time
+from datetime import date, datetime, time
 from uuid import UUID
 
 
@@ -53,3 +53,12 @@ class UpsertScheduleDTO:
 class ActorDTO:
     source: str
     user_id: UUID | None
+
+
+@dataclass(frozen=True)
+class ChangeLogEntryDTO:
+    id: UUID
+    at: datetime
+    actor_source: str
+    actor_user_id: UUID | None
+    snapshot: dict
