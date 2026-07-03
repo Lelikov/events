@@ -4,6 +4,7 @@ from starlette.responses import Response
 
 from event_scheduling import metrics
 
+
 root_router = APIRouter(route_class=DishkaRoute)
 
 

@@ -16,6 +16,7 @@ from event_scheduling.metrics import HttpMetricsMiddleware
 from event_scheduling.routes import root_router
 from event_scheduling.telemetry import instrument_asyncpg, instrument_fastapi, setup_tracing
 
+
 container = make_async_container(AppProvider(), FastapiProvider())
 logger = structlog.get_logger(__name__)
 

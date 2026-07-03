@@ -128,23 +128,18 @@ def _migrated(postgres_dsn: str) -> str:
 
 @pytest.fixture
 async def _clean_db(_migrated: str) -> AsyncGenerator[None]:
-    """Truncate domain tables before each test so cases start from an empty schema.
-
-    Task 1: tables don't exist yet — TRUNCATE is wrapped in try/except.
-    Task 2 will remove the try/except once the migration creates the tables.
-    """
+    """Truncate domain tables before each test so cases start from an empty schema."""
     from sqlalchemy import text
     from sqlalchemy.ext.asyncio import create_async_engine
 
     eng = create_async_engine(_migrated)
     async with eng.begin() as conn:
-        try:
-            await conn.execute(text(
+        await conn.execute(
+            text(
                 "TRUNCATE schedule, weekly_hours, date_override, travel_schedule, "
                 "event_type, host, booking_limit, schedule_change_log RESTART IDENTITY CASCADE"
-            ))
-        except Exception:
-            pass
+            )
+        )
     await eng.dispose()
     return
 

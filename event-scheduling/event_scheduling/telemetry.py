@@ -104,15 +104,6 @@ def instrument_asyncpg() -> None:
     AsyncPGInstrumentor().instrument()
 
 
-def rabbit_telemetry_middlewares() -> list:
-    """FastStream RabbitMQ telemetry middleware(s) — span creation + traceparent over AMQP."""
-    if _disabled():
-        return []
-    from faststream.rabbit.opentelemetry import RabbitTelemetryMiddleware  # noqa: PLC0415
-
-    return [RabbitTelemetryMiddleware(tracer_provider=trace.get_tracer_provider())]
-
-
 def add_otel_trace_context(
     _logger: object,
     _method_name: str,
