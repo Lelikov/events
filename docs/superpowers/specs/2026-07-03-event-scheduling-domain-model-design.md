@@ -27,6 +27,7 @@
 - Внешние календари (Google/Office busy-times) — **не сейчас**; заложить точку расширения (seam), не реализуя.
 - Данные из cal.com переносим **одноразовым ETL**; cal.com потом отключается.
 - Схема — **чистый редизайн под суженный домен** (Подход 2), не верный порт cal.com.
+- **Изменения расписания логируются в БД** (append-only снимок на каждое сохранение) — чтобы в админке смотреть «во сколько и что именно поменялось, включая date overrides». Скоуп лога — только расписание (schedule / weekly_hours / date_override / travel_schedule), не event_type.
 
 **Опорный документ:** `~/PycharmProjects/calendar/docs/architecture/schedule-generation.md` — карта того, как cal.com определяет расписания и считает слоты (ссылки на код `путь:строка`). Ниже ссылки на его разделы.
 
@@ -41,7 +42,7 @@
 - В `docker-compose.services.yml` — новый сервис + БД; host-порт (предварительно **8004**); запись в корневую таблицу портов `CLAUDE.md`.
 
 **Владение данными:**
-- **Владеет таблицами:** `schedule`, `weekly_hours`, `date_override`, `travel_schedule`, `event_type`, `host`, `booking_limit`.
+- **Владеет таблицами:** `schedule`, `weekly_hours`, `date_override`, `travel_schedule`, `event_type`, `host`, `booking_limit`, `schedule_change_log`.
 - **Не владеет личностью организатора.** Организаторы живут в `event-users` (их синкает `event-db-sync`: cal.com `"users"` → организатор). Поэтому `owner_user_id` / `host.user_id` — **непрозрачные UUID-ссылки** на `event-users` (как `participants.user_id`), без кросс-сервисных JOIN. Имя/почта резолвятся через `/api/users/by-ids` при необходимости.
 - **Таймзона живёт на `schedule`** (обязательная), не на пользователе — убирает nullable-цепочку фолбэков cal.com (`Schedule.timeZone ?? User.timeZone`, раздел 5.1 документа) и кросс-сервисную зависимость. `travel_schedule` переопределяет tz на диапазонах дат.
 
@@ -131,7 +132,23 @@ value         int  not null   -- count (шт) или duration (минуты); CH
 unique (event_type_id, limit_type, period)
 ```
 
-### 2.8 Seam занятости (не таблица)
+### 2.8 `schedule_change_log` — аудит изменений расписания (append-only)
+Снимок полного состояния расписания на каждое сохранение. Диф «что поменялось» (включая overrides) считает читатель (админка) между соседними снимками — на записи ничего не теряется.
+```
+id            uuid pk
+owner_user_id uuid not null        -- чьё расписание (ссылка на event-users)
+schedule_id   uuid not null        -- без FK-cascade: лог переживает удаление schedule
+actor_source  text not null        -- 'etl' | 'admin' | 'system'
+actor_user_id uuid null            -- кто именно сохранил (если admin), ссылка на event-users
+at            timestamptz not null default now()
+snapshot      jsonb not null       -- {schedule, weekly_hours[], date_overrides[], travel_schedules[]} ПОСЛЕ сохранения
+```
+- **Append-only:** только INSERT; UPDATE/DELETE запрещены (аудит).
+- **Атомарность:** строка лога пишется в **той же транзакции**, что и replace-all сохранение → откат сохранения откатывает и лог.
+- **Скоуп:** только расписание. Изменения `event_type`/`host`/`booking_limit` сюда не пишутся (их лог — при появлении редактора event-types).
+- **Не cascade:** `schedule_id`/`owner_user_id` — простые ссылочные колонки без `ON DELETE CASCADE`, чтобы история сохранялась после удаления расписания.
+
+### 2.9 Seam занятости (не таблица)
 `interfaces/busy_times.py`:
 ```python
 class BusyTimesSource(Protocol):
@@ -139,7 +156,7 @@ class BusyTimesSource(Protocol):
 ```
 Срез 1: stub-реализация `→ []`. Срез 3: реализация поверх таблицы `booking`. Срез 5 (опц.): реализация поверх внешних календарей. Множественные источники объединяются на стороне движка (срез 2).
 
-### 2.9 Отброшено из cal.com (относительно раздела 1 документа)
+### 2.10 Отброшено из cal.com (относительно раздела 1 документа)
 Перегруженная `Availability`; nullable `Schedule.timeZone`; `Host.weight/priority/groupId`; `HostGroup`; `SelectedCalendar`/`CalendarCacheEvent`; collective/managed/restrictionSchedule/instantMeeting; инлайн-`availability` на event/user.
 
 ---
@@ -152,6 +169,8 @@ class BusyTimesSource(Protocol):
 - `GET /schedules/{owner_user_id}` → `{schedule, weekly_hours[], date_overrides[], travel_schedules[]}` одним DTO (аналог atom cal.com).
 - `PUT /schedules/{owner_user_id}` — **replace-all в одной транзакции**: `DELETE` всех `weekly_hours`+`date_override` расписания → `INSERT` нового набора (паттерн `ScheduleService.update`, раздел 2.2 документа: на каждое сохранение весь набор availability перезаписывается целиком). `time_zone`/`name` апдейтятся тут же.
 - `PUT /schedules/{owner_user_id}/travel` — отдельный путь для `travel_schedule` (diff-и-заменить, как cal.com через профиль, раздел 2.3), чтобы не переписывать поездки при каждом сохранении сетки.
+- **Аудит:** оба PUT (`/schedules` и `/schedules/travel`) в **той же транзакции** дописывают строку в `schedule_change_log` — полный снимок состояния расписания после сохранения. `actor_source`/`actor_user_id` берутся из запроса (в срезе 1 — `etl` при миграции, `admin`+id при ручной правке).
+- `GET /schedules/{owner_user_id}/change-log` — список снимков (по убыванию `at`, пагинация). Срез 1 отдаёт **сырые снимки**; рендер diff «что поменялось, включая overrides» — задача админки (event-admin / frontend, отдельный срез).
 
 ### 3.2 Event types + hosts + limits
 - `GET /event-types`, `GET /event-types/{id}` (с `hosts[]`, `booking_limits[]`).
@@ -192,6 +211,8 @@ class BusyTimesSource(Protocol):
 
 **Не переносим:** `SelectedCalendar`/`CalendarCacheEvent`, `HostGroup`, `restrictionSchedule`, инлайн-`availability`, веса, collective/managed event types, брони (`Booking` — срез 3).
 
+**Стартовый снимок в аудит-лог:** для каждого перенесённого расписания ETL пишет baseline-строку в `schedule_change_log` (`actor_source='etl'`) — чтобы история в админке начиналась с мигрированного состояния, а не с первой ручной правки.
+
 **Отчёт о миграции:** в конце — сводка «перенесено/пропущено» по каждой таблице **с причинами** (email не найден, не-RR событие, лишнее расписание). Никаких тихих потерь.
 
 **Фикстуры теста ETL:** прогон на `docker/calcom-init/` (детерминированный сид cal.com в dev).
@@ -204,6 +225,7 @@ class BusyTimesSource(Protocol):
 
 1. **Валидация write** (unit): IANA-tz; `end > start`; `date_override` NULL-инвариант; `booking_limit.value > 0`; `host.schedule_id` принадлежит `host.user_id`; уникальность `owner_user_id`.
 2. **Replace-all транзакция** (integration, тестовая БД): `PUT /schedules/{id}` полностью перезаписывает `weekly_hours`+`date_override`; ошибка в середине откатывает всё; `travel_schedule` не трогается.
+2а. **Аудит-лог** (integration): каждый успешный PUT дописывает ровно один снимок в `schedule_change_log` с корректными `actor_source`/`at` и полным `snapshot`; откат сохранения откатывает и строку лога (в логе не остаётся «фантомного» снимка); UPDATE/DELETE по логу не выполняются; `GET .../change-log` отдаёт снимки по убыванию `at`.
 3. **Event-type + вложенные hosts/limits** (integration): вложенный replace-all, каскадное удаление.
 4. **ETL-маппинг** (integration на `docker/calcom-init/`): ремап дня `0=Вс → 1..7`; резолв email→UUID; `timeZone ?? user.timeZone`; выбор `defaultScheduleId` + лог-пропуск лишних; разворот `bookingLimits` JSON → строки; отчёт с причинами пропусков.
 5. **`BusyTimesSource` stub**: возвращает `[]`; интерфейс стабилен для среза 2.
@@ -223,8 +245,9 @@ class BusyTimesSource(Protocol):
 
 ## 7. Определение готовности среза 1
 
-- Сервис `event-scheduling` поднимается в docker-compose со своей БД `event_scheduling` и alembic-миграциями всех 7 таблиц.
+- Сервис `event-scheduling` поднимается в docker-compose со своей БД `event_scheduling` и alembic-миграциями всех 8 таблиц (включая `schedule_change_log`).
 - CRUD-эндпоинты (§3) работают, покрыты тестами (§5), проходят Ruff.
+- Каждое сохранение расписания пишет append-only снимок в `schedule_change_log`; `GET .../change-log` отдаёт снимки.
 - ETL-скрипт (§4) переносит `docker/calcom-init/` сид без падений, печатает отчёт, покрыт интеграционным тестом.
 - `BusyTimesSource` Protocol + stub на месте.
 - Обновлены: корневой `CLAUDE.md` (таблица сервисов + портов), `event-scheduling/CLAUDE.md`, `docs/architecture/` (топология системы — новый сервис).
