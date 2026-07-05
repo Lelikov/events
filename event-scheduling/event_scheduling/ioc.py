@@ -10,9 +10,13 @@ from event_scheduling.adapters.sql import SqlExecutor
 from event_scheduling.config import Settings, get_settings
 from event_scheduling.controllers.event_type import EventTypeController
 from event_scheduling.controllers.schedule import ScheduleController
+from event_scheduling.interfaces.busy_times import BusyTimesSource, StubBusyTimesSource
 from event_scheduling.interfaces.event_type import IEventTypeController, IEventTypeDBAdapter
 from event_scheduling.interfaces.schedule import IScheduleController, IScheduleDBAdapter
 from event_scheduling.interfaces.sql import ISqlExecutor
+from event_scheduling.slots.interfaces import Clock, ISlotService, ISlotsReadAdapter
+from event_scheduling.slots.read_adapter import SlotsReadAdapter
+from event_scheduling.slots.service import SlotService, SystemClock
 
 
 logger = structlog.get_logger(__name__)
@@ -66,3 +70,21 @@ class AppProvider(Provider):
     @provide(scope=Scope.REQUEST)
     def provide_event_type_controller(self, db: IEventTypeDBAdapter) -> IEventTypeController:
         return EventTypeController(db)
+
+    @provide(scope=Scope.APP)
+    def provide_clock(self) -> Clock:
+        return SystemClock()
+
+    @provide(scope=Scope.APP)
+    def provide_busy_source(self) -> BusyTimesSource:
+        return StubBusyTimesSource()
+
+    @provide(scope=Scope.REQUEST)
+    def provide_slots_read_adapter(self, sql: ISqlExecutor) -> ISlotsReadAdapter:
+        return SlotsReadAdapter(sql)
+
+    @provide(scope=Scope.REQUEST)
+    def provide_slot_service(
+        self, read_adapter: ISlotsReadAdapter, busy_source: BusyTimesSource, clock: Clock
+    ) -> ISlotService:
+        return SlotService(read_adapter, busy_source, clock)
