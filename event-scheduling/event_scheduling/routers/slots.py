@@ -1,4 +1,4 @@
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 from dishka.integrations.fastapi import DishkaRoute, FromDishka
@@ -36,7 +36,7 @@ async def get_slots(
     ws, we = _as_utc(start), _as_utc(end)
     if we <= ws:
         raise ValidationError("end must be after start")
-    if (we - ws).days > _MAX_WINDOW_DAYS:
+    if we - ws > timedelta(days=_MAX_WINDOW_DAYS):
         raise ValidationError(f"window exceeds {_MAX_WINDOW_DAYS} days")
     slots = await service.available_slots(event_type_id, ws, we, time_zone)
     return SlotsResponse(event_type_id=event_type_id, time_zone=time_zone, slots=slots)

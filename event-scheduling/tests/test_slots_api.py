@@ -103,3 +103,12 @@ async def test_slots_end_before_start_422(client) -> None:
     et_id = await _seed_event_type(client, [o])
     resp = _slots(client, et_id, "2026-10-02T00:00:00Z", "2026-10-01T00:00:00Z")
     assert resp.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_slots_window_62_days_plus_one_second_422(client) -> None:
+    o = str(uuid4())
+    et_id = await _seed_event_type(client, [o])
+    # 62 days + 1 second past 2026-10-01T00:00:00Z
+    resp = _slots(client, et_id, "2026-10-01T00:00:00Z", "2026-12-02T00:00:01Z")
+    assert resp.status_code == 422
