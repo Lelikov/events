@@ -42,16 +42,14 @@ class SlotsReadAdapter:
         }
         weekly = self._group(
             await self._sql.fetch_all(
-                "SELECT schedule_id, day_of_week, start_time, end_time "
-                "FROM weekly_hours WHERE schedule_id = ANY(:ids)",
+                "SELECT schedule_id, day_of_week, start_time, end_time FROM weekly_hours WHERE schedule_id = ANY(:ids)",
                 {"ids": schedule_ids},
             ),
             lambda r: WeeklyHourDTO(r["day_of_week"], r["start_time"], r["end_time"]),
         )
         overrides = self._group(
             await self._sql.fetch_all(
-                "SELECT schedule_id, date, start_time, end_time "
-                "FROM date_override WHERE schedule_id = ANY(:ids)",
+                "SELECT schedule_id, date, start_time, end_time FROM date_override WHERE schedule_id = ANY(:ids)",
                 {"ids": schedule_ids},
             ),
             lambda r: DateOverrideDTO(r["date"], r["start_time"], r["end_time"]),
