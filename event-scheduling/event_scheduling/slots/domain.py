@@ -1,6 +1,7 @@
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime, time, timedelta
 
-from event_scheduling.slots.dto import Interval
+from event_scheduling.slots.dto import HostSchedule, Interval
+from event_scheduling.slots.timezones import effective_time_zone, local_interval_to_utc
 
 
 def to_epoch_min(d: datetime) -> int:
@@ -52,3 +53,33 @@ def slice_into_slots(avail: list[Interval], duration_min: int, step_min: int, no
                 out.append(t)
             t += step_min
     return out
+
+
+def _clip(start_utc: datetime, end_utc: datetime, window_start: datetime, window_end: datetime) -> Interval | None:
+    s = max(start_utc, window_start)
+    e = min(end_utc, window_end)
+    if s >= e:
+        return None
+    return Interval(to_epoch_min(s), to_epoch_min(e))
+
+
+def _day_local_intervals(host: HostSchedule, day: date) -> list[tuple[time, time]]:
+    overrides = [o for o in host.date_overrides if o.date == day]
+    if overrides:
+        return [(o.start_time, o.end_time) for o in overrides if o.start_time is not None and o.end_time is not None]
+    return [(w.start_time, w.end_time) for w in host.weekly_hours if w.day_of_week == day.isoweekday()]
+
+
+def host_availability_intervals(host: HostSchedule, window_start: datetime, window_end: datetime) -> list[Interval]:
+    out: list[Interval] = []
+    day = window_start.date() - timedelta(days=1)
+    last = window_end.date() + timedelta(days=1)
+    while day <= last:
+        tz = effective_time_zone(day, host.time_zone, host.travels)
+        for start, end in _day_local_intervals(host, day):
+            start_utc, end_utc = local_interval_to_utc(day, start, end, tz)
+            clipped = _clip(start_utc, end_utc, window_start, window_end)
+            if clipped is not None:
+                out.append(clipped)
+        day += timedelta(days=1)
+    return sorted(out, key=lambda i: i.start)
