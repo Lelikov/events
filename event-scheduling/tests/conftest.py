@@ -292,3 +292,18 @@ async def calcom_dsn(postgres_dsn: str) -> AsyncGenerator[str]:
     async with admin_eng2.connect() as conn2:
         await conn2.execute(text("DROP DATABASE IF EXISTS calcom_fixture"))
     await admin_eng2.dispose()
+
+
+@pytest.fixture
+async def sessionmaker_fixture(_migrated: str):
+    """Return an async_sessionmaker bound to the migrated test DB.
+
+    Used by the slots read-adapter integration tests to drive the adapter
+    directly (outside of the Dishka DI container / TestClient lifecycle).
+    """
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+    engine = create_async_engine(_migrated)
+    sm = async_sessionmaker(bind=engine, expire_on_commit=False, autoflush=False)
+    yield sm
+    await engine.dispose()
