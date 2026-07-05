@@ -1,0 +1,155 @@
+"""ORM models for event-scheduling — used by Alembic only.
+
+All runtime queries use raw SQL via SqlExecutor; these classes exist solely so
+Alembic can autogenerate / compare migrations via Base.metadata.
+"""
+
+from datetime import date, datetime, time
+
+from sqlalchemy import (
+    CheckConstraint,
+    Date,
+    DateTime,
+    ForeignKey,
+    Integer,
+    SmallInteger,
+    Text,
+    Time,
+    UniqueConstraint,
+    text,
+)
+from sqlalchemy.dialects.postgresql import JSONB, UUID
+from sqlalchemy.orm import Mapped, MappedColumn, mapped_column
+
+from event_scheduling.db.base import Base
+
+
+def _uuid_pk() -> MappedColumn:
+    """Return a fresh UUID PK column with a server-side gen_random_uuid() default.
+
+    Returns a fresh MappedColumn each time so the same Column object is never
+    assigned to more than one Table (SQLAlchemy raises ArgumentError otherwise).
+    """
+    return mapped_column(UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()"))
+
+
+class Schedule(Base):
+    __tablename__ = "schedule"
+
+    id: Mapped[str] = _uuid_pk()
+    owner_user_id: Mapped[str] = mapped_column(UUID(as_uuid=True), nullable=False)
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    time_zone: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("now()"), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("now()"), nullable=False)
+
+    __table_args__ = (UniqueConstraint("owner_user_id", name="uq_schedule_owner"),)
+
+
+class WeeklyHour(Base):
+    __tablename__ = "weekly_hours"
+
+    id: Mapped[str] = _uuid_pk()
+    schedule_id: Mapped[str] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("schedule.id", ondelete="CASCADE"), nullable=False
+    )
+    day_of_week: Mapped[int] = mapped_column(SmallInteger, nullable=False)
+    start_time: Mapped[time] = mapped_column(Time, nullable=False)
+    end_time: Mapped[time] = mapped_column(Time, nullable=False)
+
+    __table_args__ = (
+        CheckConstraint("day_of_week BETWEEN 1 AND 7", name="ck_weekly_hours_dow"),
+        CheckConstraint("end_time > start_time", name="ck_weekly_hours_range"),
+    )
+
+
+class DateOverride(Base):
+    __tablename__ = "date_override"
+
+    id: Mapped[str] = _uuid_pk()
+    schedule_id: Mapped[str] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("schedule.id", ondelete="CASCADE"), nullable=False
+    )
+    date: Mapped[date] = mapped_column(Date, nullable=False)
+    start_time: Mapped[time | None] = mapped_column(Time, nullable=True)
+    end_time: Mapped[time | None] = mapped_column(Time, nullable=True)
+
+    __table_args__ = (
+        CheckConstraint(
+            "(start_time IS NULL AND end_time IS NULL) OR "
+            "(start_time IS NOT NULL AND end_time IS NOT NULL AND end_time > start_time)",
+            name="ck_date_override_range",
+        ),
+    )
+
+
+class TravelSchedule(Base):
+    __tablename__ = "travel_schedule"
+
+    id: Mapped[str] = _uuid_pk()
+    schedule_id: Mapped[str] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("schedule.id", ondelete="CASCADE"), nullable=False
+    )
+    time_zone: Mapped[str] = mapped_column(Text, nullable=False)
+    start_date: Mapped[date] = mapped_column(Date, nullable=False)
+    end_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    prev_time_zone: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class EventType(Base):
+    __tablename__ = "event_type"
+
+    id: Mapped[str] = _uuid_pk()
+    slug: Mapped[str] = mapped_column(Text, nullable=False)
+    title: Mapped[str] = mapped_column(Text, nullable=False)
+    scheduling_type: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("'round_robin'"))
+    duration_minutes: Mapped[int] = mapped_column(Integer, nullable=False)
+    slot_interval_minutes: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    min_booking_notice_minutes: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    buffer_before_minutes: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    buffer_after_minutes: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("now()"), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("now()"), nullable=False)
+
+    __table_args__ = (UniqueConstraint("slug", name="uq_event_type_slug"),)
+
+
+class Host(Base):
+    __tablename__ = "host"
+
+    event_type_id: Mapped[str] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("event_type.id", ondelete="CASCADE"), primary_key=True
+    )
+    user_id: Mapped[str] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    schedule_id: Mapped[str] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("schedule.id", ondelete="RESTRICT"), nullable=False
+    )
+
+
+class BookingLimit(Base):
+    __tablename__ = "booking_limit"
+
+    id: Mapped[str] = _uuid_pk()
+    event_type_id: Mapped[str] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("event_type.id", ondelete="CASCADE"), nullable=False
+    )
+    limit_type: Mapped[str] = mapped_column(Text, nullable=False)
+    period: Mapped[str] = mapped_column(Text, nullable=False)
+    value: Mapped[int] = mapped_column(Integer, nullable=False)
+
+    __table_args__ = (
+        CheckConstraint("value > 0", name="ck_booking_limit_value"),
+        UniqueConstraint("event_type_id", "limit_type", "period", name="uq_booking_limit"),
+    )
+
+
+class ScheduleChangeLog(Base):
+    __tablename__ = "schedule_change_log"
+
+    id: Mapped[str] = _uuid_pk()
+    owner_user_id: Mapped[str] = mapped_column(UUID(as_uuid=True), nullable=False)
+    schedule_id: Mapped[str] = mapped_column(UUID(as_uuid=True), nullable=False)  # no FK: audit survives delete
+    actor_source: Mapped[str] = mapped_column(Text, nullable=False)
+    actor_user_id: Mapped[str | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("now()"), nullable=False)
+    snapshot: Mapped[dict] = mapped_column(JSONB, nullable=False)

@@ -48,6 +48,9 @@ services:
       PG_CALCOM_USER: ${PG_CALCOM_USER:-calcom}
       PG_CALCOM_PASSWORD: ${PG_CALCOM_PASSWORD:-calcom}
       PG_CALCOM_DB: ${PG_CALCOM_DB:-calcom}
+      PG_SCHEDULING_USER: ${PG_SCHEDULING_USER:-event_scheduling}
+      PG_SCHEDULING_PASSWORD: ${PG_SCHEDULING_PASSWORD:-event_scheduling}
+      PG_SCHEDULING_DB: ${PG_SCHEDULING_DB:-event_scheduling}
     volumes:
       - pg-data:/var/lib/postgresql/data
       - ./docker/postgres-init:/docker-entrypoint-initdb.d:ro
