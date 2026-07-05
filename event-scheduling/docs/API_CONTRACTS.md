@@ -196,6 +196,72 @@ Delete an event type (cascades to hosts and booking limits).
 404  — unknown id
 ```
 
+## Slots Endpoint
+
+### GET /api/v1/slots
+
+Return available slots for an event type within a UTC time window, grouped by
+local calendar date in the requested time zone.
+
+**Auth:** `Authorization: Bearer <SCHEDULING_API_KEY>` (same key as other `/api/v1/*`).
+
+**Query parameters:**
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `event_type_id` | UUID | yes | ID of the event type to query |
+| `start` | ISO-8601 datetime | yes | Window start (UTC; naive input treated as UTC) |
+| `end` | ISO-8601 datetime | yes | Window end (UTC; naive input treated as UTC) |
+| `time_zone` | IANA string | yes | Caller's local time zone for date grouping (e.g. `Europe/Moscow`) |
+
+**Validation (422 on failure):**
+- `time_zone` must be a valid IANA zone.
+- `end` must be after `start` (`end > start`).
+- Window must not exceed 62 days.
+
+**Response `200`:**
+```json
+{
+  "event_type_id": "<uuid>",
+  "time_zone": "Europe/Moscow",
+  "slots": {
+    "2026-07-10": [
+      "2026-07-10T07:00:00Z",
+      "2026-07-10T07:30:00Z"
+    ],
+    "2026-07-11": [
+      "2026-07-11T07:00:00Z"
+    ]
+  }
+}
+```
+
+- Keys in `slots` are local calendar dates in the requested `time_zone`
+  (ISO-8601 `YYYY-MM-DD`).
+- Values are lists of UTC slot start times in `YYYY-MM-DDThh:mm:ssZ` format.
+- An empty `slots` dict (`{}`) means no availability in the window.
+- Slot times are UTC offsets from local weekly/override/travel-schedule
+  intervals, clipped to the requested window, then filtered by
+  `min_booking_notice_minutes` (relative to server clock at request time).
+
+**Response `404`:** `{"detail": "event_type <uuid> not found"}` — unknown event type.
+
+**Pipeline summary:**
+
+1. Batch-load `event_type` + `host` rows + each host's `schedule` + `weekly_hours` + `date_overrides` + `travel_schedule` (single DB round-trip per table via `ANY(:ids)`).
+2. Per host: compute UTC availability intervals over `[start, end]` applying weekly hours, date overrides, and travel-tz DST conversion (`slots/domain.py`, `slots/timezones.py`).
+3. Subtract busy intervals from `BusyTimesSource.get_busy(user_ids, window)` — currently `StubBusyTimesSource` which returns `[]`.
+4. Union free intervals across all hosts (`merge_intervals`); slice into slots of `duration_minutes` at `slot_interval_minutes` step.
+5. Apply `min_booking_notice_minutes` gate (`not_before = clock.now() + notice`).
+6. Group slot UTC datetimes by local date in `time_zone` (`group_slots_by_local_date`).
+
+**Maturity notes (slice 2):**
+- `BusyTimesSource` is `StubBusyTimesSource` — slots are never blocked by existing bookings. Slice 3 will replace the stub with real booking data.
+- `buffer_before_minutes` / `buffer_after_minutes` on the event type are loaded but not yet applied to interval subtraction (inert until slice 3).
+- `booking_limit` rows are stored but not enforced during slot calculation (inert until slice 3).
+- No external calendar integration (Google/Office busy times deferred to slice 5).
+- No slot caching.
+
 ## Ops Endpoints (unauthenticated)
 
 - `GET /health` — liveness; `200 {"status":"ok"}`, no dependency calls.

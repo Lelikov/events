@@ -23,7 +23,8 @@ The one-time ETL (`scripts/etl_from_calcom.py`) additionally requires:
 | Caller | Calls | Notes |
 |--------|-------|-------|
 | event-admin-frontend / admin UI | Schedule and event-type CRUD via event-admin proxy (planned) | Not yet wired; bearer key required |
-| event-booking (planned, slice 3) | Read schedule data during slot calculation | Reads DB directly or via API |
+| Booker UI (planned, slice 4) | `GET /api/v1/slots` to display available slots to participants | Not yet built |
+| event-booking (planned, slice 3) | Read schedule data; will supply real busy times via `BusyTimesSource` | Reads DB directly or via API |
 | Prometheus | `GET /metrics` | Scrape job `event-scheduling` |
 | Orchestrator / probes | `GET /health`, `GET /ready` | Liveness / readiness |
 
@@ -53,4 +54,9 @@ None. The service makes no outbound HTTP or AMQP calls during normal operation.
 `interfaces/busy_times.py` defines the `BusyTimesSource` Protocol — the extension
 point for real busy-time data. The `StubBusyTimesSource` always returns `[]`.
 Slice 3 (write-side bookings) will provide a real implementation backed by the
-`booking` table. Until then, this service reports no organizer conflicts.
+`booking` table. Until then, the slot engine (`GET /api/v1/slots`) reports no
+organizer conflicts — all schedule time is considered free.
+
+**Consequence for `GET /api/v1/slots` callers (slice 2 maturity):** slots are
+computed from schedule data only. No existing bookings are subtracted. Do not
+rely on slot results to detect double-booking until slice 3 is shipped.

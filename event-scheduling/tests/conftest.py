@@ -164,6 +164,7 @@ def app(_migrated: str, _clean_db) -> Generator:
     from event_scheduling.metrics import HttpMetricsMiddleware
     from event_scheduling.routers.event_type import event_type_router
     from event_scheduling.routers.schedule import schedule_router
+    from event_scheduling.routers.slots import slots_router
     from event_scheduling.routes import root_router
 
     container = make_async_container(AppProvider(), FastapiProvider())
@@ -172,6 +173,7 @@ def app(_migrated: str, _clean_db) -> Generator:
     application.include_router(root_router)
     application.include_router(schedule_router)
     application.include_router(event_type_router)
+    application.include_router(slots_router)
     application.add_middleware(HttpMetricsMiddleware)
     for _err in (ValidationError, NotFoundError, ConflictError):
         application.add_exception_handler(_err, _domain_error_handler)
@@ -292,3 +294,18 @@ async def calcom_dsn(postgres_dsn: str) -> AsyncGenerator[str]:
     async with admin_eng2.connect() as conn2:
         await conn2.execute(text("DROP DATABASE IF EXISTS calcom_fixture"))
     await admin_eng2.dispose()
+
+
+@pytest.fixture
+async def sessionmaker_fixture(_migrated: str):
+    """Return an async_sessionmaker bound to the migrated test DB.
+
+    Used by the slots read-adapter integration tests to drive the adapter
+    directly (outside of the Dishka DI container / TestClient lifecycle).
+    """
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+    engine = create_async_engine(_migrated)
+    sm = async_sessionmaker(bind=engine, expire_on_commit=False, autoflush=False)
+    yield sm
+    await engine.dispose()
