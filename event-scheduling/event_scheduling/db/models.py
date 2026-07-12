@@ -11,6 +11,7 @@ from sqlalchemy import (
     Date,
     DateTime,
     ForeignKey,
+    Index,
     Integer,
     SmallInteger,
     Text,
@@ -141,6 +142,57 @@ class BookingLimit(Base):
         CheckConstraint("value > 0", name="ck_booking_limit_value"),
         UniqueConstraint("event_type_id", "limit_type", "period", name="uq_booking_limit"),
     )
+
+
+class Booking(Base):
+    """Booking write-side table.
+
+    NOTE: the `EXCLUDE USING gist (host_user_id WITH =, tstzrange(start_time, end_time) WITH &&)
+    WHERE (status = 'confirmed')` constraint (ex_booking_no_overlap) is NOT expressible in
+    SQLAlchemy's ORM __table_args__ cleanly — it is created via raw DDL in the alembic
+    migration (0002_booking.py) instead. This ORM class is alembic-autogenerate-only, so
+    omitting it here is acceptable; the migration is the source of truth for it.
+    """
+
+    __tablename__ = "booking"
+
+    id: Mapped[str] = _uuid_pk()
+    event_type_id: Mapped[str] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("event_type.id", ondelete="RESTRICT"), nullable=False
+    )
+    host_user_id: Mapped[str] = mapped_column(UUID(as_uuid=True), nullable=False)
+    client_user_id: Mapped[str] = mapped_column(UUID(as_uuid=True), nullable=False)
+    start_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    end_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("'confirmed'"))
+    attendee_time_zone: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("now()"), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("now()"), nullable=False)
+
+    __table_args__ = (
+        CheckConstraint("end_time > start_time", name="ck_booking_range"),
+        CheckConstraint("status IN ('confirmed','cancelled')", name="ck_booking_status"),
+        Index("ix_booking_host", "host_user_id", "status", "start_time"),
+        Index("ix_booking_event_type", "event_type_id", "status", "start_time"),
+        Index("ix_booking_client", "client_user_id"),
+    )
+
+
+class BookingChangeLog(Base):
+    __tablename__ = "booking_change_log"
+
+    id: Mapped[str] = _uuid_pk()
+    booking_id: Mapped[str] = mapped_column(UUID(as_uuid=True), nullable=False)  # no FK: survives all
+    kind: Mapped[str] = mapped_column(Text, nullable=False)
+    from_start: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    from_end: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    to_start: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    to_end: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    actor_source: Mapped[str] = mapped_column(Text, nullable=False)
+    actor_user_id: Mapped[str | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("now()"), nullable=False)
+
+    __table_args__ = (CheckConstraint("kind IN ('created','rescheduled','cancelled')", name="ck_booking_log_kind"),)
 
 
 class ScheduleChangeLog(Base):
