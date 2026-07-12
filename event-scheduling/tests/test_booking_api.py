@@ -501,3 +501,98 @@ async def test_booking_removes_slot_from_slots_endpoint(client) -> None:
         },
     ).json()["slots"]
     assert "2026-10-01T07:00:00Z" not in after.get("2026-10-01", [])  # now busy → gone
+
+
+# ---------------------------------------------------------------------------
+# Buffer + booking_limit e2e (Task 8) — configurable seed helper distinct from
+# _seed_single_host_et (service-level) and _seed_single_host_et_http (Task 7).
+# ---------------------------------------------------------------------------
+
+
+def _seed_et_http_with(
+    client, *, buffers: tuple[int, int] = (0, 0), limits: list[dict] | None = None, notice: int = 0
+) -> tuple[str, str]:
+    """Seed one schedule (Thu 09:00-17:00 Europe/Berlin) + one event type with configurable
+    buffers/booking_limits/notice, via HTTP."""
+    owner = str(uuid4())
+    client.put(
+        f"/api/v1/schedules/{owner}",
+        json={
+            "name": "s",
+            "time_zone": "Europe/Berlin",
+            "weekly_hours": [{"day_of_week": 4, "start_time": "09:00", "end_time": "17:00"}],  # Thursday
+            "date_overrides": [],
+        },
+        headers=HDRS,
+    )
+    sid = client.get(f"/api/v1/schedules/{owner}").json()["schedule"]["id"]
+    et_id = client.post(
+        "/api/v1/event-types",
+        json={
+            "slug": f"et-{uuid4().hex[:8]}",
+            "title": "t",
+            "duration_minutes": 60,
+            "slot_interval_minutes": 30,
+            "min_booking_notice_minutes": notice,
+            "buffer_before_minutes": buffers[0],
+            "buffer_after_minutes": buffers[1],
+            "hosts": [{"user_id": owner, "schedule_id": sid}],
+            "booking_limits": limits or [],
+        },
+    ).json()["id"]
+    return et_id, owner
+
+
+@pytest.mark.asyncio
+async def test_buffer_blocks_adjacent_slot(client) -> None:
+    et, _ = _seed_et_http_with(client, buffers=(0, 30))  # 30-min after-buffer
+    client.post(
+        "/api/v1/bookings",
+        headers=HDRS,
+        json={
+            "event_type_id": et,
+            "client_user_id": str(uuid4()),
+            "start_time": "2026-10-01T07:00:00Z",
+            "attendee_time_zone": "Europe/Berlin",
+        },
+    )  # 09:00-10:00 CEST
+
+    slots = client.get(
+        "/api/v1/slots",
+        params={
+            "event_type_id": et,
+            "start": "2026-10-01T00:00:00Z",
+            "end": "2026-10-02T00:00:00Z",
+            "time_zone": "Europe/Berlin",
+        },
+    ).json()["slots"]["2026-10-01"]
+    # 10:00 CEST (08:00Z) would start within the 30-min after-buffer of the 10:00 end → not offered
+    assert "2026-10-01T08:00:00Z" not in slots
+    assert "2026-10-01T08:30:00Z" in slots  # 10:30 CEST is clear
+
+
+@pytest.mark.asyncio
+async def test_booking_count_limit_enforced(client) -> None:
+    et, _ = _seed_et_http_with(client, limits=[{"limit_type": "booking_count", "period": "day", "value": 1}])
+    first = client.post(
+        "/api/v1/bookings",
+        headers=HDRS,
+        json={
+            "event_type_id": et,
+            "client_user_id": str(uuid4()),
+            "start_time": "2026-10-01T07:00:00Z",
+            "attendee_time_zone": "Europe/Berlin",
+        },
+    )
+    second = client.post(
+        "/api/v1/bookings",
+        headers=HDRS,
+        json={
+            "event_type_id": et,
+            "client_user_id": str(uuid4()),
+            "start_time": "2026-10-01T08:00:00Z",
+            "attendee_time_zone": "Europe/Berlin",
+        },
+    )
+    assert first.status_code == 201
+    assert second.status_code == 409  # day limit of 1 reached
