@@ -42,7 +42,7 @@ class BookingWriteAdapter:
         # The `async with` block rolls back just the SAVEPOINT on error, leaving the
         # outer transaction (and the session) healthy for the caller's next attempt.
         try:
-            async with self._sql.session.begin_nested():
+            async with self._sql.begin_nested():
                 row = await self._sql.fetch_one(
                     f"""
                     INSERT INTO booking (event_type_id, host_user_id, client_user_id, start_time, end_time,
