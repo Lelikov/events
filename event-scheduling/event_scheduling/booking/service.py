@@ -2,7 +2,7 @@ from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 from event_scheduling.booking.assignment import rank_hosts
-from event_scheduling.booking.dto import BookingDTO, CreateBookingDTO
+from event_scheduling.booking.dto import BookingChangeEntryDTO, BookingDTO, CreateBookingDTO
 from event_scheduling.booking.interfaces import IBookingReadAdapter, IBookingWriteAdapter
 from event_scheduling.booking.limits import limit_exceeded, period_bounds_utc
 from event_scheduling.dto.schedule import ActorDTO
@@ -83,6 +83,54 @@ class BookingService:
             await self._write.append_log(booking.id, "created", None, None, start, end, actor)
             return booking
         raise ConflictError("slot was taken concurrently")
+
+    async def get(self, booking_id: UUID) -> BookingDTO:
+        booking = await self._read.get(booking_id)
+        if booking is None:
+            raise NotFoundError(f"booking {booking_id} not found")
+        return booking
+
+    async def cancel(self, booking_id: UUID, actor: ActorDTO) -> BookingDTO:
+        booking = await self.get(booking_id)
+        if booking.status == "cancelled":
+            return booking  # idempotent, no second log row
+        cancelled = await self._write.set_cancelled(booking_id)
+        await self._write.append_log(booking_id, "cancelled", booking.start_time, booking.end_time, None, None, actor)
+        return cancelled
+
+    async def reschedule(self, booking_id: UUID, new_start: datetime, actor: ActorDTO) -> BookingDTO:
+        booking = await self.get(booking_id)
+        if booking.status == "cancelled":
+            raise ConflictError("cannot reschedule a cancelled booking")
+        now = self._clock.now()
+        start = new_start.astimezone(UTC)
+        if start < now:
+            raise ValidationError("start_time is in the past")
+        bundle = await self._slots.load(booking.event_type_id)
+        if bundle is None:
+            raise NotFoundError(f"event_type {booking.event_type_id} not found")
+        cfg = bundle.event_type
+        end = start + timedelta(minutes=cfg.duration_minutes)
+        host = next((h for h in bundle.hosts if h.user_id == booking.host_user_id), None)
+        if host is None:
+            raise ConflictError("assigned host is no longer on this event type")
+        if not await self._free_host(host, start, end, cfg.min_booking_notice_minutes, now, booking_id):
+            raise ConflictError("host is not available at the new time")
+        updated = await self._write.update_times(booking_id, start, end)
+        await self._write.append_log(booking_id, "rescheduled", booking.start_time, booking.end_time, start, end, actor)
+        return updated
+
+    async def list_by(
+        self,
+        host_user_id: UUID | None,
+        client_user_id: UUID | None,
+        from_utc: datetime | None,
+        to_utc: datetime | None,
+    ) -> list[BookingDTO]:
+        return await self._read.list_by(host_user_id, client_user_id, from_utc, to_utc)
+
+    async def history(self, booking_id: UUID) -> list[BookingChangeEntryDTO]:
+        return await self._read.history(booking_id)
 
     async def _enforce_limits(
         self, event_type_id: UUID, host_id: UUID, start: datetime, duration_min: int, hosts: list[HostSchedule]

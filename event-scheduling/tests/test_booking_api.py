@@ -1,4 +1,4 @@
-"""Service-level tests for BookingService.create (slice 3, Task 5).
+"""Service-level tests for BookingService (slice 3, Tasks 5-6).
 
 These drive BookingService directly with real adapters over a real Postgres
 session (no router/DI — that's Task 7). Task 7 will extend this file with the
@@ -142,3 +142,164 @@ async def test_create_past_time_422(sessionmaker_fixture) -> None:
         )
         with pytest.raises(ValidationError):
             await service.create(dto, ACTOR)
+
+
+@pytest.mark.asyncio
+async def test_cancel_frees_slot_and_is_idempotent(sessionmaker_fixture) -> None:
+    async with sessionmaker_fixture() as s:
+        et, _owner = await _seed_single_host_et(s)
+
+    async with sessionmaker_fixture() as s:
+        service = _build_service(SqlExecutor(s), NOW)
+        dto = CreateBookingDTO(
+            event_type_id=et, client_user_id=uuid4(), start_time=START, attendee_time_zone="Europe/Berlin"
+        )
+        booking = await service.create(dto, ACTOR)
+        await s.commit()
+
+    async with sessionmaker_fixture() as s:
+        service = _build_service(SqlExecutor(s), NOW)
+        cancelled = await service.cancel(booking.id, ACTOR)
+        await s.commit()
+    assert cancelled.status == "cancelled"
+
+    # idempotent: second cancel returns the booking, no error, no second log row
+    async with sessionmaker_fixture() as s:
+        service = _build_service(SqlExecutor(s), NOW)
+        cancelled_again = await service.cancel(booking.id, ACTOR)
+        await s.commit()
+    assert cancelled_again.status == "cancelled"
+
+    async with sessionmaker_fixture() as s:
+        service = _build_service(SqlExecutor(s), NOW)
+        entries = await service.history(booking.id)
+    assert [e.kind for e in entries] == ["created", "cancelled"]
+
+    # slot is free again → re-book succeeds
+    async with sessionmaker_fixture() as s:
+        service = _build_service(SqlExecutor(s), NOW)
+        dto2 = CreateBookingDTO(
+            event_type_id=et, client_user_id=uuid4(), start_time=START, attendee_time_zone="Europe/Berlin"
+        )
+        rebooked = await service.create(dto2, ACTOR)
+        await s.commit()
+    assert rebooked.status == "confirmed"
+
+
+@pytest.mark.asyncio
+async def test_cancel_unknown_booking_404(sessionmaker_fixture) -> None:
+    async with sessionmaker_fixture() as s:
+        service = _build_service(SqlExecutor(s), NOW)
+        with pytest.raises(NotFoundError):
+            await service.cancel(uuid4(), ACTOR)
+
+
+@pytest.mark.asyncio
+async def test_reschedule_same_host_to_free_slot(sessionmaker_fixture) -> None:
+    async with sessionmaker_fixture() as s:
+        et, owner = await _seed_single_host_et(s)
+
+    async with sessionmaker_fixture() as s:
+        service = _build_service(SqlExecutor(s), NOW)
+        dto = CreateBookingDTO(
+            event_type_id=et, client_user_id=uuid4(), start_time=START, attendee_time_zone="Europe/Berlin"
+        )
+        booking = await service.create(dto, ACTOR)
+        await s.commit()
+
+    new_start = START + dt.timedelta(hours=2)
+    async with sessionmaker_fixture() as s:
+        service = _build_service(SqlExecutor(s), NOW)
+        rescheduled = await service.reschedule(booking.id, new_start, ACTOR)
+        await s.commit()
+
+    assert rescheduled.start_time == new_start
+    assert rescheduled.end_time == new_start + dt.timedelta(minutes=60)
+    assert rescheduled.host_user_id == owner
+
+
+@pytest.mark.asyncio
+async def test_reschedule_cancelled_booking_conflicts(sessionmaker_fixture) -> None:
+    async with sessionmaker_fixture() as s:
+        et, _owner = await _seed_single_host_et(s)
+
+    async with sessionmaker_fixture() as s:
+        service = _build_service(SqlExecutor(s), NOW)
+        dto = CreateBookingDTO(
+            event_type_id=et, client_user_id=uuid4(), start_time=START, attendee_time_zone="Europe/Berlin"
+        )
+        booking = await service.create(dto, ACTOR)
+        await s.commit()
+
+    async with sessionmaker_fixture() as s:
+        service = _build_service(SqlExecutor(s), NOW)
+        await service.cancel(booking.id, ACTOR)
+        await s.commit()
+
+    async with sessionmaker_fixture() as s:
+        service = _build_service(SqlExecutor(s), NOW)
+        with pytest.raises(ConflictError):
+            await service.reschedule(booking.id, START + dt.timedelta(hours=2), ACTOR)
+
+
+@pytest.mark.asyncio
+async def test_history_chain(sessionmaker_fixture) -> None:
+    async with sessionmaker_fixture() as s:
+        et, _owner = await _seed_single_host_et(s)
+
+    async with sessionmaker_fixture() as s:
+        service = _build_service(SqlExecutor(s), NOW)
+        dto = CreateBookingDTO(
+            event_type_id=et, client_user_id=uuid4(), start_time=START, attendee_time_zone="Europe/Berlin"
+        )
+        booking = await service.create(dto, ACTOR)
+        await s.commit()
+
+    new_start = START + dt.timedelta(hours=2)
+    async with sessionmaker_fixture() as s:
+        service = _build_service(SqlExecutor(s), NOW)
+        await service.reschedule(booking.id, new_start, ACTOR)
+        await s.commit()
+
+    async with sessionmaker_fixture() as s:
+        service = _build_service(SqlExecutor(s), NOW)
+        await service.cancel(booking.id, ACTOR)
+        await s.commit()
+
+    async with sessionmaker_fixture() as s:
+        service = _build_service(SqlExecutor(s), NOW)
+        entries = await service.history(booking.id)
+
+    assert [e.kind for e in entries] == ["created", "rescheduled", "cancelled"]
+    assert entries[1].from_start == START
+    assert entries[1].to_start == new_start
+
+
+@pytest.mark.asyncio
+async def test_get_and_list_by(sessionmaker_fixture) -> None:
+    async with sessionmaker_fixture() as s:
+        et, owner = await _seed_single_host_et(s)
+
+    async with sessionmaker_fixture() as s:
+        service = _build_service(SqlExecutor(s), NOW)
+        dto = CreateBookingDTO(
+            event_type_id=et, client_user_id=uuid4(), start_time=START, attendee_time_zone="Europe/Berlin"
+        )
+        booking = await service.create(dto, ACTOR)
+        await s.commit()
+
+    async with sessionmaker_fixture() as s:
+        service = _build_service(SqlExecutor(s), NOW)
+        fetched = await service.get(booking.id)
+        listed = await service.list_by(owner, None, None, None)
+
+    assert fetched.id == booking.id
+    assert [b.id for b in listed] == [booking.id]
+
+
+@pytest.mark.asyncio
+async def test_get_unknown_booking_404(sessionmaker_fixture) -> None:
+    async with sessionmaker_fixture() as s:
+        service = _build_service(SqlExecutor(s), NOW)
+        with pytest.raises(NotFoundError):
+            await service.get(uuid4())
