@@ -7,6 +7,7 @@ FastAPI app + Dishka DI container via the `client` fixture, proving the full
 wiring (including the BookingBusyTimesSource swap).
 """
 
+import asyncio
 import datetime as dt
 from uuid import UUID, uuid4
 
@@ -15,7 +16,7 @@ from sqlalchemy import text
 
 from event_scheduling.adapters.sql import SqlExecutor
 from event_scheduling.booking.busy_source import BookingBusyTimesSource
-from event_scheduling.booking.dto import CreateBookingDTO
+from event_scheduling.booking.dto import BookingDTO, CreateBookingDTO
 from event_scheduling.booking.read_adapter import BookingReadAdapter
 from event_scheduling.booking.service import BookingService
 from event_scheduling.booking.write_adapter import BookingWriteAdapter
@@ -245,6 +246,52 @@ async def test_reschedule_cancelled_booking_conflicts(sessionmaker_fixture) -> N
 
 
 @pytest.mark.asyncio
+async def test_write_adapter_update_times_maps_integrity_error_to_conflict(sessionmaker_fixture) -> None:
+    """BookingWriteAdapter.update_times must map the exclusion IntegrityError to ConflictError, not raise it raw.
+
+    Drives the adapter directly (bypassing BookingService's own pre-check) to
+    deterministically force the DB exclusion constraint to fire on the UPDATE
+    itself — the scenario a concurrent same-host booking creates between
+    BookingService's availability re-check and its UPDATE (final-review FIX-2:
+    without the SAVEPOINT + IntegrityError->ConflictError mapping, this
+    surfaces as an uncaught IntegrityError / 500 instead of a 409).
+    """
+    async with sessionmaker_fixture() as s:
+        et, owner = await _seed_single_host_et(s)
+
+    async with sessionmaker_fixture() as s:
+        service = _build_service(SqlExecutor(s), NOW)
+        booking_a = await service.create(
+            CreateBookingDTO(
+                event_type_id=et, client_user_id=uuid4(), start_time=START, attendee_time_zone="Europe/Berlin"
+            ),
+            ACTOR,
+        )
+        booking_b = await service.create(
+            CreateBookingDTO(
+                event_type_id=et,
+                client_user_id=uuid4(),
+                start_time=START + dt.timedelta(hours=4),
+                attendee_time_zone="Europe/Berlin",
+            ),
+            ACTOR,
+        )
+        await s.commit()
+
+    # Directly exercise the adapter's UPDATE with a range that overlaps booking_a's
+    # still-confirmed slot — the outer transaction must survive (SAVEPOINT rollback)
+    # and the error must come back as ConflictError, not a raw IntegrityError.
+    async with sessionmaker_fixture() as s:
+        write = BookingWriteAdapter(SqlExecutor(s))
+        with pytest.raises(ConflictError):
+            await write.update_times(booking_b.id, START, START + dt.timedelta(hours=1))
+        # outer transaction/session still usable after the SAVEPOINT rollback
+        still_there = await BookingReadAdapter(SqlExecutor(s)).get(booking_a.id)
+        assert still_there is not None
+        assert still_there.host_user_id == owner
+
+
+@pytest.mark.asyncio
 async def test_history_chain(sessionmaker_fixture) -> None:
     async with sessionmaker_fixture() as s:
         et, _owner = await _seed_single_host_et(s)
@@ -305,6 +352,65 @@ async def test_get_unknown_booking_404(sessionmaker_fixture) -> None:
         service = _build_service(SqlExecutor(s), NOW)
         with pytest.raises(NotFoundError):
             await service.get(uuid4())
+
+
+async def _create_and_settle(service, session, dto: CreateBookingDTO) -> BookingDTO | ConflictError:
+    """Run create() and commit/rollback its OWN session immediately (not after gather).
+
+    Postgres's exclusion-constraint check waits for the CONFLICTING transaction
+    to end (commit/rollback) before it can decide winner/loser (see
+    check_exclusion_or_unique_constraint -> XactLockTableWait) — not just for
+    the statement to finish. If both sides deferred commit until after
+    asyncio.gather() returned, neither INSERT could ever resolve: the loser's
+    statement blocks on the winner's still-open transaction, and gather()
+    can't return until the loser's coroutine returns. Committing/rolling back
+    inline, as each coroutine finishes, is what actually lets the two race.
+    """
+    try:
+        booking = await service.create(dto, ACTOR)
+    except ConflictError as e:
+        await session.rollback()
+        return e
+    await session.commit()
+    return booking
+
+
+@pytest.mark.asyncio
+async def test_concurrent_create_same_slot_one_wins(sessionmaker_fixture) -> None:
+    """Two concurrent BookingService.create calls for the same single-host slot.
+
+    Each service runs over its own session/connection (mirrors two concurrent
+    HTTP requests). The DB exclusion constraint (ex_booking_no_overlap)
+    serializes the two INSERTs: whichever transaction commits first wins; the
+    other's INSERT blocks on the in-flight row, then fails with IntegrityError
+    once the winner's row is committed and visible, which
+    BookingWriteAdapter.insert maps to ConflictError, which BookingService
+    re-raises (single-host event type, no other host to fall back to).
+    Exactly one of the two gather results must be a BookingDTO and the other
+    a ConflictError.
+    """
+    async with sessionmaker_fixture() as s:
+        et, _owner = await _seed_single_host_et(s)
+
+    async with sessionmaker_fixture() as sa, sessionmaker_fixture() as sb:
+        svc_a = _build_service(SqlExecutor(sa), NOW)
+        svc_b = _build_service(SqlExecutor(sb), NOW)
+        dto_a = CreateBookingDTO(
+            event_type_id=et, client_user_id=uuid4(), start_time=START, attendee_time_zone="Europe/Berlin"
+        )
+        dto_b = CreateBookingDTO(
+            event_type_id=et, client_user_id=uuid4(), start_time=START, attendee_time_zone="Europe/Berlin"
+        )
+
+        results = await asyncio.gather(
+            _create_and_settle(svc_a, sa, dto_a),
+            _create_and_settle(svc_b, sb, dto_b),
+        )
+
+    successes = [r for r in results if isinstance(r, BookingDTO)]
+    conflicts = [r for r in results if isinstance(r, ConflictError)]
+    assert len(successes) == 1
+    assert len(conflicts) == 1
 
 
 # ---------------------------------------------------------------------------
@@ -595,3 +701,73 @@ async def test_booking_count_limit_enforced(client) -> None:
     )
     assert first.status_code == 201
     assert second.status_code == 409  # day limit of 1 reached
+
+
+# ---------------------------------------------------------------------------
+# Create-path buffer enforcement (final-review FIX-1) — the narrow re-check
+# window used by BookingService._free_host on the create path must see
+# buffer-expanded neighbor bookings, not just their raw ranges, otherwise it
+# diverges from /slots (wide window) and lets an in-buffer booking through.
+# ---------------------------------------------------------------------------
+
+
+def _seed_et_http_buf(client) -> tuple[str, str]:
+    """Seed one schedule (Thu 09:00-17:00 Europe/Berlin) + one single-host event type with a 30-min after-buffer."""
+    owner = str(uuid4())
+    client.put(
+        f"/api/v1/schedules/{owner}",
+        json={
+            "name": "s",
+            "time_zone": "Europe/Berlin",
+            "weekly_hours": [{"day_of_week": 4, "start_time": "09:00", "end_time": "17:00"}],  # Thursday
+            "date_overrides": [],
+        },
+        headers=HDRS,
+    )
+    sid = client.get(f"/api/v1/schedules/{owner}").json()["schedule"]["id"]
+    et_id = client.post(
+        "/api/v1/event-types",
+        json={
+            "slug": f"et-{uuid4().hex[:8]}",
+            "title": "Intro",
+            "duration_minutes": 60,
+            "slot_interval_minutes": 30,
+            "min_booking_notice_minutes": 0,
+            "buffer_before_minutes": 0,
+            "buffer_after_minutes": 30,
+            "hosts": [{"user_id": owner, "schedule_id": sid}],
+            "booking_limits": [],
+        },
+    ).json()["id"]
+    return et_id, owner
+
+
+@pytest.mark.asyncio
+async def test_create_path_enforces_buffer_on_neighbor_booking(client) -> None:
+    et, _owner = _seed_et_http_buf(client)
+
+    first = client.post(
+        "/api/v1/bookings",
+        headers=HDRS,
+        json={
+            "event_type_id": et,
+            "client_user_id": str(uuid4()),
+            "start_time": "2026-10-01T07:00:00Z",  # 09:00 CEST
+            "attendee_time_zone": "Europe/Berlin",
+        },
+    )
+    assert first.status_code == 201
+
+    # 10:00 CEST (08:00Z) starts within the 30-min after-buffer of the first
+    # booking's 10:00 end → the narrow create-path re-check must reject it too.
+    second = client.post(
+        "/api/v1/bookings",
+        headers=HDRS,
+        json={
+            "event_type_id": et,
+            "client_user_id": str(uuid4()),
+            "start_time": "2026-10-01T08:00:00Z",  # 10:00 CEST
+            "attendee_time_zone": "Europe/Berlin",
+        },
+    )
+    assert second.status_code == 409

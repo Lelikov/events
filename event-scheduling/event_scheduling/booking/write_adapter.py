@@ -56,10 +56,19 @@ class BookingWriteAdapter:
         return _row_to_dto(row)
 
     async def update_times(self, booking_id: UUID, start: datetime, end: datetime) -> BookingDTO:
-        row = await self._sql.fetch_one(
-            f"UPDATE booking SET start_time=:s, end_time=:e, updated_at=now() WHERE id=:id RETURNING {_COLS}",  # noqa: S608
-            {"id": booking_id, "s": start, "e": end},
-        )
+        # Same SAVEPOINT rationale as insert(): a concurrent same-host booking can
+        # take the slot between the service's availability re-check and this UPDATE,
+        # tripping the exclusion constraint. Wrap in begin_nested() and map the
+        # resulting IntegrityError to ConflictError so the caller sees 409, not a
+        # 500 from an uncaught IntegrityError (and so the outer transaction survives).
+        try:
+            async with self._sql.begin_nested():
+                row = await self._sql.fetch_one(
+                    f"UPDATE booking SET start_time=:s, end_time=:e, updated_at=now() WHERE id=:id RETURNING {_COLS}",  # noqa: S608
+                    {"id": booking_id, "s": start, "e": end},
+                )
+        except IntegrityError as e:
+            raise ConflictError("slot taken") from e
         return _row_to_dto(row)
 
     async def set_cancelled(self, booking_id: UUID) -> BookingDTO:

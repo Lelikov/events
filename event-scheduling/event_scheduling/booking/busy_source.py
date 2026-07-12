@@ -20,7 +20,9 @@ class BookingBusyTimesSource:
             JOIN event_type et ON et.id = b.event_type_id
             WHERE b.host_user_id = ANY(:users)
               AND b.status = 'confirmed'
-              AND tstzrange(b.start_time, b.end_time) && tstzrange(:win_lo, :win_hi)
+              AND tstzrange(b.start_time - make_interval(mins => et.buffer_before_minutes),
+                             b.end_time   + make_interval(mins => et.buffer_after_minutes))
+                  && tstzrange(:win_lo, :win_hi)
               AND (CAST(:exclude AS uuid) IS NULL OR b.id <> CAST(:exclude AS uuid))
             """,
             {"users": list(user_ids), "win_lo": window.start, "win_hi": window.end, "exclude": exclude_booking_id},

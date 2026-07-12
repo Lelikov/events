@@ -3,7 +3,7 @@ from typing import Annotated
 from uuid import UUID
 
 from dishka.integrations.fastapi import DishkaRoute, FromDishka
-from fastapi import APIRouter, Depends, Header, status
+from fastapi import APIRouter, Depends, Header, Query, status
 
 from event_scheduling.auth import require_api_key
 from event_scheduling.booking.dto import CreateBookingDTO
@@ -45,8 +45,8 @@ async def list_bookings(
     service: FromDishka[IBookingService],
     host_user_id: UUID | None = None,
     client_user_id: UUID | None = None,
-    from_: datetime | None = None,
-    to: datetime | None = None,
+    from_: Annotated[datetime | None, Query(alias="from")] = None,
+    to: Annotated[datetime | None, Query(alias="to")] = None,
 ) -> BookingListResponse:
     if (host_user_id is None) == (client_user_id is None):
         raise ValidationError("exactly one of host_user_id or client_user_id is required")
