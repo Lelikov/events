@@ -512,8 +512,7 @@ async def test_booking_removes_slot_from_slots_endpoint(client) -> None:
 def _seed_et_http_with(
     client, *, buffers: tuple[int, int] = (0, 0), limits: list[dict] | None = None, notice: int = 0
 ) -> tuple[str, str]:
-    """Seed one schedule (Thu 09:00-17:00 Europe/Berlin) + one event type with configurable
-    buffers/booking_limits/notice, via HTTP."""
+    """Seed one schedule (Thu 09:00-17:00 Europe/Berlin) + one configurable event type, via HTTP."""
     owner = str(uuid4())
     client.put(
         f"/api/v1/schedules/{owner}",

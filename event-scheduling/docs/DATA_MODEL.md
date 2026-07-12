@@ -2,7 +2,11 @@
 
 Database name: `event_scheduling` (own PostgreSQL database on the shared postgres instance).
 
-Migration: `alembic/versions/0001_initial.py` — creates all 8 tables in one revision.
+Migrations:
+- `alembic/versions/0001_initial.py` — creates the first 8 tables (schedule/event-type domain, slices 1–2).
+- `alembic/versions/0002_booking.py` — adds `booking` + `booking_change_log` (slice 3, write-side bookings); also enables the `btree_gist` extension required by the exclusion constraint below.
+
+10 tables total.
 
 ## Tables
 
@@ -134,6 +138,67 @@ schedule deletion.
 }
 ```
 
+### `booking` (slice 3)
+
+One row per booking. Written by `booking/write_adapter.py` (`INSERT ... RETURNING`,
+`UPDATE ... SET status='cancelled'`, `UPDATE ... SET start_time=..., end_time=...`
+for reschedule — bookings are never deleted, only soft-cancelled or moved).
+
+| Column | Type | Constraints | Notes |
+|--------|------|-------------|-------|
+| `id` | `uuid` | PK, `server_default gen_random_uuid()` | |
+| `event_type_id` | `uuid` | NOT NULL, FK→`event_type.id` ON DELETE RESTRICT | Can't delete an event type with bookings |
+| `host_user_id` | `uuid` | NOT NULL | Opaque ref to event-users; the assigned host |
+| `client_user_id` | `uuid` | NOT NULL | Opaque ref to event-users; the booking attendee |
+| `start_time` | `timestamptz` | NOT NULL | |
+| `end_time` | `timestamptz` | NOT NULL, CHECK > `start_time` (`ck_booking_range`) | |
+| `status` | `text` | NOT NULL, `server_default 'confirmed'`, CHECK IN `('confirmed','cancelled')` (`ck_booking_status`) | No `'rescheduled'` status — reschedule updates `start_time`/`end_time` in place and logs the transition separately |
+| `attendee_time_zone` | `text` | NOT NULL | IANA zone the client booked in (display only; all scheduling math is UTC) |
+| `created_at` | `timestamptz` | NOT NULL, `server_default now()` | |
+| `updated_at` | `timestamptz` | NOT NULL, `server_default now()` | Bumped on reschedule/cancel |
+
+Indexes: `ix_booking_host (host_user_id, status, start_time)`,
+`ix_booking_event_type (event_type_id, status, start_time)`,
+`ix_booking_client (client_user_id)`.
+
+**`ex_booking_no_overlap` — the no-double-booking guarantee:**
+```sql
+ALTER TABLE booking ADD CONSTRAINT ex_booking_no_overlap
+  EXCLUDE USING gist (host_user_id WITH =, tstzrange(start_time, end_time) WITH &&)
+  WHERE (status = 'confirmed')
+```
+A PostgreSQL `EXCLUDE` constraint (GiST index, requires the `btree_gist`
+extension for the equality operator on `host_user_id`) that rejects any INSERT
+or UPDATE producing two **confirmed** bookings for the same `host_user_id` with
+overlapping `[start_time, end_time)` ranges. This is enforced **inside the
+database**, not just in application code — it is the actual concurrency guard:
+`BookingService.create` optimistically inserts, and a concurrent conflicting
+insert fails at the DB with `IntegrityError`, which `BookingWriteAdapter.insert`
+catches and re-raises as `ConflictError` so the service can retry the next
+ranked host. The `WHERE status='confirmed'` predicate means cancelling a booking
+immediately frees the slot for a new confirmed booking with no cleanup needed.
+
+### `booking_change_log` (slice 3)
+
+Append-only transition log — one row per `created`/`rescheduled`/`cancelled`
+event, written by `BookingWriteAdapter.append_log` in the same request as the
+mutation. Mirrors the `from_*`/`to_*` shape needed to reconstruct a booking's
+full history (`GET /api/v1/bookings/{id}/history`).
+
+| Column | Type | Constraints | Notes |
+|--------|------|-------------|-------|
+| `id` | `uuid` | PK, `server_default gen_random_uuid()` | |
+| `booking_id` | `uuid` | NOT NULL | No FK — intentional, entries survive booking deletion (bookings are never hard-deleted today, but the log doesn't assume that) |
+| `kind` | `text` | NOT NULL, CHECK IN `('created','rescheduled','cancelled')` (`ck_booking_log_kind`) | |
+| `from_start` / `from_end` | `timestamptz` | NULLABLE | NULL for `created` |
+| `to_start` / `to_end` | `timestamptz` | NULLABLE | NULL for `cancelled` |
+| `actor_source` | `text` | NOT NULL | e.g. `"api"`, `"admin"` — from the `actor-source` request header |
+| `actor_user_id` | `uuid` | NULLABLE | From the `actor-user-id` request header, when supplied |
+| `at` | `timestamptz` | NOT NULL, `server_default now()` | |
+
+`cancel` is idempotent at the service layer: cancelling an already-cancelled
+booking returns the booking without inserting a second `cancelled` row.
+
 ## Referential Integrity Summary
 
 ```
@@ -144,8 +209,10 @@ schedule (owner_user_id UNIQUE)
   └── host            (FK schedule RESTRICT)
 
 event_type (slug UNIQUE)
-  ├── host         (FK event_type CASCADE)
-  └── booking_limit (FK event_type CASCADE)
+  ├── host          (FK event_type CASCADE)
+  ├── booking_limit (FK event_type CASCADE)
+  └── booking       (FK event_type RESTRICT)
 
 schedule_change_log  (no FK — audit survives delete)
+booking_change_log   (no FK to booking — survives delete, kind='created'|'rescheduled'|'cancelled')
 ```

@@ -250,17 +250,165 @@ local calendar date in the requested time zone.
 
 1. Batch-load `event_type` + `host` rows + each host's `schedule` + `weekly_hours` + `date_overrides` + `travel_schedule` (single DB round-trip per table via `ANY(:ids)`).
 2. Per host: compute UTC availability intervals over `[start, end]` applying weekly hours, date overrides, and travel-tz DST conversion (`slots/domain.py`, `slots/timezones.py`).
-3. Subtract busy intervals from `BusyTimesSource.get_busy(user_ids, window)` — currently `StubBusyTimesSource` which returns `[]`.
+3. Subtract busy intervals from `BusyTimesSource.get_busy(user_ids, window)` — **slice 3: bound to `BookingBusyTimesSource`**, which queries confirmed `booking` rows for the given hosts overlapping the window, each expanded by the owning event type's `buffer_before_minutes`/`buffer_after_minutes` in SQL.
 4. Union free intervals across all hosts (`merge_intervals`); slice into slots of `duration_minutes` at `slot_interval_minutes` step.
 5. Apply `min_booking_notice_minutes` gate (`not_before = clock.now() + notice`).
 6. Group slot UTC datetimes by local date in `time_zone` (`group_slots_by_local_date`).
 
-**Maturity notes (slice 2):**
-- `BusyTimesSource` is `StubBusyTimesSource` — slots are never blocked by existing bookings. Slice 3 will replace the stub with real booking data.
-- `buffer_before_minutes` / `buffer_after_minutes` on the event type are loaded but not yet applied to interval subtraction (inert until slice 3).
-- `booking_limit` rows are stored but not enforced during slot calculation (inert until slice 3).
+**Maturity notes (slice 3):**
+- `BusyTimesSource` is **`BookingBusyTimesSource` (real)** — a slot overlapping a confirmed booking, or that booking's `buffer_before`/`buffer_after`, is excluded from the response. Booking a slot via `POST /api/v1/bookings` makes it disappear from subsequent `GET /api/v1/slots` calls; cancelling frees it again.
+- `booking_limit` rows are enforced on `POST /api/v1/bookings` (see below) but are **not** subtracted from `GET /api/v1/slots` — a slot can still be *offered* by the read endpoint even if creating a booking there would hit a limit; the limit is only checked at create time.
 - No external calendar integration (Google/Office busy times deferred to slice 5).
 - No slot caching.
+- No reservations/holds — a slot returned by `GET /api/v1/slots` is not reserved; `POST /api/v1/bookings` re-validates availability at write time and can still 409 if it was taken concurrently.
+
+## Booking Endpoints (slice 3)
+
+All under `/api/v1/bookings`, gated by the same Bearer key. Mutating endpoints
+(`POST`, `POST .../cancel`, `POST .../reschedule`) accept the same optional
+`actor-source` (default `"api"`) / `actor-user-id` headers as the schedule
+endpoints, recorded on each `booking_change_log` row. All timestamps in
+responses serialize as `YYYY-MM-DDThh:mm:ssZ` (UTC).
+
+### POST /api/v1/bookings
+
+Create a booking. The server re-validates availability, assigns a host by
+round-robin, enforces booking limits, and inserts optimistically.
+
+Request:
+```json
+{
+  "event_type_id": "<uuid>",
+  "client_user_id": "<uuid>",
+  "start_time": "2026-10-01T09:00:00Z",
+  "attendee_time_zone": "Europe/Berlin"
+}
+```
+
+Flow:
+1. Validate `attendee_time_zone` (IANA) and `start_time` (must not be in the past).
+2. Load the event type + its hosts + their schedules (same bundle the slot engine uses).
+3. For each host, recompute availability over `[start, start+duration]` — weekly hours/overrides/travel via `slots/domain.py`, minus busy intervals from `BookingBusyTimesSource` (buffer-expanded) — and keep only hosts free for this exact window. `409` if none are free.
+4. Rank the free hosts with `rank_hosts` (getLuckyUser): fewest future confirmed bookings first, then never-assigned before assigned, then oldest `last_assigned_at` first.
+5. Enforce `booking_limit`s (see below) for the top-ranked host; `409` if exceeded.
+6. Attempt `INSERT` for the top-ranked host inside a SAVEPOINT. If the DB exclusion constraint rejects it (`ConflictError` — the slot was taken concurrently since step 3), retry the next ranked host. `409` if every ranked host fails.
+7. Append a `created` row to `booking_change_log`.
+
+Response `201` — `BookingResponse` (see shape below).
+
+Errors: `404` unknown `event_type_id`; `422` `start_time` in the past or invalid `attendee_time_zone`; `409` no host available for the slot / booking_limit exceeded / slot taken concurrently by all ranked hosts.
+
+### GET /api/v1/bookings/{id}
+
+```
+200  — BookingResponse
+404  — unknown booking
+```
+
+`BookingResponse` shape:
+```json
+{
+  "id": "<uuid>",
+  "event_type_id": "<uuid>",
+  "host_user_id": "<uuid>",
+  "client_user_id": "<uuid>",
+  "start_time": "2026-10-01T09:00:00Z",
+  "end_time": "2026-10-01T10:00:00Z",
+  "status": "confirmed",
+  "attendee_time_zone": "Europe/Berlin",
+  "created_at": "2026-09-15T12:00:00Z"
+}
+```
+
+### GET /api/v1/bookings
+
+List bookings by host or client. Exactly one of `host_user_id` / `client_user_id`
+is required.
+
+Query params: `host_user_id` (UUID, exclusive with `client_user_id`), `client_user_id`
+(UUID, exclusive with `host_user_id`), `from_` (ISO-8601 datetime, optional),
+`to` (ISO-8601 datetime, optional).
+
+```
+200  — {"bookings": [<BookingResponse>, ...]}, ordered by start_time ASC
+422  — neither or both of host_user_id/client_user_id supplied
+```
+
+### POST /api/v1/bookings/{id}/cancel
+
+Soft-cancel (`status: 'confirmed' → 'cancelled'`). Idempotent: cancelling an
+already-cancelled booking returns it unchanged with no second `booking_change_log`
+row. The slot is immediately free again (the exclusion constraint only applies
+`WHERE status='confirmed'`).
+
+```
+200  — BookingResponse (status: "cancelled")
+404  — unknown booking
+```
+
+### POST /api/v1/bookings/{id}/reschedule
+
+Move a booking to a new `start_time`, **in place, same host only** — this is not
+a cancel+recreate; `event_type_id`/`host_user_id`/`client_user_id` are unchanged.
+Duration comes from the event type's current `duration_minutes`.
+
+Request:
+```json
+{"start_time": "2026-10-01T11:00:00Z"}
+```
+
+Re-checks the assigned host's availability at the new time, excluding the
+booking's own row from the busy-time query (`exclude_booking_id`) so the
+booking doesn't conflict with itself.
+
+```
+200  — BookingResponse (updated start_time/end_time)
+404  — unknown booking
+409  — booking is cancelled, host is not available at the new time, or the assigned host is no longer on this event type
+422  — start_time in the past
+```
+
+Appends a `rescheduled` row to `booking_change_log` (`from_start`/`from_end` →
+`to_start`/`to_end`).
+
+### GET /api/v1/bookings/{id}/history
+
+Full transition history for a booking, ordered `at ASC`.
+
+```
+200  — {"entries": [<ChangeEntry>, ...]}
+```
+
+`ChangeEntry` shape:
+```json
+{
+  "kind": "rescheduled",
+  "from_start": "2026-10-01T09:00:00Z",
+  "from_end": "2026-10-01T10:00:00Z",
+  "to_start": "2026-10-01T11:00:00Z",
+  "to_end": "2026-10-01T12:00:00Z",
+  "actor_source": "admin",
+  "actor_user_id": null,
+  "at": "2026-09-20T08:00:00Z"
+}
+```
+`kind` is one of `created` / `rescheduled` / `cancelled`; `from_*` is null for
+`created`, `to_*` is null for `cancelled`.
+
+### Booking limits (enforced on create, not a separate endpoint)
+
+`booking_limit` rows (created via `event-types` `hosts`/`booking_limits`, see
+above) are evaluated in `POST /api/v1/bookings` against the **assigned host's**
+period, computed in that host's schedule time zone and converted to UTC
+(`day`/`week`(ISO Monday)/`month`/`year`):
+
+| `limit_type` | Check |
+|--------------|-------|
+| `booking_count` | reject if the host already has `>= value` confirmed bookings for this event type in the period |
+| `booking_duration` | reject if existing confirmed minutes + this booking's duration `> value` minutes for this event type in the period |
+
+Any other `limit_type` value is a documented no-op (`limit_exceeded` returns
+`False` for unrecognized types rather than raising).
 
 ## Ops Endpoints (unauthenticated)
 
@@ -275,6 +423,6 @@ All domain errors return JSON `{"detail": "<message>"}`:
 
 | HTTP status | Domain exception | Trigger |
 |-------------|-----------------|---------|
-| `422` | `ValidationError` | Invalid time zone, overlapping weekly intervals, invalid booking limit |
-| `404` | `NotFoundError` | Schedule or event type not found |
-| `409` | `ConflictError` | `slug` already in use for event types |
+| `422` | `ValidationError` | Invalid time zone, overlapping weekly intervals, invalid booking limit, booking `start_time` in the past, missing/duplicate `host_user_id`/`client_user_id` on booking list |
+| `404` | `NotFoundError` | Schedule, event type, or booking not found |
+| `409` | `ConflictError` | `slug` already in use for event types; booking: no host available for the slot, `booking_limit` exceeded, slot taken concurrently, reschedule of a cancelled booking, host not available at the new reschedule time, or the assigned host is no longer on the event type at reschedule time |

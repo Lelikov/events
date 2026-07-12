@@ -46,15 +46,19 @@ alembic downgrade -1
 ## Architecture
 
 Layered async FastAPI service that **owns the booking/scheduling domain model** —
-organizer schedules, event types, hosts, and booking limits. Pure HTTP — no
-RabbitMQ, no background tasks. This is **slice 1** of a phased replacement of the
-external cal.com CRM with an in-house system inside the `events` monorepo.
+organizer schedules, event types, hosts, booking limits, and (as of slice 3)
+bookings themselves. Pure HTTP — no RabbitMQ, no background tasks. This is a
+phased replacement of the external cal.com CRM with an in-house system inside
+the `events` monorepo (slices 1–3 delivered; see `docs/SERVICE_OVERVIEW.md`).
 
 **Request flow (schedule/event-type):**
 `routers/{schedule,event_type}.py` → `controllers/{schedule,event_type}.py` → `adapters/{schedule,event_type}_db.py` → `adapters/sql.py` (`SqlExecutor`) → SQLAlchemy `AsyncSession` → PostgreSQL
 
 **Request flow (slots):**
-`routers/slots.py` → `SlotService` → `SlotsReadAdapter` (batch SQL load) + `StubBusyTimesSource` (stub, returns `[]`) → pure domain (`slots/domain.py`, `slots/timezones.py`) → grouped response
+`routers/slots.py` → `SlotService` → `SlotsReadAdapter` (batch SQL load) + `BookingBusyTimesSource` (real, buffer-expanded, backed by `booking`) → pure domain (`slots/domain.py`, `slots/timezones.py`) → grouped response
+
+**Request flow (bookings, slice 3):**
+`routers/booking.py` → `BookingService` (`booking/service.py`) → `IBookingReadAdapter`/`IBookingWriteAdapter` (`booking/read_adapter.py`, `booking/write_adapter.py`) + `BookingBusyTimesSource` (`booking/busy_source.py`) + `ISlotsReadAdapter` (reused from slice 2, to load the event-type/host/schedule bundle) → `adapters/sql.py` → PostgreSQL
 
 **Layers:**
 
@@ -65,6 +69,10 @@ external cal.com CRM with an in-house system inside the `events` monorepo.
   `PUT/{id}`, `DELETE/{id}`); all under `/api/v1/event-types`.
 - **`routers/slots.py`** — `GET /api/v1/slots`; validates `time_zone`, UTC window,
   62-day cap; calls `ISlotService`; returns `SlotsResponse`.
+- **`routers/booking.py`** — booking endpoints (`POST`, `GET/{id}`, `GET` list,
+  `POST/{id}/cancel`, `POST/{id}/reschedule`, `GET/{id}/history`); all under
+  `/api/v1/bookings`. Reads `actor-source`/`actor-user-id` headers (default
+  `"api"`/`None`) into `ActorDTO` for the change log.
 - **`routes.py`** — ops endpoints (`/health`, `/ready`, `/metrics`).
 - **`controllers/schedule.py`** — schedule business logic: upsert (replace-in-tx),
   travel replace, change-log pagination, validation gate.
@@ -92,25 +100,62 @@ external cal.com CRM with an in-house system inside the `events` monorepo.
   `IScheduleController`, `IEventTypeDBAdapter`, `IEventTypeController`,
   `BusyTimesSource`) for loose coupling.
 - **`interfaces/busy_times.py`** — `BusyTimesSource` Protocol + `StubBusyTimesSource`
-  that returns `[]`. Slice-1/2 seam; backed by real booking data in slice 3.
+  that returns `[]` (kept for tests/DI-independent use). **Slice-3: the production
+  binding is `BookingBusyTimesSource`** (`booking/busy_source.py`), backed by the
+  `booking` table.
+- **`booking/dto.py`** — frozen dataclasses: `CreateBookingDTO`, `BookingDTO`,
+  `HostStat` (for round-robin ranking), `BookingChangeEntryDTO`.
+- **`booking/interfaces.py`** — `IBookingReadAdapter`, `IBookingWriteAdapter`,
+  `IBookingService` Protocols.
+- **`booking/assignment.py`** — `rank_hosts`/`pick_host`: pure getLuckyUser
+  ranking (fewest future confirmed bookings first, then never-assigned before
+  assigned, then oldest `last_assigned_at` first).
+- **`booking/limits.py`** — pure helpers: `period_bounds_utc` (day/week/month/year
+  window in the host's schedule time zone, returned in UTC) and `limit_exceeded`
+  (`booking_count` vs `booking_duration` check).
+- **`booking/busy_source.py`** — `BookingBusyTimesSource`: real `BusyTimesSource`
+  implementation. Queries confirmed `booking` rows for the given hosts overlapping
+  the window, expanding each interval by the owning event type's
+  `buffer_before_minutes`/`buffer_after_minutes` in SQL (`make_interval`), with an
+  optional `exclude_booking_id` (used by reschedule to ignore the booking's own row).
+- **`booking/read_adapter.py`** — `BookingReadAdapter`: `get`, `list_by`,
+  `history`, `limits` (booking_limit rows for an event type), `host_stats`
+  (future-count + last-assigned-at per host), `period_counts` (count + total
+  minutes booked in a period, for limit enforcement).
+- **`booking/write_adapter.py`** — `BookingWriteAdapter`: `insert` (wraps each
+  attempt in `begin_nested()`/SAVEPOINT so an `IntegrityError` from the exclusion
+  constraint — raised as `ConflictError` — doesn't abort the outer transaction,
+  letting the service retry the next ranked host), `update_times`, `set_cancelled`,
+  `append_log`.
+- **`booking/service.py`** — `BookingService`: orchestrates create (re-validate
+  availability per free host via `host_availability_intervals`/`subtract_intervals`
+  reused from the slot engine → rank via `rank_hosts` → enforce `booking_limit`s
+  for the top-ranked host → optimistic insert with fallback to the next ranked
+  host on conflict → append change-log row), `cancel` (soft, idempotent), `reschedule`
+  (in-place, same host only, re-checks availability excluding its own booking),
+  `get`/`list_by`/`history`.
 - **`dto/{schedule,event_type}.py`** — frozen dataclasses (`UpsertScheduleDTO`,
   `ScheduleBundleDTO`, `ActorDTO`, `WeeklyHourDTO`, `DateOverrideDTO`, `TravelDTO`,
   `UpsertEventTypeDTO`, `EventTypeDTO`, `HostDTO`, `BookingLimitDTO`).
 - **`schemas/{schedule,event_type}.py`** — Pydantic request/response models.
 - **`schemas/slots.py`** — `SlotsResponse` Pydantic model
   (`event_type_id`, `time_zone`, `slots: dict[str, list[str]]`).
+- **`schemas/booking.py`** — `CreateBookingRequest`, `RescheduleRequest`,
+  `BookingResponse`, `BookingListResponse`, `ChangeEntryModel`,
+  `BookingHistoryResponse`; timestamps serialize as `YYYY-MM-DDThh:mm:ssZ`.
 - **`validation.py`** — IANA time-zone validation and weekly-hours overlap check.
 - **`auth.py`** — `require_api_key`: static `Authorization: Bearer` compared with
   `hmac.compare_digest`; gates the `/api/v1` router only.
 - **`metrics.py`** — Prometheus: HTTP RED middleware.
 - **`ioc.py`** — Dishka container. APP scope: `Settings`, `AsyncEngine`,
-  `async_sessionmaker`, `Clock` (SystemClock), `BusyTimesSource` (StubBusyTimesSource).
-  REQUEST scope: `AsyncSession`, `ISqlExecutor`, `IScheduleDBAdapter`,
-  `IScheduleController`, `IEventTypeDBAdapter`, `IEventTypeController`,
-  `ISlotsReadAdapter`, `ISlotService`.
-- **`db/models.py`** — SQLAlchemy ORM models (8 tables); used by Alembic only.
+  `async_sessionmaker`, `Clock` (SystemClock). REQUEST scope: `AsyncSession`,
+  `ISqlExecutor`, `IScheduleDBAdapter`, `IScheduleController`, `IEventTypeDBAdapter`,
+  `IEventTypeController`, `BusyTimesSource` (**`BookingBusyTimesSource`, real**),
+  `ISlotsReadAdapter`, `ISlotService`, `IBookingReadAdapter`, `IBookingWriteAdapter`,
+  `IBookingService`.
+- **`db/models.py`** — SQLAlchemy ORM models (10 tables); used by Alembic only.
 
-## Database Tables (8)
+## Database Tables (10)
 
 | Table | Description |
 |-------|-------------|
@@ -122,6 +167,8 @@ external cal.com CRM with an in-house system inside the `events` monorepo.
 | `host` | `(event_type_id, user_id)` composite PK; references a `schedule_id`. FK→event_type CASCADE, FK→schedule RESTRICT. |
 | `booking_limit` | Per-event-type limits by `limit_type`+`period` (UNIQUE). CHECK value>0. FK→event_type CASCADE. |
 | `schedule_change_log` | Append-only audit log: JSONB snapshot of the full schedule bundle written on every PUT. No FK to schedule (survives delete). |
+| `booking` (slice 3) | One row per booking. `EXCLUDE USING gist (host_user_id WITH =, tstzrange(start_time, end_time) WITH &&) WHERE status='confirmed'` — DB-enforced no-double-booking per host, race-safe under concurrency. FK→event_type RESTRICT. |
+| `booking_change_log` (slice 3) | Append-only transition log (`created`/`rescheduled`/`cancelled`) per booking, written in the same statement as the mutation. No FK to `booking` (kept for parity with `schedule_change_log`'s survive-delete pattern, though bookings are soft-cancelled, never deleted). |
 
 ## Endpoints
 
@@ -136,7 +183,13 @@ external cal.com CRM with an in-house system inside the `events` monorepo.
 | GET | `/api/v1/event-types/{id}` | Bearer | Get single event type; `404` if not found |
 | PUT | `/api/v1/event-types/{id}` | Bearer | Replace event type (hosts + limits cascade-deleted then re-inserted) |
 | DELETE | `/api/v1/event-types/{id}` | Bearer | Delete event type; `204` |
-| GET | `/api/v1/slots` | Bearer | Return available slots for an event type. Query params: `event_type_id` (UUID), `start` (ISO-8601 datetime, UTC window start), `end` (ISO-8601 datetime, UTC window end), `time_zone` (IANA). Responses: `200` `{event_type_id, time_zone, slots: {local_date: [utc_iso_z]}}`, `404` unknown event type, `422` invalid time zone / `end <= start` / window > 62 days. Note: busy times are still provided by `StubBusyTimesSource` (returns `[]`); `buffer_before/after` and `booking_limit` are plumbed but inert until slice 3. |
+| GET | `/api/v1/slots` | Bearer | Return available slots for an event type. Query params: `event_type_id` (UUID), `start` (ISO-8601 datetime, UTC window start), `end` (ISO-8601 datetime, UTC window end), `time_zone` (IANA). Responses: `200` `{event_type_id, time_zone, slots: {local_date: [utc_iso_z]}}`, `404` unknown event type, `422` invalid time zone / `end <= start` / window > 62 days. **Slice 3: busy times now come from `BookingBusyTimesSource`** (real, backed by confirmed `booking` rows, expanded by the event type's `buffer_before/after_minutes`) — slots overlapping a confirmed booking (or its buffer) are excluded. |
+| POST | `/api/v1/bookings` | Bearer | Create a booking (slice 3). Body: `{event_type_id, client_user_id, start_time, attendee_time_zone}`. Re-validates availability server-side, assigns a host via round-robin (`rank_hosts`: fewest future confirmed bookings, then never-assigned, then oldest `last_assigned_at`), enforces `booking_limit`s for the assigned host's period, inserts optimistically (falls back to the next ranked host on `ConflictError` from the DB exclusion constraint). `201`; `404` unknown event type; `422` past `start_time` / invalid `attendee_time_zone`; `409` no host available / limit exceeded / slot taken concurrently by all ranked hosts. |
+| GET | `/api/v1/bookings/{id}` | Bearer | Get a single booking; `404` if not found |
+| GET | `/api/v1/bookings?host_user_id=\|client_user_id=` | Bearer | List bookings; exactly one of `host_user_id`/`client_user_id` required (`422` otherwise), optional `from_`/`to` window |
+| POST | `/api/v1/bookings/{id}/cancel` | Bearer | Soft-cancel (`status='confirmed'→'cancelled'`); idempotent (second call returns the already-cancelled booking, no duplicate log row); frees the slot (exclusion constraint only applies `WHERE status='confirmed'`) |
+| POST | `/api/v1/bookings/{id}/reschedule` | Bearer | In-place move to a new `start_time`, **same host only**; re-checks host availability excluding the booking's own row (`exclude_booking_id`); `409` if cancelled or the new slot isn't free; `404` unknown booking |
+| GET | `/api/v1/bookings/{id}/history` | Bearer | Ordered `booking_change_log` entries (`created`→`rescheduled`*→`cancelled`?) |
 | GET | `/health` | public | Liveness — no deps |
 | GET | `/ready` | public | Static readiness probe — returns `{"status":"ready"}` with no DB check |
 | GET | `/metrics` | public | Prometheus exposition |
@@ -171,22 +224,28 @@ cal.com DB (`Schedule`, `Availability`, `users` tables) to `event_scheduling`.
 ## BusyTimesSource Seam
 
 `interfaces/busy_times.py` defines `BusyTimesSource` (Protocol) and
-`StubBusyTimesSource` (returns `[]` always). The slot engine (`SlotService`) calls
-`get_busy(user_ids, window)` per host; the stub means no organizer conflicts are
-subtracted until slice 3 (write-side bookings) provides a real implementation
-backed by the `booking` table.
+`StubBusyTimesSource` (returns `[]` always; still used directly in unit tests
+that don't need real bookings). **The seam is now ACTIVE**: `ioc.py` binds
+`BusyTimesSource` to `BookingBusyTimesSource` (`booking/busy_source.py`), which
+queries confirmed `booking` rows for the requested hosts/window, expanded by the
+owning event type's `buffer_before_minutes`/`buffer_after_minutes`. Both
+`SlotService` (read-side, `GET /api/v1/slots`) and `BookingService` (write-side
+availability re-check) call `get_busy(user_ids, window, exclude_booking_id=...)`
+through the same Protocol.
 
-**Slice-2 maturity notes:**
-- `BusyTimesSource` is `StubBusyTimesSource` — slots are never blocked by existing bookings.
-- `buffer_before_minutes` / `buffer_after_minutes` on `EventTypeConfig` are loaded and stored but not yet applied to interval subtraction.
-- `booking_limit` rows are loaded (via `event_type_db`) but not enforced during slot calculation.
-- The pure core (`slots/domain.py`, `slots/timezones.py`) is IO-free and extractable.
+**Slice-3 maturity notes:**
+- `BusyTimesSource` is `BookingBusyTimesSource` (real) — slots and booking creation both exclude time overlapping a confirmed booking or its buffer.
+- `buffer_before_minutes` / `buffer_after_minutes` are applied in SQL when computing busy intervals (`make_interval(mins => ...)`), not in the pure domain layer.
+- `booking_limit` rows (`booking_count`/`booking_duration`, per `day`/`week`/`month`/`year` in the assigned host's schedule time zone) are enforced on `POST /api/v1/bookings` — see `booking/limits.py`.
+- Round-robin host assignment (`booking/assignment.py`) is active: fewest future confirmed bookings first, then never-assigned before assigned, then oldest `last_assigned_at`.
+- The pure core (`slots/domain.py`, `slots/timezones.py`) is IO-free and extractable; reused unmodified by `BookingService`.
+- **Still deferred:** no RabbitMQ/CloudEvents (booking is HTTP-only; publishing `booking.lifecycle` to the events pipeline — chat/Jitsi/notifications — is slice 4). No slot caching. No reservations/holds (create is re-validate-then-insert, race-safe only via the DB exclusion constraint).
 
 ## Service Documentation
 
 - `docs/SERVICE_OVERVIEW.md` — architecture, maturity, replacement roadmap
 - `docs/API_CONTRACTS.md` — HTTP endpoints, request/response schemas
-- `docs/DATA_MODEL.md` — 8 tables with columns and constraints
+- `docs/DATA_MODEL.md` — 10 tables with columns and constraints
 - `docs/DEPENDENCIES.md` — runtime dependencies and failure modes
 - `docs/AUDIT.md` — audit findings for this service
 
@@ -196,3 +255,5 @@ Domain model spec: `../docs/superpowers/specs/2026-07-03-event-scheduling-domain
 Domain model plan: `../docs/superpowers/plans/2026-07-03-event-scheduling-domain-model.md`
 Slot engine spec: `../docs/superpowers/specs/2026-07-05-event-scheduling-slot-engine-design.md`
 Slot engine plan: `../docs/superpowers/plans/2026-07-05-event-scheduling-slot-engine.md`
+Booking write-side spec: `../docs/superpowers/specs/2026-07-05-event-scheduling-booking-write-side-design.md`
+Booking write-side plan: `../docs/superpowers/plans/2026-07-05-event-scheduling-booking-write-side.md`
