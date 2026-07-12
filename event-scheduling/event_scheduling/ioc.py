@@ -7,10 +7,15 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 from event_scheduling.adapters.event_type_db import EventTypeDBAdapter
 from event_scheduling.adapters.schedule_db import ScheduleDBAdapter
 from event_scheduling.adapters.sql import SqlExecutor
+from event_scheduling.booking.busy_source import BookingBusyTimesSource
+from event_scheduling.booking.interfaces import IBookingReadAdapter, IBookingService, IBookingWriteAdapter
+from event_scheduling.booking.read_adapter import BookingReadAdapter
+from event_scheduling.booking.service import BookingService
+from event_scheduling.booking.write_adapter import BookingWriteAdapter
 from event_scheduling.config import Settings, get_settings
 from event_scheduling.controllers.event_type import EventTypeController
 from event_scheduling.controllers.schedule import ScheduleController
-from event_scheduling.interfaces.busy_times import BusyTimesSource, StubBusyTimesSource
+from event_scheduling.interfaces.busy_times import BusyTimesSource
 from event_scheduling.interfaces.event_type import IEventTypeController, IEventTypeDBAdapter
 from event_scheduling.interfaces.schedule import IScheduleController, IScheduleDBAdapter
 from event_scheduling.interfaces.sql import ISqlExecutor
@@ -75,9 +80,9 @@ class AppProvider(Provider):
     def provide_clock(self) -> Clock:
         return SystemClock()
 
-    @provide(scope=Scope.APP)
-    def provide_busy_source(self) -> BusyTimesSource:
-        return StubBusyTimesSource()
+    @provide(scope=Scope.REQUEST)
+    def provide_busy_source(self, sql: ISqlExecutor) -> BusyTimesSource:
+        return BookingBusyTimesSource(sql)
 
     @provide(scope=Scope.REQUEST)
     def provide_slots_read_adapter(self, sql: ISqlExecutor) -> ISlotsReadAdapter:
@@ -88,3 +93,22 @@ class AppProvider(Provider):
         self, read_adapter: ISlotsReadAdapter, busy_source: BusyTimesSource, clock: Clock
     ) -> ISlotService:
         return SlotService(read_adapter, busy_source, clock)
+
+    @provide(scope=Scope.REQUEST)
+    def provide_booking_read(self, sql: ISqlExecutor) -> IBookingReadAdapter:
+        return BookingReadAdapter(sql)
+
+    @provide(scope=Scope.REQUEST)
+    def provide_booking_write(self, sql: ISqlExecutor) -> IBookingWriteAdapter:
+        return BookingWriteAdapter(sql)
+
+    @provide(scope=Scope.REQUEST)
+    def provide_booking_service(
+        self,
+        slots_read: ISlotsReadAdapter,
+        read: IBookingReadAdapter,
+        write: IBookingWriteAdapter,
+        busy: BusyTimesSource,
+        clock: Clock,
+    ) -> IBookingService:
+        return BookingService(slots_read, read, write, busy, clock)

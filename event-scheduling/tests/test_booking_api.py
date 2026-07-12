@@ -1,8 +1,10 @@
-"""Service-level tests for BookingService (slice 3, Tasks 5-6).
+"""Service-level tests for BookingService (slice 3, Tasks 5-6) plus HTTP-level integration tests.
 
-These drive BookingService directly with real adapters over a real Postgres
-session (no router/DI — that's Task 7). Task 7 will extend this file with the
-HTTP-level `client`-driven tests.
+Covers the /api/v1/bookings endpoints (Task 7). The service-level tests drive
+BookingService directly with real adapters over a real Postgres session (no
+router/DI). The HTTP-level tests below drive the same flows through the
+FastAPI app + Dishka DI container via the `client` fixture, proving the full
+wiring (including the BookingBusyTimesSource swap).
 """
 
 import datetime as dt
@@ -303,3 +305,199 @@ async def test_get_unknown_booking_404(sessionmaker_fixture) -> None:
         service = _build_service(SqlExecutor(s), NOW)
         with pytest.raises(NotFoundError):
             await service.get(uuid4())
+
+
+# ---------------------------------------------------------------------------
+# HTTP-level tests (Task 7) — drive the same flows through the FastAPI app +
+# Dishka DI container via the `client` fixture (real BookingBusyTimesSource).
+# ---------------------------------------------------------------------------
+
+HDRS = {"actor-source": "admin"}
+
+
+async def _seed_single_host_et_http(client, *, notice: int = 0) -> tuple[str, str]:
+    """Seed one schedule (Thu 09:00-17:00 Europe/Berlin) + one event type hosting it, via HTTP."""
+    owner = str(uuid4())
+    client.put(
+        f"/api/v1/schedules/{owner}",
+        json={
+            "name": "s",
+            "time_zone": "Europe/Berlin",
+            "weekly_hours": [{"day_of_week": 4, "start_time": "09:00", "end_time": "17:00"}],  # Thursday
+            "date_overrides": [],
+        },
+        headers=HDRS,
+    )
+    sid = client.get(f"/api/v1/schedules/{owner}").json()["schedule"]["id"]
+    body = {
+        "slug": f"et-{uuid4().hex[:8]}",
+        "title": "Intro",
+        "duration_minutes": 60,
+        "slot_interval_minutes": 30,
+        "min_booking_notice_minutes": notice,
+        "buffer_before_minutes": 0,
+        "buffer_after_minutes": 0,
+        "hosts": [{"user_id": owner, "schedule_id": sid}],
+        "booking_limits": [],
+    }
+    et_id = client.post("/api/v1/event-types", json=body).json()["id"]
+    return et_id, owner
+
+
+HTTP_START = "2026-10-01T09:00:00Z"  # Thursday, within 09:00-17:00 Europe/Berlin (CEST)
+
+
+@pytest.mark.asyncio
+async def test_http_create_booking_assigns_host(client) -> None:
+    et, owner = await _seed_single_host_et_http(client)
+    resp = client.post(
+        "/api/v1/bookings",
+        headers=HDRS,
+        json={
+            "event_type_id": et,
+            "client_user_id": str(uuid4()),
+            "start_time": HTTP_START,
+            "attendee_time_zone": "Europe/Berlin",
+        },
+    )
+    assert resp.status_code == 201
+    body = resp.json()
+    assert body["host_user_id"] == owner
+    assert body["status"] == "confirmed"
+    assert body["start_time"] == "2026-10-01T09:00:00Z"
+    assert body["end_time"] == "2026-10-01T10:00:00Z"
+
+
+@pytest.mark.asyncio
+async def test_http_double_book_same_slot_409(client) -> None:
+    et, _owner = await _seed_single_host_et_http(client)
+    payload = {
+        "event_type_id": et,
+        "client_user_id": str(uuid4()),
+        "start_time": HTTP_START,
+        "attendee_time_zone": "Europe/Berlin",
+    }
+    first = client.post("/api/v1/bookings", headers=HDRS, json=payload)
+    assert first.status_code == 201
+    second = client.post(
+        "/api/v1/bookings",
+        headers=HDRS,
+        json={**payload, "client_user_id": str(uuid4())},
+    )
+    assert second.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_http_get_unknown_booking_404(client) -> None:
+    resp = client.get(f"/api/v1/bookings/{uuid4()}")
+    assert resp.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_http_create_past_time_422(client) -> None:
+    et, _owner = await _seed_single_host_et_http(client)
+    resp = client.post(
+        "/api/v1/bookings",
+        headers=HDRS,
+        json={
+            "event_type_id": et,
+            "client_user_id": str(uuid4()),
+            "start_time": "2020-01-01T09:00:00Z",
+            "attendee_time_zone": "Europe/Berlin",
+        },
+    )
+    assert resp.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_http_cancel_and_reschedule_and_history(client) -> None:
+    et, _owner = await _seed_single_host_et_http(client)
+    created = client.post(
+        "/api/v1/bookings",
+        headers=HDRS,
+        json={
+            "event_type_id": et,
+            "client_user_id": str(uuid4()),
+            "start_time": HTTP_START,
+            "attendee_time_zone": "Europe/Berlin",
+        },
+    ).json()
+    booking_id = created["id"]
+
+    rescheduled = client.post(
+        f"/api/v1/bookings/{booking_id}/reschedule",
+        headers=HDRS,
+        json={"start_time": "2026-10-01T11:00:00Z"},
+    )
+    assert rescheduled.status_code == 200
+    assert rescheduled.json()["start_time"] == "2026-10-01T11:00:00Z"
+
+    cancelled = client.post(f"/api/v1/bookings/{booking_id}/cancel", headers=HDRS)
+    assert cancelled.status_code == 200
+    assert cancelled.json()["status"] == "cancelled"
+
+    history = client.get(f"/api/v1/bookings/{booking_id}/history")
+    assert history.status_code == 200
+    assert [e["kind"] for e in history.json()["entries"]] == ["created", "rescheduled", "cancelled"]
+
+
+@pytest.mark.asyncio
+async def test_http_list_bookings_requires_exactly_one_filter(client) -> None:
+    et, owner = await _seed_single_host_et_http(client)
+    client.post(
+        "/api/v1/bookings",
+        headers=HDRS,
+        json={
+            "event_type_id": et,
+            "client_user_id": str(uuid4()),
+            "start_time": HTTP_START,
+            "attendee_time_zone": "Europe/Berlin",
+        },
+    )
+
+    neither = client.get("/api/v1/bookings")
+    assert neither.status_code == 422
+
+    both = client.get("/api/v1/bookings", params={"host_user_id": owner, "client_user_id": str(uuid4())})
+    assert both.status_code == 422
+
+    by_host = client.get("/api/v1/bookings", params={"host_user_id": owner})
+    assert by_host.status_code == 200
+    assert len(by_host.json()["bookings"]) == 1
+
+
+@pytest.mark.asyncio
+async def test_booking_removes_slot_from_slots_endpoint(client) -> None:
+    et, _ = await _seed_single_host_et_http(client)
+    before = client.get(
+        "/api/v1/slots",
+        params={
+            "event_type_id": et,
+            "start": "2026-10-01T00:00:00Z",
+            "end": "2026-10-02T00:00:00Z",
+            "time_zone": "Europe/Berlin",
+        },
+    ).json()["slots"]
+    assert "2026-10-01T07:00:00Z" in before["2026-10-01"]  # 09:00 CEST
+
+    client.post(
+        "/api/v1/bookings",
+        headers=HDRS,
+        json={
+            "event_type_id": et,
+            "client_user_id": str(uuid4()),
+            "start_time": "2026-10-01T07:00:00Z",
+            "attendee_time_zone": "Europe/Berlin",
+        },
+    )
+
+    after = client.get(
+        "/api/v1/slots",
+        params={
+            "event_type_id": et,
+            "start": "2026-10-01T00:00:00Z",
+            "end": "2026-10-02T00:00:00Z",
+            "time_zone": "Europe/Berlin",
+        },
+    ).json()["slots"]
+    assert "2026-10-01T07:00:00Z" not in after.get("2026-10-01", [])  # now busy → gone

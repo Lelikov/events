@@ -137,7 +137,8 @@ async def _clean_db(_migrated: str) -> AsyncGenerator[None]:
         await conn.execute(
             text(
                 "TRUNCATE schedule, weekly_hours, date_override, travel_schedule, "
-                "event_type, host, booking_limit, schedule_change_log RESTART IDENTITY CASCADE"
+                "event_type, host, booking_limit, schedule_change_log, booking, booking_change_log "
+                "RESTART IDENTITY CASCADE"
             )
         )
     await eng.dispose()
@@ -162,6 +163,7 @@ def app(_migrated: str, _clean_db) -> Generator:
     from event_scheduling.ioc import AppProvider
     from event_scheduling.main import _domain_error_handler
     from event_scheduling.metrics import HttpMetricsMiddleware
+    from event_scheduling.routers.booking import booking_router
     from event_scheduling.routers.event_type import event_type_router
     from event_scheduling.routers.schedule import schedule_router
     from event_scheduling.routers.slots import slots_router
@@ -174,6 +176,7 @@ def app(_migrated: str, _clean_db) -> Generator:
     application.include_router(schedule_router)
     application.include_router(event_type_router)
     application.include_router(slots_router)
+    application.include_router(booking_router)
     application.add_middleware(HttpMetricsMiddleware)
     for _err in (ValidationError, NotFoundError, ConflictError):
         application.add_exception_handler(_err, _domain_error_handler)
