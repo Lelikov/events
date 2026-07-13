@@ -141,14 +141,19 @@ booking flows already use — same headers (`ce-*`, raw `BOOKING_API_KEY` in
 `Authorization`, not `Bearer`), same event types, same `events.booking.lifecycle`
 routing key and fan-out. It does **not** touch `/event/calcom`, the cal.com webhook
 signature path, or any other existing producer — cal.com and event-scheduling are
-two independent producers feeding the same queue/routing key. **Routing still
-fans this out to both `events.booking.lifecycle.saver` and `events.booking.lifecycle.booking`
-— event-booking technically receives the message — but event-booking resolves
-booking context by reading the cal.com DB keyed on `booking_uid`, and an
-event-scheduling-sourced booking has no cal.com row, so its chat/Jitsi/reminder
-side effects are a no-op for these events until slice 4a.2 makes event-booking
-payload-driven instead of cal.com-DB-driven.** event-saver's projections are the
-only downstream effect that is fully correct for event-scheduling bookings today.
+two independent producers feeding the same queue/routing key. **Routing fans this
+out to both `events.booking.lifecycle.saver` and `events.booking.lifecycle.booking`,
+and as of slice 4a.2 event-booking now reacts to event-scheduling bookings too.**
+event-booking's booking lookup is a **composite adapter** (`adapters/composite_db.py`):
+it reads the cal.com DB first and, when a `booking_uid` isn't there, falls back to
+`GET /api/v1/bookings/{uid}/detail` on event-scheduling (Bearer `SCHEDULING_API_KEY`;
+the DTO is tagged `source="scheduling"`). For a scheduling-source booking event-booking
+creates the GetStream chat, mints per-participant Jitsi meeting URLs, and emits
+`notification.send_requested` — the same follow-ups as a cal.com booking — while
+**skipping the blacklist/constraints/reject sub-flow** (those apply to cal.com bookings
+only; scheduling bookings are pre-validated upstream). **Reminders remain cal.com-only**
+(the reminder scheduler still polls the cal.com DB) — deferred to slice 4a.3.
+event-saver's projections continue to cover both producers.
 See `event-scheduling/CLAUDE.md` and `event-scheduling/docs/SERVICE_OVERVIEW.md`.
 
 **Source:** `event-schemas/event_schemas/queues.py`, `event-schemas/event_schemas/types.py`
@@ -386,9 +391,11 @@ Service" above** — its background outbox dispatcher plays exactly this role
 except email resolution is `POST /api/users/by-ids` (batch) rather than the
 per-participant `GET /api/users/roles/{role}/emails/{email}` loop shown, and auth
 is a raw shared secret rather than `X-API-Key`. The rest of the flow — routing,
-fan-out, event-saver projection — is identical and shared with cal.com's flow. See
-footnote ¹ above for the caveat that event-booking (the `EN`/chat/meeting box) does
-not yet act on events sourced this way.
+fan-out, event-saver projection — is identical and shared with cal.com's flow. As of
+slice 4a.2 event-booking (the `EN`/chat/meeting box) also acts on events sourced this
+way: its composite adapter pulls `GET /api/v1/bookings/{uid}/detail` from event-scheduling
+when the uid isn't in cal.com, then provisions chat/Jitsi/notifications (reminders stay
+cal.com-only, deferred to 4a.3). See footnote ¹ above.
 
 ---
 

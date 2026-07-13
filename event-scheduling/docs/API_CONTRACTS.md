@@ -320,6 +320,46 @@ Errors: `404` unknown `event_type_id`; `422` `start_time` in the past or invalid
 }
 ```
 
+### GET /api/v1/bookings/{id}/detail
+
+Participant-enriched view of a booking, consumed by **event-booking** (slice 4a.2)
+to provision the chat channel, Jitsi meeting URLs, and notifications for
+`event-scheduling` bookings — the same side effects it already performs for
+cal.com bookings. event-booking's composite booking adapter falls back to this
+endpoint when a `booking_uid` isn't present in the cal.com DB.
+
+The service resolves `host_user_id`/`client_user_id` to email/name/time_zone/locale
+via event-users (`POST /api/users/by-ids`, `require_admin`-gated Bearer). The
+client's `time_zone` is the booking's own `attendee_time_zone`; the host's
+`time_zone`/`name`/`locale` come from event-users. Missing participant fields
+degrade gracefully (`email` empty, `name`/`time_zone`/`locale` null) rather than
+erroring.
+
+```
+200  — BookingDetailResponse
+404  — unknown booking
+```
+
+`BookingDetailResponse` shape:
+```json
+{
+  "uid": "<booking uuid, as string>",
+  "title": "30-Minute Introduction",
+  "start_time": "2026-10-01T09:00:00Z",
+  "end_time": "2026-10-01T10:00:00Z",
+  "status": "confirmed",
+  "host": {"email": "host@example.com", "name": "Host Name", "time_zone": "Europe/Moscow", "locale": "ru"},
+  "client": {"email": "client@example.com", "name": "Client Name", "time_zone": "Europe/Berlin", "locale": "en"}
+}
+```
+
+- `uid` is the booking UUID rendered as a string (the same value event-scheduling
+  publishes as `booking_uid` on its `booking.lifecycle` CloudEvents), so
+  event-booking can key on it directly.
+- `title` is the event type's `title` (empty string if the event type is gone).
+- `host.name`/`host.time_zone`/`host.locale` and `client.name`/`client.locale`
+  may be `null` when the participant isn't resolvable via event-users.
+
 ### GET /api/v1/bookings
 
 List bookings by host or client. Exactly one of `host_user_id` / `client_user_id`
