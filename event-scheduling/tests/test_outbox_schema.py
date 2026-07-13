@@ -17,9 +17,7 @@ async def test_outbox_insert_and_status_check(_migrated: str) -> None:
             ),
             {"ce": uuid4(), "uid": uid, "p": '{"start_time":"x"}'},
         )
-        query = text(
-            "SELECT status, attempts FROM outbox WHERE booking_uid = :uid"
-        )
+        query = text("SELECT status, attempts FROM outbox WHERE booking_uid = :uid")
         row = (await conn.execute(query, {"uid": uid})).one()
         assert row.status == "pending"
         assert row.attempts == 0

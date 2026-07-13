@@ -87,10 +87,10 @@ Payload contracts per type: `event_schemas.mapping.PAYLOAD_MODELS` and
 
 | CloudEvent `type` | Producer | Consumer | Routing Key (actual) | Priority | Payload Schema |
 |-------------------|----------|----------|---------------------|----------|----------------|
-| `booking.created` | cal.com / event-receiver (`/event/calcom`) | event-saver, event-booking | `events.booking.lifecycle` | 10 (CRITICAL) | `BookingCreatedPayload` |
-| `booking.rescheduled` | cal.com / event-receiver | event-saver, event-booking | `events.booking.lifecycle` | 10 (CRITICAL) | `BookingRescheduledPayload` |
+| `booking.created` | cal.com / event-receiver (`/event/calcom`); **also event-scheduling (`/event/booking`, slice 4a, additive)**¹ | event-saver, event-booking | `events.booking.lifecycle` | 10 (CRITICAL) | `BookingCreatedPayload` |
+| `booking.rescheduled` | cal.com / event-receiver; **also event-scheduling (`/event/booking`, slice 4a, additive)**¹ | event-saver, event-booking | `events.booking.lifecycle` | 10 (CRITICAL) | `BookingRescheduledPayload` |
 | `booking.reassigned` | event-receiver | event-saver, event-booking | `events.booking.lifecycle` | 10 (CRITICAL) | `BookingReassignedPayload` |
-| `booking.cancelled` | cal.com / event-receiver | event-saver, event-booking | `events.booking.lifecycle` | 10 (CRITICAL) | `BookingCancelledPayload` |
+| `booking.cancelled` | cal.com / event-receiver; **also event-scheduling (`/event/booking`, slice 4a, additive)**¹ | event-saver, event-booking | `events.booking.lifecycle` | 10 (CRITICAL) | `BookingCancelledPayload` |
 | `booking.reminder_sent` | (no producer today; kept for saver routing) | event-saver, event-booking | `events.booking.lifecycle` | 7 (HIGH) | `BookingReminderSentPayload` |
 | `booking.rejected` | event-booking (via event-receiver) | event-saver, event-booking | `events.booking.lifecycle` | 10 (CRITICAL) | `BookingRejectedPayload` |
 | `chat.created` | event-booking (via event-receiver) | event-saver | `events.chat.lifecycle` | 5 (NORMAL) | `ChatCreatedPayload` |
@@ -132,6 +132,24 @@ Payload contracts per type: `event_schemas.mapping.PAYLOAD_MODELS` and
 | _(unmatched)_ | event-receiver | event-saver (fallback) | `events.unrouted` | -- | raw payload |
 
 Routing keys come from `event_schemas.queues.ROUTING_RULES`; `events.booking.lifecycle` fans out to BOTH `events.booking.lifecycle.saver` and `events.booking.lifecycle.booking`; `events.user.email` fans out to BOTH `events.user.email` (event-users) and `events.user.email.booking` (event-booking).
+
+¹ **event-scheduling as an additive `booking.lifecycle` producer (slice 4a).** A
+transactional `outbox` table + background dispatcher (`event-scheduling/event_scheduling/publishing/`)
+publishes `booking.created`/`booking.rescheduled`/`booking.cancelled` CloudEvents
+via the **same generic `POST /event/booking` contract and endpoint** cal.com-external
+booking flows already use — same headers (`ce-*`, raw `BOOKING_API_KEY` in
+`Authorization`, not `Bearer`), same event types, same `events.booking.lifecycle`
+routing key and fan-out. It does **not** touch `/event/calcom`, the cal.com webhook
+signature path, or any other existing producer — cal.com and event-scheduling are
+two independent producers feeding the same queue/routing key. **Routing still
+fans this out to both `events.booking.lifecycle.saver` and `events.booking.lifecycle.booking`
+— event-booking technically receives the message — but event-booking resolves
+booking context by reading the cal.com DB keyed on `booking_uid`, and an
+event-scheduling-sourced booking has no cal.com row, so its chat/Jitsi/reminder
+side effects are a no-op for these events until slice 4a.2 makes event-booking
+payload-driven instead of cal.com-DB-driven.** event-saver's projections are the
+only downstream effect that is fully correct for event-scheduling bookings today.
+See `event-scheduling/CLAUDE.md` and `event-scheduling/docs/SERVICE_OVERVIEW.md`.
 
 **Source:** `event-schemas/event_schemas/queues.py`, `event-schemas/event_schemas/types.py`
 
@@ -361,6 +379,16 @@ sequenceDiagram
 ```
 
 This flow was verified live in audit-v2 with a real cal.com payload (`docs/audit/v2/INTEGRATION_REPORT.md` §3).
+
+**As of slice 4a, `event-scheduling` is a concrete instance of "External Booking
+Service" above** — its background outbox dispatcher plays exactly this role
+(`ReceiverClient`/`UsersClient` in `event-scheduling/event_scheduling/publishing/`),
+except email resolution is `POST /api/users/by-ids` (batch) rather than the
+per-participant `GET /api/users/roles/{role}/emails/{email}` loop shown, and auth
+is a raw shared secret rather than `X-API-Key`. The rest of the flow — routing,
+fan-out, event-saver projection — is identical and shared with cal.com's flow. See
+footnote ¹ above for the caveat that event-booking (the `EN`/chat/meeting box) does
+not yet act on events sourced this way.
 
 ---
 

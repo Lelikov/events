@@ -5,8 +5,9 @@ Database name: `event_scheduling` (own PostgreSQL database on the shared postgre
 Migrations:
 - `alembic/versions/0001_initial.py` — creates the first 8 tables (schedule/event-type domain, slices 1–2).
 - `alembic/versions/0002_booking.py` — adds `booking` + `booking_change_log` (slice 3, write-side bookings); also enables the `btree_gist` extension required by the exclusion constraint below.
+- `alembic/versions/0003_outbox.py` — adds `outbox` (slice 4a, transactional outbox for `booking.lifecycle` CloudEvents).
 
-10 tables total.
+11 tables total.
 
 ## Tables
 
@@ -199,6 +200,40 @@ full history (`GET /api/v1/bookings/{id}/history`).
 `cancel` is idempotent at the service layer: cancelling an already-cancelled
 booking returns the booking without inserting a second `cancelled` row.
 
+### `outbox` (slice 4a)
+
+Transactional outbox for `booking.lifecycle` CloudEvents. Written by
+`publishing/outbox_writer.py::OutboxWriter.write` in the **same transaction** as
+the triggering booking mutation (`BookingService.create`/`reschedule`/`cancel`) —
+the outbox row and the booking row commit or roll back together, so a booking
+mutation can never "silently" fail to be queued for publishing. Read and
+transitioned by the background dispatcher (`publishing/dispatcher.py`).
+
+| Column | Type | Constraints | Notes |
+|--------|------|-------------|-------|
+| `id` | `uuid` | PK, `server_default gen_random_uuid()` | |
+| `event_ce_id` | `uuid` | NOT NULL | Generated once at write time (`uuid4()`); becomes the CloudEvent `ce-id` sent downstream — stable across retries so at-least-once redelivery is safely deduped by consumers |
+| `event_type` | `text` | NOT NULL, CHECK IN `('booking.created','booking.rescheduled','booking.cancelled')` (`ck_outbox_type`) | |
+| `booking_uid` | `text` | NOT NULL | The booking's `id` (as text) — no FK; the outbox row's lifecycle is independent of the booking row |
+| `payload` | `jsonb` | NOT NULL | Domain fields captured at write time: `host_user_id`, `client_user_id`, `start_time`, `end_time`, `attendee_time_zone`, plus `previous_start_time` (reschedule) or `cancellation_reason` (cancel) when applicable |
+| `status` | `text` | NOT NULL, `server_default 'pending'`, CHECK IN `('pending','sent','failed')` (`ck_outbox_status`) | No `'sending'`/in-flight status — dispatch uses `SELECT ... FOR UPDATE SKIP LOCKED` for concurrency safety instead |
+| `attempts` | `int` | NOT NULL, `server_default 0` | Incremented on every retry; feeds the backoff calculation (`5 * 2^attempts`, capped at `OUTBOX_MAX_BACKOFF_SECONDS`) |
+| `next_attempt_at` | `timestamptz` | NOT NULL, `server_default now()` | Dispatcher only claims rows where this is `<= now()` |
+| `last_error` | `text` | NULLABLE | Set on `failed` or on each retry (e.g. `"malformed-payload:..."`, `"users:..."`, `"email-not-found"`, `"transport:..."`, `"http:<status>"`) |
+| `created_at` | `timestamptz` | NOT NULL, `server_default now()` | |
+| `sent_at` | `timestamptz` | NULLABLE | Set when `status` transitions to `sent` |
+
+Index: `ix_outbox_dispatch (status, next_attempt_at)` — backs the dispatcher's
+poll query (`WHERE status='pending' AND next_attempt_at<=now() ORDER BY
+created_at LIMIT :batch FOR UPDATE SKIP LOCKED`).
+
+**Terminal states.** `sent` = event-receiver returned `202`. `failed` = event-receiver
+returned `400`/`401`, or the row's own `payload` was malformed (missing/invalid
+`host_user_id`/`client_user_id`) — neither is retried again. Every other outcome
+(network/transport error, any other HTTP status, event-users call failing, or a
+resolved participant email not found) leaves the row `pending` with `attempts`
+incremented and `next_attempt_at` pushed out — it will be retried on a later tick.
+
 ## Referential Integrity Summary
 
 ```
@@ -215,4 +250,5 @@ event_type (slug UNIQUE)
 
 schedule_change_log  (no FK — audit survives delete)
 booking_change_log   (no FK to booking — survives delete, kind='created'|'rescheduled'|'cancelled')
+outbox               (no FK — booking_uid is a text reference, not a DB FK; survives independent of booking's own lifecycle)
 ```
