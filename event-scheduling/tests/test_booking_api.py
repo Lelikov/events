@@ -778,6 +778,30 @@ def _seed_et_http_buf(client) -> tuple[str, str]:
 
 
 @pytest.mark.asyncio
+async def test_booking_detail_returns_enriched(client_fake_users) -> None:
+    client = client_fake_users
+    et, _owner = await _seed_single_host_et_http(client)
+    bid = client.post(
+        "/api/v1/bookings",
+        headers=HDRS,
+        json={
+            "event_type_id": et,
+            "client_user_id": str(uuid4()),
+            "start_time": "2026-10-01T09:00:00Z",
+            "attendee_time_zone": "Europe/Moscow",
+        },
+    ).json()["id"]
+    resp = client.get(f"/api/v1/bookings/{bid}/detail")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["uid"] == bid
+    assert body["title"]  # event_type title present
+    assert body["host"]["email"]  # resolved via users source
+    assert body["client"]["time_zone"] == "Europe/Moscow"  # from attendee_time_zone
+    assert client.get(f"/api/v1/bookings/{uuid4()}/detail").status_code == 404
+
+
+@pytest.mark.asyncio
 async def test_create_path_enforces_buffer_on_neighbor_booking(client) -> None:
     et, _owner = _seed_et_http_buf(client)
 

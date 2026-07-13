@@ -8,7 +8,13 @@ from event_scheduling.adapters.event_type_db import EventTypeDBAdapter
 from event_scheduling.adapters.schedule_db import ScheduleDBAdapter
 from event_scheduling.adapters.sql import SqlExecutor
 from event_scheduling.booking.busy_source import BookingBusyTimesSource
-from event_scheduling.booking.interfaces import IBookingReadAdapter, IBookingService, IBookingWriteAdapter
+from event_scheduling.booking.detail_service import BookingDetailService
+from event_scheduling.booking.interfaces import (
+    IBookingDetailService,
+    IBookingReadAdapter,
+    IBookingService,
+    IBookingWriteAdapter,
+)
 from event_scheduling.booking.read_adapter import BookingReadAdapter
 from event_scheduling.booking.service import BookingService
 from event_scheduling.booking.write_adapter import BookingWriteAdapter
@@ -129,3 +135,7 @@ class AppProvider(Provider):
         outbox: IOutboxWriter,
     ) -> IBookingService:
         return BookingService(slots_read, read, write, busy, clock, outbox)
+
+    @provide(scope=Scope.REQUEST)
+    def provide_booking_detail_service(self, read: IBookingReadAdapter, users: IUsersClient) -> IBookingDetailService:
+        return BookingDetailService(read, users)
