@@ -19,8 +19,10 @@ from event_scheduling.interfaces.busy_times import BusyTimesSource
 from event_scheduling.interfaces.event_type import IEventTypeController, IEventTypeDBAdapter
 from event_scheduling.interfaces.schedule import IScheduleController, IScheduleDBAdapter
 from event_scheduling.interfaces.sql import ISqlExecutor
-from event_scheduling.publishing.interfaces import IOutboxWriter
+from event_scheduling.publishing.interfaces import IOutboxWriter, IReceiverClient, IUsersClient
 from event_scheduling.publishing.outbox_writer import OutboxWriter
+from event_scheduling.publishing.receiver_client import ReceiverClient
+from event_scheduling.publishing.users_client import UsersClient
 from event_scheduling.slots.interfaces import Clock, ISlotService, ISlotsReadAdapter
 from event_scheduling.slots.read_adapter import SlotsReadAdapter
 from event_scheduling.slots.service import SlotService, SystemClock
@@ -107,6 +109,14 @@ class AppProvider(Provider):
     @provide(scope=Scope.REQUEST)
     def provide_outbox_writer(self, sql: ISqlExecutor) -> IOutboxWriter:
         return OutboxWriter(sql)
+
+    @provide(scope=Scope.APP)
+    def provide_receiver_client(self, settings: Settings) -> IReceiverClient:
+        return ReceiverClient(settings.event_receiver_url, settings.booking_api_key)
+
+    @provide(scope=Scope.APP)
+    def provide_users_client(self, settings: Settings) -> IUsersClient:
+        return UsersClient(settings.event_users_url, settings.event_users_token)
 
     @provide(scope=Scope.REQUEST)
     def provide_booking_service(

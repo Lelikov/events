@@ -228,6 +228,38 @@ async def test_dispatch_marks_malformed_payload_failed_without_wedging_batch(ses
 
 
 @pytest.mark.asyncio
+async def test_end_to_end_via_httpx_stub_and_idempotent_ce_id(sessionmaker_fixture) -> None:
+    """Real ReceiverClient over httpx.MockTransport.
+
+    Verifies ce-type/ce-id/Authorization on the wire, and that a second
+    dispatch tick finds nothing pending (no duplicate send).
+    """
+    from event_scheduling.publishing.receiver_client import ReceiverClient
+
+    captured = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        captured.append((req.headers.get("ce-type"), req.headers.get("ce-id"), req.headers.get("authorization")))
+        return httpx.Response(202)
+
+    receiver = ReceiverClient("http://receiver:8888", "SECRET", transport=httpx.MockTransport(handler))
+    async with sessionmaker_fixture() as s:
+        ce = await _insert_pending(s)
+        await s.commit()
+    clock = _FixedClock(dt.datetime(2026, 7, 13, tzinfo=dt.UTC))
+    async with sessionmaker_fixture() as s:
+        await dispatch_once(SqlExecutor(s), _Users(), receiver, clock, 300, 50)
+        await s.commit()
+    assert captured == [("booking.created", str(ce), "SECRET")]
+    # a second dispatch finds nothing pending (already sent) — no duplicate send
+    async with sessionmaker_fixture() as s:
+        n = await dispatch_once(SqlExecutor(s), _Users(), receiver, clock, 300, 50)
+        await s.commit()
+    assert n == 0
+    assert len(captured) == 1  # ce-id stable, no re-send
+
+
+@pytest.mark.asyncio
 async def test_dispatch_uses_stable_ce_id(sessionmaker_fixture) -> None:
     async with sessionmaker_fixture() as s:
         ce = await _insert_pending(s)
