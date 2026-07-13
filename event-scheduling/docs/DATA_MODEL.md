@@ -6,6 +6,7 @@ Migrations:
 - `alembic/versions/0001_initial.py` — creates the first 8 tables (schedule/event-type domain, slices 1–2).
 - `alembic/versions/0002_booking.py` — adds `booking` + `booking_change_log` (slice 3, write-side bookings); also enables the `btree_gist` extension required by the exclusion constraint below.
 - `alembic/versions/0003_outbox.py` — adds `outbox` (slice 4a, transactional outbox for `booking.lifecycle` CloudEvents).
+- `alembic/versions/0004_booking_reminder_sent.py` — adds `booking.reminder_sent_at` + the partial index `ix_booking_reminder` (slice 4a.3, in-service booking reminders).
 
 11 tables total.
 
@@ -157,10 +158,22 @@ for reschedule — bookings are never deleted, only soft-cancelled or moved).
 | `attendee_time_zone` | `text` | NOT NULL | IANA zone the client booked in (display only; all scheduling math is UTC) |
 | `created_at` | `timestamptz` | NOT NULL, `server_default now()` | |
 | `updated_at` | `timestamptz` | NOT NULL, `server_default now()` | Bumped on reschedule/cancel |
+| `reminder_sent_at` (slice 4a.3) | `timestamptz` | NULLABLE | Set by the reminder poller (`reminders/write_adapter.py::ReminderWriteAdapter.mark_sent`) once the ~1h-before reminder has been dispatched for this booking. `NULL` = not yet reminded (or eligible again). `BookingWriteAdapter.update_times` (reschedule) resets it back to `NULL` in the same `UPDATE` so a moved booking is re-armed for a fresh reminder. |
 
 Indexes: `ix_booking_host (host_user_id, status, start_time)`,
 `ix_booking_event_type (event_type_id, status, start_time)`,
 `ix_booking_client (client_user_id)`.
+
+**`ix_booking_reminder` (slice 4a.3)** — partial index backing the reminder poller's
+poll query:
+```sql
+CREATE INDEX ix_booking_reminder ON booking (start_time)
+  WHERE status = 'confirmed' AND reminder_sent_at IS NULL
+```
+`reminders/read_adapter.py::ReminderReadAdapter.due_bookings` selects confirmed,
+not-yet-reminded bookings with `start_time` in `[now + REMINDER_SHIFT_FROM_MINUTES,
+now + REMINDER_SHIFT_TO_MINUTES]` (default window `[+55m, +65m]`); the partial index
+keeps that scan cheap by excluding already-reminded/cancelled rows entirely.
 
 **`ex_booking_no_overlap` — the no-double-booking guarantee:**
 ```sql
