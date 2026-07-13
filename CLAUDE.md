@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Monorepo Overview
 
-This is a **multi-service event-driven system** for managing bookings and participants. Eleven independent packages share this root directory; each has its own `CLAUDE.md` with service-specific commands and architecture.
+This is a **multi-service event-driven system** for managing bookings and participants. Thirteen independent packages share this root directory; each has its own `CLAUDE.md` with service-specific commands and architecture.
 
 | Service | Language/Stack | Role |
 |---|---|---|
@@ -17,6 +17,7 @@ This is a **multi-service event-driven system** for managing bookings and partic
 | `event-notifier/` | Python, FastAPI, FastStream, asyncpg | Notification dispatcher: consumes `events.notification.commands`, outbox + email/Telegram delivery, publishes delivery-result events |
 | `event-shortener/` | Python, FastAPI | URL shortener (REST, own PostgreSQL); event-booking shortens meeting links via it. Replaced the `/shortify` WireMock stub |
 | `event-scheduling/` | Python, FastAPI | In-house scheduling domain: organizer schedules, event types, hosts, booking limits (replaces cal.com CRM dependency) |
+| `event-booker/` | Python, FastAPI | Public booking BFF: guest→client resolution + booking; holds scheduling/users keys server-side |
 | `event-schemas/` | Python, Pydantic | Shared schema library (payloads, envelope, **canonical RabbitMQ topology**); no runtime service |
 | `jitsi-chat/` | TypeScript, React, Vite | Participant-facing video meeting + chat SPA; Sentry error+perf monitoring (gated, off by default) |
 | `event-db-sync/` | Python, FastAPI, asyncpg, FastStream | Trigger-driven cal.com→event-users sync: `pg_notify` listener, watermark reconcile, full-sync; publishes `user.upserted` directly to RabbitMQ (no event-receiver HTTP hop) |
@@ -88,6 +89,7 @@ Host ports:
 | 8002 | event-admin API |
 | 8003 | event-db-sync API (→ container 8888; `POST /admin/full-sync`, health) |
 | 8004 | event-scheduling API (scheduling domain: schedules, event types, hosts) |
+| 8005 | event-booker (public booking BFF) |
 | 8000 | event-shortener API (REST URL shortener; event-booking calls it) |
 | 3000 | event-admin-frontend (nginx, same-origin proxy to event-admin) |
 | 8080 | jitsi-chat SPA |
