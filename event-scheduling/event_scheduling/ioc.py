@@ -29,6 +29,9 @@ from event_scheduling.publishing.interfaces import IOutboxWriter, IReceiverClien
 from event_scheduling.publishing.outbox_writer import OutboxWriter
 from event_scheduling.publishing.receiver_client import ReceiverClient
 from event_scheduling.publishing.users_client import UsersClient
+from event_scheduling.reminders.interfaces import IReminderReadAdapter, IReminderWriteAdapter
+from event_scheduling.reminders.read_adapter import ReminderReadAdapter
+from event_scheduling.reminders.write_adapter import ReminderWriteAdapter
 from event_scheduling.slots.interfaces import Clock, ISlotService, ISlotsReadAdapter
 from event_scheduling.slots.read_adapter import SlotsReadAdapter
 from event_scheduling.slots.service import SlotService, SystemClock
@@ -115,6 +118,14 @@ class AppProvider(Provider):
     @provide(scope=Scope.REQUEST)
     def provide_outbox_writer(self, sql: ISqlExecutor) -> IOutboxWriter:
         return OutboxWriter(sql)
+
+    @provide(scope=Scope.REQUEST)
+    def provide_reminder_read(self, sql: ISqlExecutor) -> IReminderReadAdapter:
+        return ReminderReadAdapter(sql)
+
+    @provide(scope=Scope.REQUEST)
+    def provide_reminder_write(self, sql: ISqlExecutor) -> IReminderWriteAdapter:
+        return ReminderWriteAdapter(sql)
 
     @provide(scope=Scope.APP)
     def provide_receiver_client(self, settings: Settings) -> IReceiverClient:

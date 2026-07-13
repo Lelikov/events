@@ -18,6 +18,7 @@ from event_scheduling.logger import setup_logger
 from event_scheduling.metrics import HttpMetricsMiddleware
 from event_scheduling.publishing.dispatcher import run_dispatcher_loop
 from event_scheduling.publishing.interfaces import IReceiverClient, IUsersClient
+from event_scheduling.reminders.dispatcher import run_reminder_loop
 from event_scheduling.routers.booking import booking_router
 from event_scheduling.routers.event_type import event_type_router
 from event_scheduling.routers.schedule import schedule_router
@@ -54,13 +55,32 @@ async def lifespan(_: FastAPI) -> AsyncGenerator[None]:
             stop,
         )
     )
+    tasks = [task]
+    if settings.reminder_enabled:
+        tasks.append(
+            asyncio.create_task(
+                run_reminder_loop(
+                    sessionmaker,
+                    users,
+                    receiver,
+                    clock,
+                    interval_s=settings.reminder_interval_seconds,
+                    shift_from_minutes=settings.reminder_shift_from_minutes,
+                    shift_to_minutes=settings.reminder_shift_to_minutes,
+                    batch_size=settings.reminder_batch_size,
+                    stop=stop,
+                )
+            )
+        )
     try:
         yield
     finally:
         stop.set()
-        task.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await task
+        for t in tasks:
+            t.cancel()
+        for t in tasks:
+            with contextlib.suppress(asyncio.CancelledError):
+                await t
         await container.close()
         logger.info("event-scheduling shutdown complete")
 

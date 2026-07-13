@@ -64,7 +64,8 @@ class BookingWriteAdapter:
         try:
             async with self._sql.begin_nested():
                 row = await self._sql.fetch_one(
-                    f"UPDATE booking SET start_time=:s, end_time=:e, updated_at=now() WHERE id=:id RETURNING {_COLS}",  # noqa: S608
+                    f"UPDATE booking SET start_time=:s, end_time=:e, reminder_sent_at=NULL, "  # noqa: S608
+                    f"updated_at=now() WHERE id=:id RETURNING {_COLS}",
                     {"id": booking_id, "s": start, "e": end},
                 )
         except IntegrityError as e:

@@ -82,7 +82,41 @@ outbox row (status='pending', next_attempt_at<=now())
     OUTBOX_MAX_BACKOFF_SECONDS)
 ```
 
-At-least-once delivery: the `ce-id` is stable per outbox row (set once at write time), and event-saver's own idempotency/dedup handles re-delivery on retry. **Additive to cal.com** — this does not touch `/event/calcom`, cal.com webhooks, or any existing producer; it is a second, independent `booking.lifecycle` producer using the *same* generic `/event/booking` endpoint. **event-booking reacts to these bookings as of slice 4a.2** — its composite booking adapter reads cal.com first and, on a miss, falls back to `GET /api/v1/bookings/{id}/detail` on this service, then creates the chat, per-participant Jitsi meeting URLs, and notifications (blacklist/constraints/reject are skipped for scheduling-source bookings). Reminders are still cal.com-only (the reminder scheduler polls the cal.com DB), deferred to **slice 4a.3**.
+At-least-once delivery: the `ce-id` is stable per outbox row (set once at write time), and event-saver's own idempotency/dedup handles re-delivery on retry. **Additive to cal.com** — this does not touch `/event/calcom`, cal.com webhooks, or any existing producer; it is a second, independent `booking.lifecycle` producer using the *same* generic `/event/booking` endpoint. **event-booking reacts to these bookings as of slice 4a.2** — its composite booking adapter reads cal.com first and, on a miss, falls back to `GET /api/v1/bookings/{id}/detail` on this service, then creates the chat, per-participant Jitsi meeting URLs, and notifications (blacklist/constraints/reject are skipped for scheduling-source bookings). **Reminders for these bookings are now in-service too, as of slice 4a.3** — see the "Reminder dispatch flow" section below; the cal.com reminder poller in event-booking is untouched and continues to handle cal.com-sourced bookings.
+
+**Reminder dispatch flow (slice 4a.3 — in-service booking reminders):** A second, independent background poller (`reminders/dispatcher.py::run_reminder_loop`), started alongside the outbox dispatcher in `main.py`'s `lifespan`, sends one ~1h-before reminder per confirmed booking **for bookings created in this service** (booking-write-side, slice 3) — it does not touch cal.com's bookings or its own reminder scheduler.
+
+```
+every REMINDER_INTERVAL_SECONDS tick (default 60s)
+  → reminders/read_adapter.py::ReminderReadAdapter.due_bookings:
+      SELECT confirmed bookings WHERE reminder_sent_at IS NULL
+      AND start_time BETWEEN now()+REMINDER_SHIFT_FROM_MINUTES AND now()+REMINDER_SHIFT_TO_MINUTES
+      (default window [+55m, +65m]; backed by the partial index ix_booking_reminder)
+  → for each due booking: resolve host_user_id/client_user_id → email/name/locale
+    via the existing IUsersClient.by_ids (publishing/users_client.py, same batch call the outbox uses)
+    → skip (log + continue) if either participant can't be resolved
+  → reminders/payload.py::build_reminder_command + build_reminder_sent:
+      POST notification.send_requested (trigger_event=BOOKING_REMINDER, recipients=[organizer, client],
+      template_data) then POST booking.reminder_sent ({booking_uid, email}) — both via the SAME
+      IReceiverClient the outbox dispatcher uses (raw BOOKING_API_KEY, POST /event/booking, ce-source=booking)
+  → reminders/write_adapter.py::ReminderWriteAdapter.mark_sent stamps booking.reminder_sent_at=now()
+    (idempotent: WHERE reminder_sent_at IS NULL, so a redelivered tick can't double-stamp)
+```
+
+- **Reschedule re-arms the reminder.** `BookingWriteAdapter.update_times` (used by
+  `POST /{id}/reschedule`) sets `reminder_sent_at=NULL` in the same `UPDATE` as the
+  time change, so a moved booking becomes eligible for a fresh reminder against its
+  new `start_time`.
+- **`REMINDER_ENABLED` toggle.** When `false`, `main.py` never starts the reminder
+  task at all (the outbox dispatcher is unaffected) — a hard kill-switch, not just a
+  no-op tick.
+- **Reuses existing config/clients** — no new `EVENT_RECEIVER_URL`/`BOOKING_API_KEY`/
+  `EVENT_USERS_URL`/`EVENT_USERS_TOKEN`; the reminder poller shares the same
+  `IReceiverClient`/`IUsersClient` instances the outbox dispatcher uses.
+- **Additive, single-service.** This only covers bookings owned by `event-scheduling`
+  (slice 3 write-side). The cal.com reminder scheduler in `event-booking` (which polls
+  the cal.com DB) is completely untouched — the two reminder paths run independently
+  against disjoint booking sources.
 
 **Layers:**
 
@@ -181,6 +215,30 @@ At-least-once delivery: the `ce-id` is stable per outbox row (set once at write 
   sent/failed/retry) and `run_dispatcher_loop` (the background poll loop wired
   into `main.py`'s lifespan; opens its own session per tick, commits after each
   batch, sleeps interruptibly on a shutdown `asyncio.Event`).
+- **`reminders/dto.py`** — `DueBookingDTO` (frozen): the fields
+  `ReminderReadAdapter.due_bookings` returns per candidate booking (id, event
+  type, host/client user ids, start/end, attendee time zone, event-type title).
+- **`reminders/interfaces.py`** — `IReminderReadAdapter`, `IReminderWriteAdapter`
+  Protocols. Reuses `IUsersClient`/`IReceiverClient` from `publishing/interfaces.py`
+  — no separate client stack for reminders.
+- **`reminders/read_adapter.py`** — `ReminderReadAdapter.due_bookings`: selects
+  confirmed, not-yet-reminded bookings with `start_time` in
+  `[now+shift_from_minutes, now+shift_to_minutes]`, backed by the partial index
+  `ix_booking_reminder`.
+- **`reminders/write_adapter.py`** — `ReminderWriteAdapter.mark_sent`: `UPDATE
+  booking SET reminder_sent_at=:now WHERE id=:id AND reminder_sent_at IS NULL`
+  (idempotent — a second call for an already-reminded booking is a no-op).
+- **`reminders/payload.py`** — `build_reminder_command`/`build_reminder_sent`:
+  pure functions building the `notification.send_requested`
+  (`trigger_event=BOOKING_REMINDER`) and `booking.reminder_sent` CloudEvent
+  headers/bodies; deterministic `ce-id` (`uuid5` of a fixed namespace + booking
+  uid) so redelivery on a crashed tick re-emits the same id.
+- **`reminders/dispatcher.py`** — `remind_once` (one poll batch: load due
+  bookings → resolve participants via `IUsersClient.by_ids` → publish both
+  CloudEvents via `IReceiverClient` → `mark_sent`) and `run_reminder_loop` (the
+  background poll loop wired into `main.py`'s lifespan alongside the outbox
+  dispatcher; own session per tick, commits after each batch, survives a
+  failing tick, sleeps interruptibly on the same shutdown `asyncio.Event`).
 - **`dto/{schedule,event_type}.py`** — frozen dataclasses (`UpsertScheduleDTO`,
   `ScheduleBundleDTO`, `ActorDTO`, `WeeklyHourDTO`, `DateOverrideDTO`, `TravelDTO`,
   `UpsertEventTypeDTO`, `EventTypeDTO`, `HostDTO`, `BookingLimitDTO`).
@@ -201,10 +259,13 @@ At-least-once delivery: the `ce-id` is stable per outbox row (set once at write 
   `IEventTypeController`, `BusyTimesSource` (**`BookingBusyTimesSource`, real**),
   `ISlotsReadAdapter`, `ISlotService`, `IBookingReadAdapter`, `IBookingWriteAdapter`,
   `IOutboxWriter` (`OutboxWriter`), `IBookingService` (now takes `outbox` as a
-  constructor arg). The dispatcher's `run_dispatcher_loop` is started/stopped
-  directly in `main.py`'s `lifespan` (not itself a Dishka-provided service) —
-  it pulls `Settings`/`async_sessionmaker`/`IUsersClient`/`IReceiverClient`/`Clock`
-  out of the container once at startup.
+  constructor arg), `IReminderReadAdapter` (`ReminderReadAdapter`),
+  `IReminderWriteAdapter` (`ReminderWriteAdapter`). Both the outbox dispatcher's
+  `run_dispatcher_loop` and the reminder poller's `run_reminder_loop` are
+  started/stopped directly in `main.py`'s `lifespan` (neither is itself a
+  Dishka-provided service) — each pulls `Settings`/`async_sessionmaker`/
+  `IUsersClient`/`IReceiverClient`/`Clock` out of the container once at startup
+  and constructs its own read/write adapters per tick from a fresh session.
 - **`db/models.py`** — SQLAlchemy ORM models (11 tables); used by Alembic only.
 
 ## Database Tables (11)
@@ -272,6 +333,11 @@ failure mode to these endpoints.
 | `OUTBOX_DISPATCH_INTERVAL` | Seconds between dispatcher poll ticks (default `5.0`) |
 | `OUTBOX_BATCH_SIZE` | Max outbox rows claimed per tick (default `50`) |
 | `OUTBOX_MAX_BACKOFF_SECONDS` | Cap on the exponential retry backoff (default `300`) |
+| `REMINDER_ENABLED` | Kill-switch for the reminder poller (default `true`); when `false`, `main.py` never starts the reminder background task |
+| `REMINDER_INTERVAL_SECONDS` | Seconds between reminder poll ticks (default `60`) |
+| `REMINDER_SHIFT_FROM_MINUTES` | Lower bound of the "due soon" window, minutes before `start_time` (default `55`) |
+| `REMINDER_SHIFT_TO_MINUTES` | Upper bound of the "due soon" window, minutes before `start_time` (default `65`) |
+| `REMINDER_BATCH_SIZE` | Max due bookings claimed per reminder tick (default `100`; not overridden in `docker-compose.services.yml`, default is used) |
 
 ## ETL from cal.com
 
@@ -325,8 +391,13 @@ through the same Protocol.
   on this service when a `booking_uid` isn't in the cal.com DB. On a scheduling-source
   booking it creates the GetStream chat, mints per-participant Jitsi meeting URLs, and
   sends notifications — skipping the blacklist/constraints/reject sub-flow (those apply to
-  cal.com bookings only; scheduling bookings are pre-validated upstream). **Reminders remain
-  cal.com-only** (the reminder scheduler still polls the cal.com DB) — deferred to slice 4a.3.
+  cal.com bookings only; scheduling bookings are pre-validated upstream).
+- **Reminders are now in-service too (slice 4a.3).** A second background poller
+  (`reminders/dispatcher.py::run_reminder_loop`) sends one ~1h-before reminder per
+  confirmed booking owned by this service — see the "Reminder dispatch flow" section
+  above. This is additive: the cal.com reminder scheduler in `event-booking` (which
+  still polls the cal.com DB directly) is untouched and keeps handling cal.com-sourced
+  bookings; the two reminder paths are independent and cover disjoint booking sources.
 - **`EVENT_USERS_TOKEN` is a real deploy prerequisite, not just a default.** event-users'
   `POST /api/users/by-ids` is gated by `require_admin`; a wrong/absent/non-admin token
   401s. `UsersClient.by_ids` turns that into an `httpx.HTTPStatusError` via

@@ -91,14 +91,14 @@ Payload contracts per type: `event_schemas.mapping.PAYLOAD_MODELS` and
 | `booking.rescheduled` | cal.com / event-receiver; **also event-scheduling (`/event/booking`, slice 4a, additive)**¹ | event-saver, event-booking | `events.booking.lifecycle` | 10 (CRITICAL) | `BookingRescheduledPayload` |
 | `booking.reassigned` | event-receiver | event-saver, event-booking | `events.booking.lifecycle` | 10 (CRITICAL) | `BookingReassignedPayload` |
 | `booking.cancelled` | cal.com / event-receiver; **also event-scheduling (`/event/booking`, slice 4a, additive)**¹ | event-saver, event-booking | `events.booking.lifecycle` | 10 (CRITICAL) | `BookingCancelledPayload` |
-| `booking.reminder_sent` | (no producer today; kept for saver routing) | event-saver, event-booking | `events.booking.lifecycle` | 7 (HIGH) | `BookingReminderSentPayload` |
+| `booking.reminder_sent` | event-booking (cal.com bookings); **also event-scheduling (`/event/booking`, slice 4a.3, additive, its own bookings)**² | event-saver, event-booking | `events.booking.lifecycle` | 7 (HIGH) | `BookingReminderSentPayload` |
 | `booking.rejected` | event-booking (via event-receiver) | event-saver, event-booking | `events.booking.lifecycle` | 10 (CRITICAL) | `BookingRejectedPayload` |
 | `chat.created` | event-booking (via event-receiver) | event-saver | `events.chat.lifecycle` | 5 (NORMAL) | `ChatCreatedPayload` |
 | `chat.deleted` | event-booking (via event-receiver) | event-saver | `events.chat.lifecycle` | 5 (NORMAL) | `ChatDeletedPayload` |
 | `chat.message_sent` | event-receiver | event-saver | `events.chat.activity` | 5 (NORMAL) | `ChatMessageSentPayload` |
 | `meeting.url_created` | event-booking (via event-receiver) | event-saver | `events.meeting.lifecycle` | 5 (NORMAL) | `MeetingUrlCreatedPayload` |
 | `meeting.url_deleted` | event-booking (via event-receiver) | event-saver | `events.meeting.lifecycle` | 5 (NORMAL) | `MeetingUrlDeletedPayload` |
-| `notification.send_requested` | event-booking (via event-receiver) | event-notifier | `events.notification.commands` | 7 (HIGH) | `NotificationCommandPayload` |
+| `notification.send_requested` | event-booking (via event-receiver); **also event-scheduling (`/event/booking`, slice 4a.3, additive, `trigger_event=BOOKING_REMINDER` only)**² | event-notifier | `events.notification.commands` | 7 (HIGH) | `NotificationCommandPayload` |
 | `notification.email.message_sent` | event-notifier (via event-receiver) | event-saver | `events.notification.delivery` | 7 (HIGH) | `EmailNotificationPayload` |
 | `notification.telegram.message_sent` | event-notifier (via event-receiver) | event-saver | `events.notification.delivery` | 7 (HIGH) | `TelegramNotificationPayload` |
 | `notification.push.message_sent` | event-notifier (push channel pending FCM credentials) | event-saver | `events.notification.delivery` | 5 (NORMAL) | `PushNotificationPayload` |
@@ -155,6 +155,32 @@ only; scheduling bookings are pre-validated upstream). **Reminders remain cal.co
 (the reminder scheduler still polls the cal.com DB) — deferred to slice 4a.3.
 event-saver's projections continue to cover both producers.
 See `event-scheduling/CLAUDE.md` and `event-scheduling/docs/SERVICE_OVERVIEW.md`.
+
+² **event-scheduling as an additive reminder producer (slice 4a.3).** A second,
+independent background poller (`event-scheduling/event_scheduling/reminders/`) sends
+one ~1h-before reminder per **confirmed booking owned by event-scheduling itself**
+(the write-side bookings from slice 3, not cal.com's). Each tick selects bookings
+with `status='confirmed'`, `reminder_sent_at IS NULL`, and `start_time` in
+`[now+55m, now+65m]` (configurable via `REMINDER_SHIFT_FROM_MINUTES`/
+`REMINDER_SHIFT_TO_MINUTES`), resolves the host/client via the same `IUsersClient`
+the outbox dispatcher uses, then publishes **two** CloudEvents through the same
+`IReceiverClient`/`POST /event/booking` contract as the outbox: a
+`notification.send_requested` command (`trigger_event=BOOKING_REMINDER`, recipients
+`[{email, role, locale?}]` for organizer + client, `template_data`) and a
+`booking.reminder_sent` event (`{booking_uid, email}` — the client's email). Both
+carry `ce-source: booking`, so they route identically to cal.com-sourced reminders:
+`notification.send_requested` → `events.notification.commands` (event-notifier),
+`booking.reminder_sent` → `events.booking.lifecycle` (event-saver, event-booking).
+The reminder command shape matches event-booking's byte-for-byte (same recipient
+dict shape, same `trigger_event`, same body keys) so event-notifier's processing is
+source-agnostic — it cannot tell a cal.com reminder from an event-scheduling one.
+After both events are accepted, the booking's `reminder_sent_at` is stamped so the
+poller never re-sends; a reschedule nulls it out again so the moved booking gets a
+fresh reminder. **Additive**: this does not touch event-booking's own cal.com
+reminder scheduler (which still polls the cal.com DB directly for cal.com bookings)
+— the two reminder paths are independent and cover disjoint booking sources. See
+`event-scheduling/CLAUDE.md` § "Reminder dispatch flow" and
+`event-scheduling/docs/DATA_MODEL.md` (`booking.reminder_sent_at`, `ix_booking_reminder`).
 
 **Source:** `event-schemas/event_schemas/queues.py`, `event-schemas/event_schemas/types.py`
 
@@ -394,8 +420,11 @@ is a raw shared secret rather than `X-API-Key`. The rest of the flow — routing
 fan-out, event-saver projection — is identical and shared with cal.com's flow. As of
 slice 4a.2 event-booking (the `EN`/chat/meeting box) also acts on events sourced this
 way: its composite adapter pulls `GET /api/v1/bookings/{uid}/detail` from event-scheduling
-when the uid isn't in cal.com, then provisions chat/Jitsi/notifications (reminders stay
-cal.com-only, deferred to 4a.3). See footnote ¹ above.
+when the uid isn't in cal.com, then provisions chat/Jitsi/notifications. As of slice 4a.3
+event-scheduling also runs its own reminder poller for these bookings, publishing
+`notification.send_requested`/`booking.reminder_sent` through the same `/event/booking`
+contract — independent of event-booking's cal.com reminder scheduler. See footnotes ¹
+and ² above.
 
 ---
 
