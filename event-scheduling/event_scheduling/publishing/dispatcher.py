@@ -64,10 +64,14 @@ async def _mark_retry(
 async def _resolve_participants(
     sql: ISqlExecutor, row: RowMapping, users: IUsersClient, clock: Clock, max_backoff_s: int
 ) -> tuple | None:
-    """Resolve host/client emails via event-users. Returns (host, client) or None on transient failure."""
+    """Resolve host/client emails via event-users. Returns (host, client) or None on failure."""
     payload = row["payload"]
-    host_id = UUID(payload["host_user_id"])
-    client_id = UUID(payload["client_user_id"])
+    try:
+        host_id = UUID(payload["host_user_id"])
+        client_id = UUID(payload["client_user_id"])
+    except (KeyError, ValueError) as exc:
+        await _mark_failed(sql, row["id"], f"malformed-payload:{exc}")
+        return None
     try:
         resolved = await users.by_ids([host_id, client_id])
     except Exception as exc:  # noqa: BLE001 - transient users-service failure, retry
