@@ -18,6 +18,7 @@ from event_booker.errors import (
 from event_booker.ioc import AppProvider
 from event_booker.logger import setup_logger
 from event_booker.metrics import HttpMetricsMiddleware
+from event_booker.routers.public import public_router
 from event_booker.routes import root_router
 from event_booker.telemetry import instrument_fastapi, setup_tracing
 
@@ -33,6 +34,7 @@ setup_tracing()
 instrument_fastapi(app)
 setup_dishka(container=container, app=app)
 app.include_router(root_router)
+app.include_router(public_router)
 app.add_middleware(HttpMetricsMiddleware)
 
 if _settings.cors_origins_list:
