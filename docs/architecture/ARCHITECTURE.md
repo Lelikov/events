@@ -21,6 +21,7 @@ An event-driven microservices system for managing bookings, participants, and no
 | event-notifier | Notification dispatcher: consumes `events.notification.commands`, transactional outbox, email/Telegram delivery, publishes `notification.*.message_sent` delivery results back via event-receiver | Python 3.14, FastAPI, FastStream, asyncpg, Dishka, Jinja2 | 80 |
 | event-shortener | REST URL shortener: shortens meeting links for event-booking (`POST/GET/PATCH/DELETE /api/v1/urls/*` + public `GET /{ident}` redirect), own PostgreSQL. Replaced the `/shortify` WireMock stub | Python 3.14, FastAPI, SQLAlchemy 2.x, Alembic, Dishka | — |
 | event-scheduling | **Scheduling domain model + slot engine + write-side bookings + booking→events outbox** (slices 1–4a of cal.com replacement): organizer schedules, event types, hosts, booking limits; `GET /api/v1/slots` returns available slots (weekly/override/travel/DST; busy source is real, buffer-expanded); `POST /api/v1/bookings` + cancel/reschedule/history, DB exclusion constraint prevents double-booking, round-robin host assignment, booking-limit enforcement; a transactional `outbox` + background dispatcher publishes `booking.lifecycle` CloudEvents to event-receiver `POST /event/booking` (additive alongside cal.com — same endpoint, same event types; event-saver projects them, event-booking chat/Jitsi integration is deferred to slice 4a.2). Own PostgreSQL (`event_scheduling`). One-time ETL from cal.com. No RabbitMQ — purely HTTP in and out (dispatcher makes outbound HTTP calls to event-receiver + event-users). | Python 3.14, FastAPI, SQLAlchemy 2.x, Alembic, Dishka | 111 |
+| event-booker | **Public booking BFF** (slice 4b.1): stateless FastAPI service in front of event-scheduling and event-users, the **public trust boundary** for guest bookings — holds `SCHEDULING_API_KEY`/`EVENT_USERS_TOKEN` server-side and exposes 4 unauthenticated `/api/public/*` endpoints (list event types, get event type, get slots, create booking) that resolve-or-create the guest as a `client` user then create the booking. No DB, no RabbitMQ, no background tasks; frontend (slice 4b.2) not yet built. | Python 3.14, FastAPI, httpx, Dishka | 23 |
 | event-schemas | Shared Python library (v0.2.0): Pydantic payload models, EventType enum, priorities, **canonical RabbitMQ topology** (`queues.py`), envelope (`envelope.py`), CloudEvent attributes | Python, Pydantic v2 | 73 |
 | event-db-sync | Trigger-driven cal.com→event-users sync: applies an additive `AFTER INSERT/UPDATE` NOTIFY trigger on cal.com `"Attendee"`/`"users"`, listens on `pg_notify('user_sync')`, runs a watermark reconcile sweep + `POST /admin/full-sync`, and publishes `user.upserted` directly to RabbitMQ; own `sync_state` DB | Python 3.14, FastAPI, asyncpg, FastStream | — |
 
@@ -130,6 +131,15 @@ upserts the user, and publishes `user.synced` **directly to RabbitMQ** on the ne
 `events.user.synced` queue; event-saver backfills `bookings.{organizer,client}_user_id` by
 participant email. A watermark reconcile sweep (own `sync_state` DB) plus `POST /admin/full-sync`
 re-emit rows missed during downtime / force a full cutover pass.
+
+**Public booking BFF (event-booker, slice 4b.1):** `event-booker` is the **public trust boundary**
+in front of `event-scheduling` and `event-users` — the only service in this system designed to be
+called directly by an untrusted public browser:
+`public browser → event-booker (holds keys) → event-scheduling + event-users`. It holds
+`SCHEDULING_API_KEY`/`EVENT_USERS_TOKEN` server-side and exposes 4 unauthenticated
+`/api/public/*` endpoints; response schemas are hand-mapped from internal DTOs so upstream ids
+(`client_user_id`/`host_user_id`) and raw upstream bodies never reach the browser. No DB, no
+RabbitMQ. The public frontend that will call these endpoints (slice 4b.2) does not exist yet.
 
 ## Key Architectural Decisions
 

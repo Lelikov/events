@@ -551,6 +551,32 @@ structure, and only via an additive trigger.
 
 ---
 
+## event-booker (public booking BFF)
+
+`event-booker` (slice 4b.1, port 8005) is a stateless FastAPI **BFF
+(Backend-for-Frontend)** in front of `event-scheduling` and `event-users`. It exposes an
+**unauthenticated public API** so an eventual public browser client can turn a guest (name +
+email) into a scheduling booking, without the browser ever holding
+`SCHEDULING_API_KEY`/`EVENT_USERS_TOKEN` — the BFF holds both server-side.
+
+**The 4 public endpoints** (all under `/api/public`, no auth):
+- `GET /event-types` — list bookable event types
+- `GET /event-types/{id}` — single event type
+- `GET /slots?event_type_id=&start=&end=&time_zone=` — available slots for an event type
+- `POST /bookings` — body `{event_type_id, name, email, start_time, time_zone}`; resolves-or-creates
+  the guest as a `client` user (`event-users GET /api/users/by-identity` → `POST /api/users` on
+  miss), then creates the booking (`event-scheduling POST /api/v1/bookings`, header
+  `actor_source: booker`); `201` with a confirmation that carries no internal user ids
+
+Upstream calls: `SchedulingClient` (Bearer `SCHEDULING_API_KEY` → event-scheduling's
+`/api/v1/event-types*`, `/api/v1/slots`, `/api/v1/bookings`) and `UsersClient` (Bearer
+`EVENT_USERS_TOKEN` → event-users' `/api/users/by-identity`, `/api/users`). No database, no
+RabbitMQ, no background tasks.
+
+**Next up**: the public-facing frontend that calls these endpoints is slice 4b.2 — not built yet.
+
+---
+
 ## Minimum Viable Setup
 
 Not every service is needed for every task. Use this table to decide what to run:
