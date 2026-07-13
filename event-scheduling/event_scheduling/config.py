@@ -31,6 +31,13 @@ class Settings(BaseSettings):
     outbox_batch_size: int = 50
     outbox_max_backoff_seconds: int = 300
 
+    # Reminders (slice 4a.3): in-service poller emits one ~1h-before reminder per confirmed booking.
+    reminder_enabled: bool = True
+    reminder_interval_seconds: float = 60.0
+    reminder_shift_from_minutes: int = 55
+    reminder_shift_to_minutes: int = 65
+    reminder_batch_size: int = 100
+
     @field_validator("log_level")
     @classmethod
     def validate_log_level(cls, v: str) -> str:
