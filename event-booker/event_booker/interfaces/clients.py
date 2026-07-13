@@ -1,0 +1,19 @@
+from datetime import datetime
+from typing import Protocol
+from uuid import UUID
+
+from event_booker.dto import BookingResult, EventTypeDTO, SlotsResult
+
+
+class ISchedulingClient(Protocol):
+    async def list_event_types(self) -> list[EventTypeDTO]: ...
+    async def get_event_type(self, event_type_id: UUID) -> EventTypeDTO: ...
+    async def get_slots(self, event_type_id: UUID, start: datetime, end: datetime, time_zone: str) -> SlotsResult: ...
+    async def create_booking(
+        self, event_type_id: UUID, client_user_id: UUID, start_time: datetime, attendee_time_zone: str
+    ) -> BookingResult: ...
+
+
+class IUsersClient(Protocol):
+    async def get_client_by_email(self, email: str) -> UUID | None: ...
+    async def create_client(self, email: str, name: str, time_zone: str) -> UUID: ...
