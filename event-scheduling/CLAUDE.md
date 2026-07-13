@@ -158,7 +158,8 @@ At-least-once delivery: the `ce-id` is stable per outbox row (set once at write 
   host on conflict → append change-log row), `cancel` (soft, idempotent), `reschedule`
   (in-place, same host only, re-checks availability excluding its own booking),
   `get`/`list_by`/`history`.
-- **`publishing/dto.py`** — frozen dataclasses: `ParticipantInfo` (email, time_zone),
+- **`publishing/dto.py`** — frozen dataclasses: `ParticipantInfo` (email, time_zone, name, locale — the
+  latter two default to `None` so existing `ParticipantInfo(email, tz)` call sites keep working),
   `OutboxRow` (id, event_ce_id, event_type, booking_uid, payload, status, attempts,
   next_attempt_at).
 - **`publishing/interfaces.py`** — `IOutboxWriter`, `IReceiverClient`, `IUsersClient`
