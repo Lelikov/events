@@ -60,6 +60,30 @@ the `events` monorepo (slices 1–3 delivered; see `docs/SERVICE_OVERVIEW.md`).
 **Request flow (bookings, slice 3):**
 `routers/booking.py` → `BookingService` (`booking/service.py`) → `IBookingReadAdapter`/`IBookingWriteAdapter` (`booking/read_adapter.py`, `booking/write_adapter.py`) + `BookingBusyTimesSource` (`booking/busy_source.py`) + `ISlotsReadAdapter` (reused from slice 2, to load the event-type/host/schedule bundle) → `adapters/sql.py` → PostgreSQL
 
+**Outbox dispatch flow (slice 4a — booking→events integration):**
+`BookingService.create`/`reschedule`/`cancel` writes an `outbox` row (`publishing/outbox_writer.py::OutboxWriter.write`) in the **same transaction** as the booking mutation (same `AsyncSession`, so it can never be lost independently of the booking write). A background dispatcher task, started in `main.py`'s `lifespan` (not a request path — no RabbitMQ, no FastStream), polls on an interval:
+
+```
+outbox row (status='pending', next_attempt_at<=now())
+  → publishing/dispatcher.py::dispatch_once (SELECT ... FOR UPDATE SKIP LOCKED, batched)
+    → resolve host_user_id/client_user_id → email/time_zone via event-users
+      POST /api/users/by-ids (publishing/users_client.py::UsersClient, Bearer EVENT_USERS_TOKEN)
+    → build a booking.created|rescheduled|cancelled CloudEvent (publishing/payload.py::build_cloudevent,
+      ce-id = the row's stable event_ce_id set at write time)
+    → POST /event/booking on event-receiver (publishing/receiver_client.py::ReceiverClient,
+      raw shared-secret Authorization: BOOKING_API_KEY — same contract/endpoint an external booking
+      service already uses; NOT "Bearer ...", matches event-receiver's ingest_booking auth)
+    → event-receiver routes it into events.booking.lifecycle same as any other booking.* event
+      → event-saver projects it (bookings/events/participants tables)
+  → 202 from event-receiver: row → 'sent'
+  → 400/401 from event-receiver, or a malformed outbox payload: row → 'failed' (no further retries)
+  → any other outcome (network error, other HTTP status, event-users failure/email not found):
+    row stays 'pending', attempts+=1, next_attempt_at = now + backoff (5*2^attempts, capped at
+    OUTBOX_MAX_BACKOFF_SECONDS)
+```
+
+At-least-once delivery: the `ce-id` is stable per outbox row (set once at write time), and event-saver's own idempotency/dedup handles re-delivery on retry. **Additive to cal.com** — this does not touch `/event/calcom`, cal.com webhooks, or any existing producer; it is a second, independent `booking.lifecycle` producer using the *same* generic `/event/booking` endpoint. **event-booking (chat creation, Jitsi meeting URLs, reminders) is currently a no-op for these bookings** — it resolves booking details by reading the cal.com DB keyed on `booking_uid`, and an `event-scheduling` booking never has a cal.com row. Making event-booking read/act on the CloudEvent payload directly (instead of the cal.com DB) is deferred to **slice 4a.2** — until then, only event-saver's projections reflect `event-scheduling` bookings downstream.
+
 **Layers:**
 
 - **`routers/schedule.py`** — schedule endpoints (`PUT/GET /{owner_user_id}`,
@@ -134,6 +158,28 @@ the `events` monorepo (slices 1–3 delivered; see `docs/SERVICE_OVERVIEW.md`).
   host on conflict → append change-log row), `cancel` (soft, idempotent), `reschedule`
   (in-place, same host only, re-checks availability excluding its own booking),
   `get`/`list_by`/`history`.
+- **`publishing/dto.py`** — frozen dataclasses: `ParticipantInfo` (email, time_zone),
+  `OutboxRow` (id, event_ce_id, event_type, booking_uid, payload, status, attempts,
+  next_attempt_at).
+- **`publishing/interfaces.py`** — `IOutboxWriter`, `IReceiverClient`, `IUsersClient`
+  Protocols.
+- **`publishing/payload.py`** — `build_cloudevent`: pure function mapping
+  `(event_type, booking_uid, ce_id, payload, host, client, now)` →
+  `(ce_headers, body)` for `booking.created`/`booking.rescheduled`/`booking.cancelled`;
+  no IO, dict-driven per-type body builders (no `elif`).
+- **`publishing/outbox_writer.py`** — `OutboxWriter`: inserts one `outbox` row via
+  the request's own `ISqlExecutor`/`AsyncSession` — runs inside the caller's
+  transaction, so the row commits or rolls back atomically with the booking write.
+- **`publishing/receiver_client.py`** — `ReceiverClient`: POSTs to event-receiver
+  `/event/booking` with the raw `BOOKING_API_KEY` in `Authorization` (not `Bearer`).
+- **`publishing/users_client.py`** — `UsersClient`: POSTs to event-users
+  `/api/users/by-ids` with `Authorization: Bearer EVENT_USERS_TOKEN`; missing ids
+  are silently absent from the result map (never an error).
+- **`publishing/dispatcher.py`** — `dispatch_once` (one poll batch:
+  `SELECT ... FOR UPDATE SKIP LOCKED`, resolve → build → publish → mark
+  sent/failed/retry) and `run_dispatcher_loop` (the background poll loop wired
+  into `main.py`'s lifespan; opens its own session per tick, commits after each
+  batch, sleeps interruptibly on a shutdown `asyncio.Event`).
 - **`dto/{schedule,event_type}.py`** — frozen dataclasses (`UpsertScheduleDTO`,
   `ScheduleBundleDTO`, `ActorDTO`, `WeeklyHourDTO`, `DateOverrideDTO`, `TravelDTO`,
   `UpsertEventTypeDTO`, `EventTypeDTO`, `HostDTO`, `BookingLimitDTO`).
@@ -148,14 +194,19 @@ the `events` monorepo (slices 1–3 delivered; see `docs/SERVICE_OVERVIEW.md`).
   `hmac.compare_digest`; gates the `/api/v1` router only.
 - **`metrics.py`** — Prometheus: HTTP RED middleware.
 - **`ioc.py`** — Dishka container. APP scope: `Settings`, `AsyncEngine`,
-  `async_sessionmaker`, `Clock` (SystemClock). REQUEST scope: `AsyncSession`,
+  `async_sessionmaker`, `Clock` (SystemClock), `IReceiverClient` (`ReceiverClient`),
+  `IUsersClient` (`UsersClient`). REQUEST scope: `AsyncSession`,
   `ISqlExecutor`, `IScheduleDBAdapter`, `IScheduleController`, `IEventTypeDBAdapter`,
   `IEventTypeController`, `BusyTimesSource` (**`BookingBusyTimesSource`, real**),
   `ISlotsReadAdapter`, `ISlotService`, `IBookingReadAdapter`, `IBookingWriteAdapter`,
-  `IBookingService`.
-- **`db/models.py`** — SQLAlchemy ORM models (10 tables); used by Alembic only.
+  `IOutboxWriter` (`OutboxWriter`), `IBookingService` (now takes `outbox` as a
+  constructor arg). The dispatcher's `run_dispatcher_loop` is started/stopped
+  directly in `main.py`'s `lifespan` (not itself a Dishka-provided service) —
+  it pulls `Settings`/`async_sessionmaker`/`IUsersClient`/`IReceiverClient`/`Clock`
+  out of the container once at startup.
+- **`db/models.py`** — SQLAlchemy ORM models (11 tables); used by Alembic only.
 
-## Database Tables (10)
+## Database Tables (11)
 
 | Table | Description |
 |-------|-------------|
@@ -169,6 +220,7 @@ the `events` monorepo (slices 1–3 delivered; see `docs/SERVICE_OVERVIEW.md`).
 | `schedule_change_log` | Append-only audit log: JSONB snapshot of the full schedule bundle written on every PUT. No FK to schedule (survives delete). |
 | `booking` (slice 3) | One row per booking. `EXCLUDE USING gist (host_user_id WITH =, tstzrange(start_time, end_time) WITH &&) WHERE status='confirmed'` — DB-enforced no-double-booking per host, race-safe under concurrency. FK→event_type RESTRICT. |
 | `booking_change_log` (slice 3) | Append-only transition log (`created`/`rescheduled`/`cancelled`) per booking, written in the same statement as the mutation. No FK to `booking` (kept for parity with `schedule_change_log`'s survive-delete pattern, though bookings are soft-cancelled, never deleted). |
+| `outbox` (slice 4a) | Transactional outbox for `booking.lifecycle` CloudEvents. One row per booking mutation, written in the same transaction. `status` IN `('pending','sent','failed')`; `event_type` IN `('booking.created','booking.rescheduled','booking.cancelled')`; `event_ce_id` is the stable `ce-id` used for at-least-once dedup downstream; `next_attempt_at`/`attempts`/`last_error` drive the backoff retry loop. No FK (booking identity is carried as `booking_uid` text, not a DB FK, so the outbox row survives independent of the booking row's lifecycle). Index `ix_outbox_dispatch (status, next_attempt_at)` backs the dispatcher's poll query. |
 
 ## Endpoints
 
@@ -196,6 +248,13 @@ the `events` monorepo (slices 1–3 delivered; see `docs/SERVICE_OVERVIEW.md`).
 
 Error codes: `422 ValidationError`, `404 NotFoundError`, `409 ConflictError`.
 
+**Slice 4a:** `POST /api/v1/bookings`, `POST /{id}/cancel`, and `POST /{id}/reschedule`
+each write an `outbox` row in the same transaction as the booking mutation. The HTTP
+response is unaffected either way — publishing to the events pipeline happens
+asynchronously, out-of-band, via the background dispatcher (see `publishing/dispatcher.py`
+above); a slow or unreachable event-receiver/event-users never adds latency or a
+failure mode to these endpoints.
+
 ## Configuration
 
 | Env var | Meaning |
@@ -204,6 +263,13 @@ Error codes: `422 ValidationError`, `404 NotFoundError`, `409 ConflictError`.
 | `SCHEDULING_API_KEY` | Static bearer key gating `/api/v1/*` |
 | `LOG_LEVEL` | Log level (default `INFO`) |
 | `DEBUG` | Console log rendering (default `false`) |
+| `EVENT_RECEIVER_URL` | Base URL of event-receiver, e.g. `http://event-receiver:8888` (dispatcher only) |
+| `BOOKING_API_KEY` | Raw shared secret sent in `Authorization` (not `Bearer`) to event-receiver `POST /event/booking` — **must match** event-receiver's own `BOOKING_API_KEY` (dispatcher only) |
+| `EVENT_USERS_URL` | Base URL of event-users, e.g. `http://event-users:8888` (dispatcher only) |
+| `EVENT_USERS_TOKEN` | `Authorization: Bearer` token for event-users `POST /api/users/by-ids`, gated by `require_admin` — **needs a real admin token** in any environment where email resolution must succeed (dispatcher only); see `docs/DEPENDENCIES.md` |
+| `OUTBOX_DISPATCH_INTERVAL` | Seconds between dispatcher poll ticks (default `5.0`) |
+| `OUTBOX_BATCH_SIZE` | Max outbox rows claimed per tick (default `50`) |
+| `OUTBOX_MAX_BACKOFF_SECONDS` | Cap on the exponential retry backoff (default `300`) |
 
 ## ETL from cal.com
 
@@ -239,13 +305,39 @@ through the same Protocol.
 - `booking_limit` rows (`booking_count`/`booking_duration`, per `day`/`week`/`month`/`year` in the assigned host's schedule time zone) are enforced on `POST /api/v1/bookings` — see `booking/limits.py`.
 - Round-robin host assignment (`booking/assignment.py`) is active: fewest future confirmed bookings first, then never-assigned before assigned, then oldest `last_assigned_at`.
 - The pure core (`slots/domain.py`, `slots/timezones.py`) is IO-free and extractable; reused unmodified by `BookingService`.
-- **Still deferred:** no RabbitMQ/CloudEvents (booking is HTTP-only; publishing `booking.lifecycle` to the events pipeline — chat/Jitsi/notifications — is slice 4). No slot caching. No reservations/holds (create is re-validate-then-insert, race-safe only via the DB exclusion constraint).
+- No slot caching. No reservations/holds (create is re-validate-then-insert, race-safe only via the DB exclusion constraint).
+
+**Slice-4a maturity notes (booking→events outbox integration):**
+- Booking mutations now publish `booking.created`/`booking.rescheduled`/`booking.cancelled`
+  CloudEvents via a transactional outbox + background dispatcher — see `publishing/`
+  above and the "Outbox dispatch flow" section. Still no RabbitMQ/FastStream consumer
+  in this service — it is purely a producer, over plain HTTP, still no message broker.
+- **Additive to cal.com**: `/event/calcom`, the cal.com webhook signature flow, and
+  all existing producers are untouched. `event-scheduling` is a second, independent
+  `booking.lifecycle` producer using the same generic `/event/booking` endpoint that
+  an external booking service already targets.
+- **Consumer at this slice = event-saver only.** event-saver's projections (bookings/
+  events/participants tables) reflect `event-scheduling` bookings correctly.
+- **event-booking is a no-op for these bookings, by design of this slice — not a bug.**
+  event-booking resolves booking context by reading the cal.com DB keyed on
+  `booking_uid`; an `event-scheduling` booking has no cal.com row, so chat creation,
+  Jitsi meeting URLs, and reminder scheduling do not happen for it. Wiring event-booking
+  to act on the CloudEvent payload directly is **slice 4a.2**, not yet built.
+- **`EVENT_USERS_TOKEN` is a real deploy prerequisite, not just a default.** event-users'
+  `POST /api/users/by-ids` is gated by `require_admin`; a wrong/absent/non-admin token
+  401s. `UsersClient.by_ids` turns that into an `httpx.HTTPStatusError` via
+  `raise_for_status()`, which the dispatcher's generic `except Exception` treats as a
+  transient failure — it retries with backoff rather than marking the row `failed`
+  (the `{400, 401}` → `failed` short-circuit in `dispatcher.py` only applies to the
+  *event-receiver* response, not to `UsersClient`). Net effect: without a valid admin
+  token, outbox rows for real bookings retry forever and never reach `sent` — see
+  `docs/DEPENDENCIES.md`.
 
 ## Service Documentation
 
 - `docs/SERVICE_OVERVIEW.md` — architecture, maturity, replacement roadmap
 - `docs/API_CONTRACTS.md` — HTTP endpoints, request/response schemas
-- `docs/DATA_MODEL.md` — 10 tables with columns and constraints
+- `docs/DATA_MODEL.md` — 11 tables with columns and constraints
 - `docs/DEPENDENCIES.md` — runtime dependencies and failure modes
 - `docs/AUDIT.md` — audit findings for this service
 

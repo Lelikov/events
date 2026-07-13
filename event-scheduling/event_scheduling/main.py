@@ -1,3 +1,5 @@
+import asyncio
+import contextlib
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from logging import getLevelNamesMapping
@@ -7,17 +9,21 @@ from dishka import make_async_container
 from dishka.integrations.fastapi import FastapiProvider, setup_dishka
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from event_scheduling.config import Settings
 from event_scheduling.errors import ConflictError, NotFoundError, ValidationError
 from event_scheduling.ioc import AppProvider
 from event_scheduling.logger import setup_logger
 from event_scheduling.metrics import HttpMetricsMiddleware
+from event_scheduling.publishing.dispatcher import run_dispatcher_loop
+from event_scheduling.publishing.interfaces import IReceiverClient, IUsersClient
 from event_scheduling.routers.booking import booking_router
 from event_scheduling.routers.event_type import event_type_router
 from event_scheduling.routers.schedule import schedule_router
 from event_scheduling.routers.slots import slots_router
 from event_scheduling.routes import root_router
+from event_scheduling.slots.interfaces import Clock
 from event_scheduling.telemetry import instrument_asyncpg, instrument_fastapi, setup_tracing
 
 
@@ -30,9 +36,33 @@ async def lifespan(_: FastAPI) -> AsyncGenerator[None]:
     settings = await container.get(Settings)
     setup_logger(log_level=getLevelNamesMapping().get(settings.log_level), console_render=settings.debug)
     logger.info("Starting event-scheduling", log_level=settings.log_level, debug=settings.debug)
-    yield
-    await container.close()
-    logger.info("event-scheduling shutdown complete")
+
+    sessionmaker = await container.get(async_sessionmaker[AsyncSession])
+    users = await container.get(IUsersClient)
+    receiver = await container.get(IReceiverClient)
+    clock = await container.get(Clock)
+    stop = asyncio.Event()
+    task = asyncio.create_task(
+        run_dispatcher_loop(
+            sessionmaker,
+            users,
+            receiver,
+            clock,
+            settings.outbox_dispatch_interval,
+            settings.outbox_max_backoff_seconds,
+            settings.outbox_batch_size,
+            stop,
+        )
+    )
+    try:
+        yield
+    finally:
+        stop.set()
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+        await container.close()
+        logger.info("event-scheduling shutdown complete")
 
 
 app = FastAPI(title="event-scheduling", version="0.1.0", lifespan=lifespan)

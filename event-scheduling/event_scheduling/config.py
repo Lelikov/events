@@ -21,6 +21,16 @@ class Settings(BaseSettings):
     # Static bearer key gating every /api/* route (constant-time compared in auth.py).
     scheduling_api_key: str = Field(...)
 
+    # Outbox dispatch (slice 4a): booking-lifecycle CloudEvents published to event-receiver,
+    # with participant emails resolved via event-users.
+    event_receiver_url: str = "http://event-receiver:8888"
+    booking_api_key: str = "dev-booking-api-key"
+    event_users_url: str = "http://event-users:8888"
+    event_users_token: str = "dev-admin-token"  # noqa: S105 - dev default, real value comes from env/Vault
+    outbox_dispatch_interval: float = 5.0
+    outbox_batch_size: int = 50
+    outbox_max_backoff_seconds: int = 300
+
     @field_validator("log_level")
     @classmethod
     def validate_log_level(cls, v: str) -> str:

@@ -20,7 +20,7 @@ An event-driven microservices system for managing bookings, participants, and no
 | event-users | User/contact CRUD with background CRM sync and CRM webhook outbox; consumes `events.user.email` | Python 3.14, FastAPI, SQLAlchemy 2.x, Dishka | 55 |
 | event-notifier | Notification dispatcher: consumes `events.notification.commands`, transactional outbox, email/Telegram delivery, publishes `notification.*.message_sent` delivery results back via event-receiver | Python 3.14, FastAPI, FastStream, asyncpg, Dishka, Jinja2 | 80 |
 | event-shortener | REST URL shortener: shortens meeting links for event-booking (`POST/GET/PATCH/DELETE /api/v1/urls/*` + public `GET /{ident}` redirect), own PostgreSQL. Replaced the `/shortify` WireMock stub | Python 3.14, FastAPI, SQLAlchemy 2.x, Alembic, Dishka | — |
-| event-scheduling | **Scheduling domain model + slot engine + write-side bookings** (slices 1–3 of cal.com replacement): organizer schedules, event types, hosts, booking limits; `GET /api/v1/slots` returns available slots (weekly/override/travel/DST; busy source is real, buffer-expanded); `POST /api/v1/bookings` + cancel/reschedule/history, DB exclusion constraint prevents double-booking, round-robin host assignment, booking-limit enforcement. Own PostgreSQL (`event_scheduling`). One-time ETL from cal.com. Pure HTTP; no RabbitMQ (pipeline integration is slice 4). | Python 3.14, FastAPI, SQLAlchemy 2.x, Alembic, Dishka | 88 |
+| event-scheduling | **Scheduling domain model + slot engine + write-side bookings + booking→events outbox** (slices 1–4a of cal.com replacement): organizer schedules, event types, hosts, booking limits; `GET /api/v1/slots` returns available slots (weekly/override/travel/DST; busy source is real, buffer-expanded); `POST /api/v1/bookings` + cancel/reschedule/history, DB exclusion constraint prevents double-booking, round-robin host assignment, booking-limit enforcement; a transactional `outbox` + background dispatcher publishes `booking.lifecycle` CloudEvents to event-receiver `POST /event/booking` (additive alongside cal.com — same endpoint, same event types; event-saver projects them, event-booking chat/Jitsi integration is deferred to slice 4a.2). Own PostgreSQL (`event_scheduling`). One-time ETL from cal.com. No RabbitMQ — purely HTTP in and out (dispatcher makes outbound HTTP calls to event-receiver + event-users). | Python 3.14, FastAPI, SQLAlchemy 2.x, Alembic, Dishka | 111 |
 | event-schemas | Shared Python library (v0.2.0): Pydantic payload models, EventType enum, priorities, **canonical RabbitMQ topology** (`queues.py`), envelope (`envelope.py`), CloudEvent attributes | Python, Pydantic v2 | 73 |
 | event-db-sync | Trigger-driven cal.com→event-users sync: applies an additive `AFTER INSERT/UPDATE` NOTIFY trigger on cal.com `"Attendee"`/`"users"`, listens on `pg_notify('user_sync')`, runs a watermark reconcile sweep + `POST /admin/full-sync`, and publishes `user.upserted` directly to RabbitMQ; own `sync_state` DB | Python 3.14, FastAPI, asyncpg, FastStream | — |
 
@@ -186,9 +186,9 @@ Frozen in `docs/audit/v2/CONTRACT_DECISIONS.md` (D1–D8); fixers and future cha
 | SqlExecutor auto-commit | `execute()` committed after every statement. | Largely resolved per service (e.g. notifier per-operation sessions + `transaction()`, users batch transactions); pattern still varies by service |
 | Same DB credentials for reader and writer | event-admin has full write access despite being architecturally read-only. | **Still open** — no DB-level read-only role enforcement |
 
-### 8. event-scheduling: Domain Owner + Slot Engine + Write-Side Bookings (slices 1–3)
+### 8. event-scheduling: Domain Owner + Slot Engine + Write-Side Bookings + Booking→Events Outbox (slices 1–4a)
 
-`event-scheduling` (port 8004) is the first three slices of a phased replacement of
+`event-scheduling` (port 8004) is the first four slices of a phased replacement of
 the external cal.com CRM with an in-house booking system. The goal is full cal.com
 independence in several incremental slices:
 
@@ -197,7 +197,8 @@ independence in several incremental slices:
 | 1 | Domain model: schedules, event types, hosts, booking limits; one-time ETL from cal.com | **Delivered (2026-07-03)** |
 | 2 | Slot-availability engine: `GET /api/v1/slots` (read-side) | **Delivered (2026-07-05)** |
 | 3 | Write-side bookings (`booking` table, `POST/GET /api/v1/bookings` + cancel/reschedule/history; real `BusyTimesSource`; buffers, booking limits, round-robin all active) | **Delivered (2026-07-12)** |
-| 4 | Pipeline integration: publish `booking.lifecycle` CloudEvents (chat, Jitsi meeting URLs, reminders/notifications) | Planned |
+| 4a | Booking→events outbox: transactional `outbox` table + background dispatcher publishes `booking.lifecycle` CloudEvents to event-receiver `POST /event/booking` (additive alongside cal.com) | **Delivered (2026-07-13)** |
+| 4a.2 | Make event-booking act on the CloudEvent payload directly (chat creation, Jitsi meeting URLs, reminders) instead of reading only the cal.com DB | Planned |
 | 5 | Booker UI (participant slot-picker SPA) | Planned |
 | 6 | External calendar sync (Google/Office busy-times) | Deferred/optional |
 | 7 | Schedule editor in organizer dashboard | Planned |
@@ -212,13 +213,15 @@ independence in several incremental slices:
 - `booking_limit` (`booking_count`/`booking_duration`, per `day`/`week`/`month`/`year` computed in the assigned host's schedule time zone) is enforced on `POST /api/v1/bookings`.
 - cal.com is the **one-time ETL source** (`scripts/etl_from_calcom.py` migrates schedules; event_type ETL is a deferred future branch).
 - `slots/domain.py` + `slots/timezones.py` are pure IO-free Python (no SQLAlchemy, no HTTP); `BookingService` reuses them unmodified for its own availability re-check.
-- **Booking write-side is HTTP-only.** `event-scheduling` still has no RabbitMQ producer/consumer — creating, cancelling, or rescheduling a booking here does **not** trigger chat creation, Jitsi meeting URLs, reminders, or notifications; that CloudEvent-publishing integration with the rest of the pipeline is slice 4, not yet built.
+- **Booking→events outbox is now ACTIVE (slice 4a).** `BookingService.create`/`reschedule`/`cancel` writes an `outbox` row in the same transaction as the booking mutation; a background dispatcher (started in `main.py`'s `lifespan`, no RabbitMQ) polls it, resolves participant emails via event-users (`POST /api/users/by-ids`, admin `Bearer`), and POSTs a `booking.created`/`rescheduled`/`cancelled` CloudEvent to event-receiver `POST /event/booking` — the same generic endpoint/contract an external booking service already targets. This is **additive to cal.com**: `/event/calcom` and every existing producer are untouched. At-least-once delivery via a stable per-row `ce-id`; failed/malformed rows terminate as `failed`, everything else retries with exponential backoff.
+- **event-booking does not react to `event-scheduling` bookings yet.** It resolves booking context by reading the cal.com DB keyed on `booking_uid`; an `event-scheduling` booking has no cal.com row, so chat creation, Jitsi meeting URLs, and reminders remain a no-op for it. **event-saver is the only active consumer of these events at this slice** — its projections (bookings/events/participants) are correct for `event-scheduling` bookings. Making event-booking payload/API-driven instead of cal.com-DB-driven is slice 4a.2.
 
-**Slice-3 maturity notes:**
+**Slice-4a maturity notes:**
 - `buffer_before/after` and `booking_limit` are ACTIVE — applied to busy-interval computation and enforced at booking-create time, respectively.
 - No slot reservations/holds — a returned slot isn't locked; create re-validates and can still 409 on a lost race.
 - No slot caching; each `GET /api/v1/slots` request re-queries and recomputes.
 - No external calendar busy-times (slice 6).
+- **`EVENT_USERS_TOKEN` must be a real admin token in any environment where email resolution needs to succeed** — a wrong/placeholder value 401s against event-users' `require_admin` gate, and the affected outbox rows retry indefinitely rather than reaching `sent`. This is a deploy prerequisite, not a code defect.
 
 **References:**
 - Domain model spec: `docs/superpowers/specs/2026-07-03-event-scheduling-domain-model-design.md`

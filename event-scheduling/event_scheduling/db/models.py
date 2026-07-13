@@ -195,6 +195,32 @@ class BookingChangeLog(Base):
     __table_args__ = (CheckConstraint("kind IN ('created','rescheduled','cancelled')", name="ck_booking_log_kind"),)
 
 
+class Outbox(Base):
+    __tablename__ = "outbox"
+
+    id: Mapped[str] = _uuid_pk()
+    event_ce_id: Mapped[str] = mapped_column(UUID(as_uuid=True), nullable=False)
+    event_type: Mapped[str] = mapped_column(Text, nullable=False)
+    booking_uid: Mapped[str] = mapped_column(Text, nullable=False)
+    payload: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("'pending'"))
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    next_attempt_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=text("now()"), nullable=False
+    )
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("now()"), nullable=False)
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    __table_args__ = (
+        CheckConstraint("status IN ('pending','sent','failed')", name="ck_outbox_status"),
+        CheckConstraint(
+            "event_type IN ('booking.created','booking.rescheduled','booking.cancelled')", name="ck_outbox_type"
+        ),
+        Index("ix_outbox_dispatch", "status", "next_attempt_at"),
+    )
+
+
 class ScheduleChangeLog(Base):
     __tablename__ = "schedule_change_log"
 

@@ -8,6 +8,7 @@ from event_scheduling.booking.limits import limit_exceeded, period_bounds_utc
 from event_scheduling.dto.schedule import ActorDTO
 from event_scheduling.errors import ConflictError, NotFoundError, ValidationError
 from event_scheduling.interfaces.busy_times import BusyTimesSource, TimeWindow
+from event_scheduling.publishing.interfaces import IOutboxWriter
 from event_scheduling.slots.domain import host_availability_intervals, subtract_intervals, to_epoch_min
 from event_scheduling.slots.dto import HostSchedule, Interval
 from event_scheduling.slots.interfaces import Clock, ISlotsReadAdapter
@@ -22,12 +23,14 @@ class BookingService:
         write: IBookingWriteAdapter,
         busy: BusyTimesSource,
         clock: Clock,
+        outbox: IOutboxWriter,
     ) -> None:
         self._slots = slots_read
         self._read = read
         self._write = write
         self._busy = busy
         self._clock = clock
+        self._outbox = outbox
 
     async def _free_host(
         self,
@@ -81,6 +84,7 @@ class BookingService:
             except ConflictError:
                 continue
             await self._write.append_log(booking.id, "created", None, None, start, end, actor)
+            await self._outbox.write("booking.created", booking)
             return booking
         raise ConflictError("slot was taken concurrently")
 
@@ -96,6 +100,7 @@ class BookingService:
             return booking  # idempotent, no second log row
         cancelled = await self._write.set_cancelled(booking_id)
         await self._write.append_log(booking_id, "cancelled", booking.start_time, booking.end_time, None, None, actor)
+        await self._outbox.write("booking.cancelled", cancelled)
         return cancelled
 
     async def reschedule(self, booking_id: UUID, new_start: datetime, actor: ActorDTO) -> BookingDTO:
@@ -118,6 +123,7 @@ class BookingService:
             raise ConflictError("host is not available at the new time")
         updated = await self._write.update_times(booking_id, start, end)
         await self._write.append_log(booking_id, "rescheduled", booking.start_time, booking.end_time, start, end, actor)
+        await self._outbox.write("booking.rescheduled", updated, previous_start_time=booking.start_time)
         return updated
 
     async def list_by(

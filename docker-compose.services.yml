@@ -332,6 +332,16 @@ services:
       OTEL_TRACES_SAMPLER: ${OTEL_TRACES_SAMPLER:-parentbased_always_on}
       POSTGRES_DSN: postgresql+asyncpg://${PG_SCHEDULING_USER:-event_scheduling}:${PG_SCHEDULING_PASSWORD:-event_scheduling}@postgres:5432/${PG_SCHEDULING_DB:-event_scheduling}
       SCHEDULING_API_KEY: ${SCHEDULING_API_KEY:-dev-scheduling-api-key-3f9c2e1a7b64d508}
+      # Booking->events outbox (slice 4a): background dispatcher only, not the booking write-path.
+      EVENT_RECEIVER_URL: http://event-receiver:8888
+      # Must match event-receiver's own BOOKING_API_KEY (see the event-receiver service above) --
+      # event-receiver compares this raw value against the Authorization header on POST /event/booking.
+      BOOKING_API_KEY: ${BOOKING_API_KEY:-dev-booking-api-key-7f3a9c1e24b85d60}
+      EVENT_USERS_URL: http://event-users:8888
+      # Must match event-users' own API_BEARER_TOKEN (require_admin) -- reuses the same shared
+      # dev token every other service's event-users client uses (see event-admin's
+      # USERS_SERVICE_API_TOKEN / event-notifier's EVENT_USERS_TOKEN above).
+      EVENT_USERS_TOKEN: ${USERS_API_BEARER_TOKEN:-dev-users-bearer-2a7d9e4f8c1b6350}
     ports:
       - "${SCHEDULING_PORT:-8004}:8888"
     depends_on:

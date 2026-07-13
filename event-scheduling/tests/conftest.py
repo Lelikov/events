@@ -137,7 +137,7 @@ async def _clean_db(_migrated: str) -> AsyncGenerator[None]:
         await conn.execute(
             text(
                 "TRUNCATE schedule, weekly_hours, date_override, travel_schedule, "
-                "event_type, host, booking_limit, schedule_change_log, booking, booking_change_log "
+                "event_type, host, booking_limit, schedule_change_log, booking, booking_change_log, outbox "
                 "RESTART IDENTITY CASCADE"
             )
         )

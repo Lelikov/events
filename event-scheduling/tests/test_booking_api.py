@@ -22,6 +22,7 @@ from event_scheduling.booking.service import BookingService
 from event_scheduling.booking.write_adapter import BookingWriteAdapter
 from event_scheduling.dto.schedule import ActorDTO
 from event_scheduling.errors import ConflictError, NotFoundError, ValidationError
+from event_scheduling.publishing.outbox_writer import OutboxWriter
 from event_scheduling.slots.read_adapter import SlotsReadAdapter
 
 
@@ -45,6 +46,7 @@ def _build_service(sql: SqlExecutor, now: dt.datetime) -> BookingService:
         BookingWriteAdapter(sql),
         BookingBusyTimesSource(sql),
         _FixedClock(now),
+        OutboxWriter(sql),
     )
 
 
@@ -472,6 +474,39 @@ async def test_http_create_booking_assigns_host(client) -> None:
     assert body["status"] == "confirmed"
     assert body["start_time"] == "2026-10-01T09:00:00Z"
     assert body["end_time"] == "2026-10-01T10:00:00Z"
+
+
+@pytest.mark.asyncio
+async def test_http_create_booking_writes_outbox_row(client, sessionmaker_fixture) -> None:
+    """Proves the ioc booking->outbox wiring end-to-end.
+
+    Creating a booking via HTTP (real DI, including OutboxWriter) leaves a
+    pending outbox row for the dispatcher.
+    """
+    et, _owner = await _seed_single_host_et_http(client)
+    resp = client.post(
+        "/api/v1/bookings",
+        headers=HDRS,
+        json={
+            "event_type_id": et,
+            "client_user_id": str(uuid4()),
+            "start_time": HTTP_START,
+            "attendee_time_zone": "Europe/Berlin",
+        },
+    )
+    assert resp.status_code == 201
+    booking_id = resp.json()["id"]
+
+    async with sessionmaker_fixture() as s:
+        row = (
+            await s.execute(
+                text("SELECT booking_uid, event_type, status FROM outbox WHERE booking_uid = :uid"),
+                {"uid": str(booking_id)},
+            )
+        ).one()
+    assert row.booking_uid == booking_id
+    assert row.event_type == "booking.created"
+    assert row.status == "pending"
 
 
 @pytest.mark.asyncio
