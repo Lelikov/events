@@ -25,7 +25,7 @@ class Settings(BaseSettings):
     # with participant emails resolved via event-users.
     event_receiver_url: str = "http://event-receiver:8888"
     booking_api_key: str = "dev-booking-api-key"
-    event_users_url: str = "http://event-users:8001"
+    event_users_url: str = "http://event-users:8888"
     event_users_token: str = "dev-admin-token"  # noqa: S105 - dev default, real value comes from env/Vault
     outbox_dispatch_interval: float = 5.0
     outbox_batch_size: int = 50

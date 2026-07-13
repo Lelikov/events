@@ -265,7 +265,7 @@ failure mode to these endpoints.
 | `DEBUG` | Console log rendering (default `false`) |
 | `EVENT_RECEIVER_URL` | Base URL of event-receiver, e.g. `http://event-receiver:8888` (dispatcher only) |
 | `BOOKING_API_KEY` | Raw shared secret sent in `Authorization` (not `Bearer`) to event-receiver `POST /event/booking` — **must match** event-receiver's own `BOOKING_API_KEY` (dispatcher only) |
-| `EVENT_USERS_URL` | Base URL of event-users, e.g. `http://event-users:8001` (dispatcher only) |
+| `EVENT_USERS_URL` | Base URL of event-users, e.g. `http://event-users:8888` (dispatcher only) |
 | `EVENT_USERS_TOKEN` | `Authorization: Bearer` token for event-users `POST /api/users/by-ids`, gated by `require_admin` — **needs a real admin token** in any environment where email resolution must succeed (dispatcher only); see `docs/DEPENDENCIES.md` |
 | `OUTBOX_DISPATCH_INTERVAL` | Seconds between dispatcher poll ticks (default `5.0`) |
 | `OUTBOX_BATCH_SIZE` | Max outbox rows claimed per tick (default `50`) |

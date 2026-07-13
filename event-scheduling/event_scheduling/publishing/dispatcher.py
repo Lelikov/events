@@ -97,9 +97,13 @@ async def _dispatch_row(
     if participants is None:
         return
     host, client = participants
-    headers, body = build_cloudevent(
-        row["event_type"], row["booking_uid"], str(row["event_ce_id"]), row["payload"], host, client, clock.now()
-    )
+    try:
+        headers, body = build_cloudevent(
+            row["event_type"], row["booking_uid"], str(row["event_ce_id"]), row["payload"], host, client, clock.now()
+        )
+    except (KeyError, ValueError) as exc:
+        await _mark_failed(sql, row["id"], f"malformed-payload:{exc}")
+        return
     try:
         status = await receiver.publish(headers, body)
     except Exception as exc:  # noqa: BLE001 - transient transport failure, retry

@@ -227,6 +227,56 @@ async def test_dispatch_marks_malformed_payload_failed_without_wedging_batch(ses
     assert "malformed" in failed_row.last_error
 
 
+async def _insert_malformed_missing_start_time(s) -> UUID:
+    """Outbox row with valid host/client ids but missing start_time.
+
+    Passes the _resolve_participants guard, fails inside build_cloudevent's body builder.
+    """
+    host, client = uuid4(), uuid4()
+    payload = {
+        "host_user_id": str(host),
+        "client_user_id": str(client),
+        "end_time": "2026-10-01T08:00:00Z",
+        "attendee_time_zone": "Europe/Moscow",
+    }
+    ce = uuid4()
+    await s.execute(
+        text(
+            "INSERT INTO outbox (event_ce_id, event_type, booking_uid, payload) "
+            "VALUES (:ce, 'booking.created', :uid, CAST(:p AS jsonb))"
+        ),
+        {"ce": ce, "uid": str(uuid4()), "p": json.dumps(payload)},
+    )
+    return ce
+
+
+@pytest.mark.asyncio
+async def test_dispatch_marks_malformed_build_payload_failed_without_wedging_batch(sessionmaker_fixture) -> None:
+    """A row whose participant ids parse fine but whose body payload is missing start_time.
+
+    Must fail permanently in the build step, without rolling back or wedging the
+    well-formed sibling row in the same batch.
+    """
+    async with sessionmaker_fixture() as s:
+        await _insert_malformed_missing_start_time(s)
+        await _insert_pending(s)
+        await s.commit()
+    rcv = _Receiver(202)
+    async with sessionmaker_fixture() as s:
+        n = await dispatch_once(
+            SqlExecutor(s), _Users(), rcv, _FixedClock(dt.datetime(2026, 7, 13, tzinfo=dt.UTC)), 300, 50
+        )
+        await s.commit()
+    assert n == 2
+    assert len(rcv.calls) == 1
+    async with sessionmaker_fixture() as s:
+        rows = (await s.execute(text("SELECT status, last_error FROM outbox ORDER BY status"))).all()
+    statuses = {r.status for r in rows}
+    assert statuses == {"failed", "sent"}
+    failed_row = next(r for r in rows if r.status == "failed")
+    assert "malformed" in failed_row.last_error
+
+
 @pytest.mark.asyncio
 async def test_end_to_end_via_httpx_stub_and_idempotent_ce_id(sessionmaker_fixture) -> None:
     """Real ReceiverClient over httpx.MockTransport.

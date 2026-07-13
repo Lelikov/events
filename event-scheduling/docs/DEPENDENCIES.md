@@ -66,7 +66,7 @@ particular, no request handler in `routers/` ever calls out synchronously.
 | `DEBUG` | no | `false` | Console (vs JSON) log rendering |
 | `EVENT_RECEIVER_URL` | no | `http://event-receiver:8888` | Dispatcher-only: base URL for `POST /event/booking` |
 | `BOOKING_API_KEY` | no* | `dev-booking-api-key` | Dispatcher-only: raw shared secret sent as `Authorization` to event-receiver — *must match event-receiver's own `BOOKING_API_KEY`* for publishing to succeed at all (a mismatch is a hard `401` → outbox row `failed`, not a retry) |
-| `EVENT_USERS_URL` | no | `http://event-users:8001` | Dispatcher-only: base URL for `POST /api/users/by-ids` |
+| `EVENT_USERS_URL` | no | `http://event-users:8888` | Dispatcher-only: base URL for `POST /api/users/by-ids` |
 | `EVENT_USERS_TOKEN` | no* | `dev-admin-token` | Dispatcher-only: `Bearer` token for event-users' `require_admin`-gated endpoint — needs to be a **real admin token** for email resolution to succeed in any non-toy environment (see "Admin token prerequisite" above) |
 | `OUTBOX_DISPATCH_INTERVAL` | no | `5.0` | Seconds between dispatcher poll ticks |
 | `OUTBOX_BATCH_SIZE` | no | `50` | Max outbox rows claimed per tick |
