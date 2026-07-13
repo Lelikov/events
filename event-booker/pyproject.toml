@@ -1,0 +1,56 @@
+[project]
+name = "event-booker"
+version = "0.1.0"
+description = "Public booking BFF: guest -> client resolution + booking, holding scheduling/users keys server-side"
+requires-python = ">=3.14"
+dependencies = [
+    "dishka>=1.8.0",
+    "fastapi>=0.135.1",
+    "httpx>=0.28.0",
+    "opentelemetry-sdk>=1.30.0",
+    "opentelemetry-exporter-otlp-proto-grpc>=1.30.0",
+    "opentelemetry-instrumentation-fastapi>=0.51b0",
+    "opentelemetry-instrumentation-httpx>=0.51b0",
+    "prometheus-client>=0.25.0",
+    "pydantic[email]>=2.10.0",
+    "pydantic-settings>=2.13.1",
+    "structlog>=25.5.0",
+    "ujson>=5.10.0",
+    "uvicorn>=0.41.0",
+]
+
+[dependency-groups]
+dev = [
+    "httpx>=0.28.0",
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.25.0",
+    "ruff>=0.15.4",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+pythonpath = ["."]
+
+[tool.ruff]
+exclude = [".env", ".git", ".mypy_cache", ".pytest_cache", ".venv"]
+fix = true
+unsafe-fixes = true
+show-fixes = true
+target-version = "py314"
+line-length = 120
+
+[tool.ruff.format]
+docstring-code-format = true
+
+[tool.ruff.lint]
+ignore = ["ANN401", "COM812", "D1", "D203", "D213", "EM", "FA", "FBT", "G004", "INP001", "ISC001", "PERF203", "PLR", "RET501", "RUF001", "S311", "TC001", "TC002", "TC003", "TRY003", "UP040"]
+select = ["ALL"]
+
+[tool.ruff.lint.extend-per-file-ignores]
+"__init__.py" = ["F401", "F403"]
+"tests/*.py" = ["ANN001", "ANN002", "ANN003", "ANN201", "ANN202", "ANN401", "ARG002", "E402", "PLC0415", "PLR2004", "PT019", "S101", "S311", "S603", "S607"]
+
+[tool.ruff.lint.isort]
+no-lines-before = ["local-folder", "standard-library"]
+lines-after-imports = 2
