@@ -75,6 +75,27 @@ async def test_users_by_ids_maps_email_tz() -> None:
 
 
 @pytest.mark.asyncio
+async def test_users_by_ids_maps_name_and_locale() -> None:
+    a = uuid4()
+
+    def handler(_req: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "items": [
+                    {"id": str(a), "email": "a@x.io", "time_zone": "Europe/Berlin", "name": "Alice", "locale": "en"}
+                ]
+            },
+        )
+
+    client = UsersClient("http://users:8888", "tok", transport=httpx.MockTransport(handler))
+    out = await client.by_ids([a])
+    assert out[a].name == "Alice"
+    assert out[a].locale == "en"
+    assert out[a].email == "a@x.io"
+
+
+@pytest.mark.asyncio
 async def test_users_by_ids_missing_ids_absent_from_map() -> None:
     a, b = uuid4(), uuid4()
 

@@ -2,7 +2,13 @@ from datetime import datetime
 from typing import Protocol
 from uuid import UUID
 
-from event_scheduling.booking.dto import BookingChangeEntryDTO, BookingDTO, CreateBookingDTO, HostStat
+from event_scheduling.booking.dto import (
+    BookingChangeEntryDTO,
+    BookingDetailDTO,
+    BookingDTO,
+    CreateBookingDTO,
+    HostStat,
+)
 from event_scheduling.dto.event_type import BookingLimitDTO
 from event_scheduling.dto.schedule import ActorDTO
 
@@ -20,6 +26,7 @@ class IBookingReadAdapter(Protocol):
     async def limits(self, event_type_id: UUID) -> list[BookingLimitDTO]: ...
     async def host_stats(self, user_ids: list[UUID], now: datetime) -> list[HostStat]: ...
     async def period_counts(self, event_type_id: UUID, lo: datetime, hi: datetime) -> tuple[int, int]: ...
+    async def event_type_title(self, event_type_id: UUID) -> str | None: ...
 
 
 class IBookingWriteAdapter(Protocol):
@@ -53,3 +60,7 @@ class IBookingService(Protocol):
         to_utc: datetime | None,
     ) -> list[BookingDTO]: ...
     async def history(self, booking_id: UUID) -> list[BookingChangeEntryDTO]: ...
+
+
+class IBookingDetailService(Protocol):
+    async def detail(self, booking_id: UUID) -> BookingDetailDTO | None: ...

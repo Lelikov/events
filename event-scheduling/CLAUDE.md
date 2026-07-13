@@ -82,7 +82,7 @@ outbox row (status='pending', next_attempt_at<=now())
     OUTBOX_MAX_BACKOFF_SECONDS)
 ```
 
-At-least-once delivery: the `ce-id` is stable per outbox row (set once at write time), and event-saver's own idempotency/dedup handles re-delivery on retry. **Additive to cal.com** — this does not touch `/event/calcom`, cal.com webhooks, or any existing producer; it is a second, independent `booking.lifecycle` producer using the *same* generic `/event/booking` endpoint. **event-booking (chat creation, Jitsi meeting URLs, reminders) is currently a no-op for these bookings** — it resolves booking details by reading the cal.com DB keyed on `booking_uid`, and an `event-scheduling` booking never has a cal.com row. Making event-booking read/act on the CloudEvent payload directly (instead of the cal.com DB) is deferred to **slice 4a.2** — until then, only event-saver's projections reflect `event-scheduling` bookings downstream.
+At-least-once delivery: the `ce-id` is stable per outbox row (set once at write time), and event-saver's own idempotency/dedup handles re-delivery on retry. **Additive to cal.com** — this does not touch `/event/calcom`, cal.com webhooks, or any existing producer; it is a second, independent `booking.lifecycle` producer using the *same* generic `/event/booking` endpoint. **event-booking reacts to these bookings as of slice 4a.2** — its composite booking adapter reads cal.com first and, on a miss, falls back to `GET /api/v1/bookings/{id}/detail` on this service, then creates the chat, per-participant Jitsi meeting URLs, and notifications (blacklist/constraints/reject are skipped for scheduling-source bookings). Reminders are still cal.com-only (the reminder scheduler polls the cal.com DB), deferred to **slice 4a.3**.
 
 **Layers:**
 
@@ -158,7 +158,8 @@ At-least-once delivery: the `ce-id` is stable per outbox row (set once at write 
   host on conflict → append change-log row), `cancel` (soft, idempotent), `reschedule`
   (in-place, same host only, re-checks availability excluding its own booking),
   `get`/`list_by`/`history`.
-- **`publishing/dto.py`** — frozen dataclasses: `ParticipantInfo` (email, time_zone),
+- **`publishing/dto.py`** — frozen dataclasses: `ParticipantInfo` (email, time_zone, name, locale — the
+  latter two default to `None` so existing `ParticipantInfo(email, tz)` call sites keep working),
   `OutboxRow` (id, event_ce_id, event_type, booking_uid, payload, status, attempts,
   next_attempt_at).
 - **`publishing/interfaces.py`** — `IOutboxWriter`, `IReceiverClient`, `IUsersClient`
@@ -238,6 +239,7 @@ At-least-once delivery: the `ce-id` is stable per outbox row (set once at write 
 | GET | `/api/v1/slots` | Bearer | Return available slots for an event type. Query params: `event_type_id` (UUID), `start` (ISO-8601 datetime, UTC window start), `end` (ISO-8601 datetime, UTC window end), `time_zone` (IANA). Responses: `200` `{event_type_id, time_zone, slots: {local_date: [utc_iso_z]}}`, `404` unknown event type, `422` invalid time zone / `end <= start` / window > 62 days. **Slice 3: busy times now come from `BookingBusyTimesSource`** (real, backed by confirmed `booking` rows, expanded by the event type's `buffer_before/after_minutes`) — slots overlapping a confirmed booking (or its buffer) are excluded. |
 | POST | `/api/v1/bookings` | Bearer | Create a booking (slice 3). Body: `{event_type_id, client_user_id, start_time, attendee_time_zone}`. Re-validates availability server-side, assigns a host via round-robin (`rank_hosts`: fewest future confirmed bookings, then never-assigned, then oldest `last_assigned_at`), enforces `booking_limit`s for the assigned host's period, inserts optimistically (falls back to the next ranked host on `ConflictError` from the DB exclusion constraint). `201`; `404` unknown event type; `422` past `start_time` / invalid `attendee_time_zone`; `409` no host available / limit exceeded / slot taken concurrently by all ranked hosts. |
 | GET | `/api/v1/bookings/{id}` | Bearer | Get a single booking; `404` if not found |
+| GET | `/api/v1/bookings/{id}/detail` | Bearer | Participant-enriched booking view for event-booking (slice 4a.2). Resolves host/client user ids → email/name/time_zone/locale via event-users `POST /api/users/by-ids`; client `time_zone` = booking's `attendee_time_zone`. Response `{uid, title, start_time, end_time, status, host{email,name,time_zone,locale}, client{email,name,time_zone,locale}}`; `404` if not found. event-booking's composite adapter falls back here when a uid isn't in cal.com, then provisions chat/Jitsi/notifications. |
 | GET | `/api/v1/bookings?host_user_id=\|client_user_id=` | Bearer | List bookings; exactly one of `host_user_id`/`client_user_id` required (`422` otherwise), optional `from_`/`to` window |
 | POST | `/api/v1/bookings/{id}/cancel` | Bearer | Soft-cancel (`status='confirmed'→'cancelled'`); idempotent (second call returns the already-cancelled booking, no duplicate log row); frees the slot (exclusion constraint only applies `WHERE status='confirmed'`) |
 | POST | `/api/v1/bookings/{id}/reschedule` | Bearer | In-place move to a new `start_time`, **same host only**; re-checks host availability excluding the booking's own row (`exclude_booking_id`); `409` if cancelled or the new slot isn't free; `404` unknown booking |
@@ -316,13 +318,15 @@ through the same Protocol.
   all existing producers are untouched. `event-scheduling` is a second, independent
   `booking.lifecycle` producer using the same generic `/event/booking` endpoint that
   an external booking service already targets.
-- **Consumer at this slice = event-saver only.** event-saver's projections (bookings/
+- **Consumers = event-saver + event-booking.** event-saver's projections (bookings/
   events/participants tables) reflect `event-scheduling` bookings correctly.
-- **event-booking is a no-op for these bookings, by design of this slice — not a bug.**
-  event-booking resolves booking context by reading the cal.com DB keyed on
-  `booking_uid`; an `event-scheduling` booking has no cal.com row, so chat creation,
-  Jitsi meeting URLs, and reminder scheduling do not happen for it. Wiring event-booking
-  to act on the CloudEvent payload directly is **slice 4a.2**, not yet built.
+- **event-booking now reacts to these bookings (slice 4a.2).** event-booking's composite
+  booking adapter reads cal.com first and falls back to `GET /api/v1/bookings/{id}/detail`
+  on this service when a `booking_uid` isn't in the cal.com DB. On a scheduling-source
+  booking it creates the GetStream chat, mints per-participant Jitsi meeting URLs, and
+  sends notifications — skipping the blacklist/constraints/reject sub-flow (those apply to
+  cal.com bookings only; scheduling bookings are pre-validated upstream). **Reminders remain
+  cal.com-only** (the reminder scheduler still polls the cal.com DB) — deferred to slice 4a.3.
 - **`EVENT_USERS_TOKEN` is a real deploy prerequisite, not just a default.** event-users'
   `POST /api/users/by-ids` is gated by `require_admin`; a wrong/absent/non-admin token
   401s. `UsersClient.by_ids` turns that into an `httpx.HTTPStatusError` via

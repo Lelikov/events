@@ -107,6 +107,9 @@ services:
       EVENT_ADMIN_API_URL: http://event-admin:8888
       BLACKLIST_SERVICE_TOKEN: ${BLACKLIST_SERVICE_TOKEN:-dev-blacklist-service-9d4f2c7b1e8a6350}
       BLACKLIST_CACHE_TTL: ${BLACKLIST_CACHE_TTL:-300}
+      # event-scheduling booking source (composite adapter falls back here when a uid isn't in cal.com).
+      EVENT_SCHEDULING_URL: http://event-scheduling:8888
+      SCHEDULING_API_KEY: ${SCHEDULING_API_KEY:-dev-scheduling-api-key-3f9c2e1a7b64d508}
     depends_on:
       rabbitmq:
         condition: service_healthy

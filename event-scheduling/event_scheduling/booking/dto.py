@@ -32,6 +32,25 @@ class HostStat:
 
 
 @dataclass(frozen=True)
+class ParticipantDetail:
+    email: str
+    name: str | None
+    time_zone: str | None
+    locale: str | None
+
+
+@dataclass(frozen=True)
+class BookingDetailDTO:
+    uid: str
+    title: str
+    start_time: datetime
+    end_time: datetime
+    status: str
+    host: ParticipantDetail
+    client: ParticipantDetail
+
+
+@dataclass(frozen=True)
 class BookingChangeEntryDTO:
     kind: str
     from_start: datetime | None

@@ -94,6 +94,12 @@ class BookingReadAdapter:
         )
         return row["c"], row["mins"]
 
+    async def event_type_title(self, event_type_id: UUID) -> str | None:
+        row = await self._sql.fetch_one("SELECT title FROM event_type WHERE id = :id", {"id": event_type_id})
+        if row is None:
+            return None
+        return row["title"]
+
     @staticmethod
     def _to_booking(row) -> BookingDTO:  # noqa: ANN001
         return BookingDTO(

@@ -7,10 +7,11 @@ from fastapi import APIRouter, Depends, Header, Query, status
 
 from event_scheduling.auth import require_api_key
 from event_scheduling.booking.dto import CreateBookingDTO
-from event_scheduling.booking.interfaces import IBookingService
+from event_scheduling.booking.interfaces import IBookingDetailService, IBookingService
 from event_scheduling.dto.schedule import ActorDTO
-from event_scheduling.errors import ValidationError
+from event_scheduling.errors import NotFoundError, ValidationError
 from event_scheduling.schemas.booking import (
+    BookingDetailResponse,
     BookingHistoryResponse,
     BookingListResponse,
     BookingResponse,
@@ -86,3 +87,11 @@ async def reschedule_booking(
 async def booking_history(booking_id: UUID, service: FromDishka[IBookingService]) -> BookingHistoryResponse:
     entries = await service.history(booking_id)
     return BookingHistoryResponse(entries=[ChangeEntryModel(**e.__dict__) for e in entries])
+
+
+@booking_router.get("/{booking_id}/detail", response_model=BookingDetailResponse)
+async def booking_detail(booking_id: UUID, service: FromDishka[IBookingDetailService]) -> BookingDetailResponse:
+    detail = await service.detail(booking_id)
+    if detail is None:
+        raise NotFoundError(f"booking {booking_id} not found")
+    return BookingDetailResponse.from_dto(detail)

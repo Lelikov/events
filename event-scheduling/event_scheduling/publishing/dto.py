@@ -7,6 +7,8 @@ from uuid import UUID
 class ParticipantInfo:
     email: str
     time_zone: str | None
+    name: str | None = None
+    locale: str | None = None
 
 
 @dataclass(frozen=True)

@@ -3,7 +3,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, field_serializer
 
-from event_scheduling.booking.dto import BookingDTO
+from event_scheduling.booking.dto import BookingDetailDTO, BookingDTO
 
 
 def _iso_z(value: datetime) -> str:
@@ -64,3 +64,36 @@ class ChangeEntryModel(BaseModel):
 
 class BookingHistoryResponse(BaseModel):
     entries: list[ChangeEntryModel]
+
+
+class ParticipantModel(BaseModel):
+    email: str
+    name: str | None
+    time_zone: str | None
+    locale: str | None
+
+
+class BookingDetailResponse(BaseModel):
+    uid: str
+    title: str
+    start_time: datetime
+    end_time: datetime
+    status: str
+    host: ParticipantModel
+    client: ParticipantModel
+
+    @field_serializer("start_time", "end_time")
+    def _serialize_utc_z(self, value: datetime) -> str:
+        return _iso_z(value)
+
+    @classmethod
+    def from_dto(cls, d: BookingDetailDTO) -> BookingDetailResponse:
+        return cls(
+            uid=d.uid,
+            title=d.title,
+            start_time=d.start_time,
+            end_time=d.end_time,
+            status=d.status,
+            host=ParticipantModel(**d.host.__dict__),
+            client=ParticipantModel(**d.client.__dict__),
+        )
