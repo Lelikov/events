@@ -47,14 +47,15 @@ mirroring `event-admin-frontend`'s pattern:
 ### The booking flow (`src/modules/booking/`)
 
 `BookingFlowPage` drives a 3-step wizard for a given `eventTypeId`:
-1. **Slot** (`SlotPicker`) — fetches available slots for a 14-day window (`GET
-   /api/public/slots?event_type_id=&start=&end=&time_zone=`); a "later" control advances the
-   window by 14 days (capped at 62). Time zone is auto-detected via
-   `Intl.DateTimeFormat().resolvedOptions().timeZone` and editable.
+1. **Slot** (`SlotPicker`) — fetches available slots for a fixed 14-day window (`GET
+   /api/public/slots?event_type_id=&start=&end=&time_zone=`, `start = now + offsetDays`,
+   `end = start + 14 days`); "Позже →" shifts the window forward by 14 days with no upper
+   cap, "← Раньше" shifts it back with a floor at the current day. Time zone is
+   auto-detected via `Intl.DateTimeFormat().resolvedOptions().timeZone` and editable.
 2. **Details** (`GuestForm`) — collects name + email, then `POST /api/public/bookings`
    (`{event_type_id, name, email, start_time, time_zone}`).
-3. **Confirmation** (`Confirmation`) — shows the booking result (`booking_id`,
-   `event_type_title`, `start_time`, `end_time`, `status`, `time_zone`).
+3. **Confirmation** (`Confirmation`) — shows the event type title, the booked time range
+   (`formatRange(start_time, end_time, time_zone)`), and the time zone.
 
 A `409` response on submit (slot just taken) bounces the user back to step 1 with an inline
 banner; `422` shows a field-level submit error; other failures show a generic retry message.
