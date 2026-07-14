@@ -38,6 +38,12 @@ class Settings(BaseSettings):
     reminder_shift_to_minutes: int = 65
     reminder_batch_size: int = 100
 
+    # Calendar-sync (slice 5): background poller imports external iCal busy-times.
+    calendar_sync_enabled: bool = True
+    calendar_sync_interval_seconds: float = 300.0
+    calendar_sync_window_days: int = 62
+    calendar_fetch_timeout_seconds: float = 15.0
+
     @field_validator("log_level")
     @classmethod
     def validate_log_level(cls, v: str) -> str:

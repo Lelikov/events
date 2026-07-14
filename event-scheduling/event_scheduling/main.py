@@ -11,6 +11,9 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from event_scheduling.calendar.dispatcher import run_calendar_sync_loop
+from event_scheduling.calendar.ical_client import ICalClient
+from event_scheduling.calendar.ical_parser import ICalParser
 from event_scheduling.config import Settings
 from event_scheduling.errors import ConflictError, NotFoundError, ValidationError
 from event_scheduling.ioc import AppProvider
@@ -68,6 +71,20 @@ async def lifespan(_: FastAPI) -> AsyncGenerator[None]:
                     shift_from_minutes=settings.reminder_shift_from_minutes,
                     shift_to_minutes=settings.reminder_shift_to_minutes,
                     batch_size=settings.reminder_batch_size,
+                    stop=stop,
+                )
+            )
+        )
+    if settings.calendar_sync_enabled:
+        tasks.append(
+            asyncio.create_task(
+                run_calendar_sync_loop(
+                    sessionmaker,
+                    ICalClient(settings.calendar_fetch_timeout_seconds),
+                    ICalParser(),
+                    clock,
+                    interval_s=settings.calendar_sync_interval_seconds,
+                    window_days=settings.calendar_sync_window_days,
                     stop=stop,
                 )
             )
