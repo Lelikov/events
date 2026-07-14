@@ -7,8 +7,9 @@ Migrations:
 - `alembic/versions/0002_booking.py` — adds `booking` + `booking_change_log` (slice 3, write-side bookings); also enables the `btree_gist` extension required by the exclusion constraint below.
 - `alembic/versions/0003_outbox.py` — adds `outbox` (slice 4a, transactional outbox for `booking.lifecycle` CloudEvents).
 - `alembic/versions/0004_booking_reminder_sent.py` — adds `booking.reminder_sent_at` + the partial index `ix_booking_reminder` (slice 4a.3, in-service booking reminders).
+- `alembic/versions/0005_external_calendar.py` — adds `external_calendar` + `external_calendar_event` (slice 5, calendar-sync: iCal-URL busy-time import).
 
-11 tables total.
+13 tables total.
 
 ## Tables
 
@@ -247,6 +248,47 @@ returned `400`/`401`, or the row's own `payload` was malformed (missing/invalid
 resolved participant email not found) leaves the row `pending` with `attempts`
 incremented and `next_attempt_at` pushed out — it will be retried on a later tick.
 
+### `external_calendar` (slice 5)
+
+One row per host's connected external calendar. `host_user_id` is an opaque
+reference to event-users, same convention as `schedule.owner_user_id`. Written
+by `calendar/write_adapter.py::CalendarWriteAdapter`; read by
+`calendar/read_adapter.py::CalendarReadAdapter` and by the background poller
+(`calendar/dispatcher.py::run_calendar_sync_loop`, which only considers
+`enabled` rows).
+
+| Column | Type | Constraints | Notes |
+|--------|------|-------------|-------|
+| `id` | `uuid` | PK, `server_default gen_random_uuid()` | |
+| `host_user_id` | `uuid` | NOT NULL | Opaque ref to event-users |
+| `kind` | `text` | NOT NULL, `server_default 'ical_url'`, CHECK IN `('ical_url')` (`ck_external_calendar_kind`) | Only one connection type today — iCal-URL subscription; no OAuth providers |
+| `url` | `text` | NOT NULL | The `.ics` subscription URL fetched each sync tick; `http`/`https` only (enforced at the router, `422 ValidationError` otherwise) |
+| `enabled` | `bool` | NOT NULL, `server_default true` | Poller and `ExternalCalendarBusyTimesSource` both filter `WHERE enabled` |
+| `last_synced_at` | `timestamptz` | NULLABLE | Set by `mark_synced` after a successful sync tick |
+| `last_error` | `text` | NULLABLE | Set by `mark_error` on fetch/parse failure; cleared (`NULL`) on the next successful sync |
+| `created_at` / `updated_at` | `timestamptz` | NOT NULL, `server_default now()` | `updated_at` is bumped by both `mark_synced` and `mark_error` |
+| — | — | UNIQUE (`uq_external_calendar_host_url`) on `(host_user_id, url)` | Connecting the same URL twice for the same host raises `ConflictError` (`409`) — caught via a SAVEPOINT around the INSERT, same pattern as `booking/write_adapter.py::insert` |
+
+Index: `ix_external_calendar_enabled` — partial index on `host_user_id WHERE enabled`.
+
+### `external_calendar_event` (slice 5)
+
+Cached busy-interval rows expanded from one `external_calendar`'s `.ics` feed.
+**Fully replaced on every sync tick** — `CalendarWriteAdapter.replace_cache`
+deletes all rows for the calendar then inserts the freshly-parsed set, in one
+transaction (not an incremental diff). This is the table
+`ExternalCalendarBusyTimesSource.get_busy` reads from.
+
+| Column | Type | Constraints | Notes |
+|--------|------|-------------|-------|
+| `id` | `uuid` | PK, `server_default gen_random_uuid()` | |
+| `calendar_id` | `uuid` | NOT NULL, FK→`external_calendar.id` ON DELETE CASCADE | Deleting a calendar (`DELETE /api/v1/calendars/{id}`) drops its whole cache |
+| `busy_start` / `busy_end` | `timestamptz` | NOT NULL, CHECK `busy_end > busy_start` (`ck_ext_cal_event_range`) | One row per expanded occurrence within the sync window; all-day (`VALUE=DATE`) events are stored as UTC-midnight-to-next-UTC-midnight |
+
+Index: `ix_ext_cal_event_window (calendar_id, busy_start, busy_end)` — backs
+`ExternalCalendarBusyTimesSource`'s `tstzrange(...) && tstzrange(:lo, :hi)`
+overlap query.
+
 ## Referential Integrity Summary
 
 ```
@@ -260,6 +302,9 @@ event_type (slug UNIQUE)
   ├── host          (FK event_type CASCADE)
   ├── booking_limit (FK event_type CASCADE)
   └── booking       (FK event_type RESTRICT)
+
+external_calendar (host_user_id, url UNIQUE)
+  └── external_calendar_event (FK external_calendar CASCADE)
 
 schedule_change_log  (no FK — audit survives delete)
 booking_change_log   (no FK to booking — survives delete, kind='created'|'rescheduled'|'cancelled')

@@ -12,3 +12,7 @@ class NotFoundError(DomainError):
 
 class ConflictError(DomainError):
     """Uniqueness / state conflict — mapped to HTTP 409."""
+
+
+class UpstreamError(DomainError):
+    """External fetch failed / returned an unexpected status."""

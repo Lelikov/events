@@ -11,6 +11,9 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from event_scheduling.calendar.dispatcher import run_calendar_sync_loop
+from event_scheduling.calendar.ical_client import ICalClient
+from event_scheduling.calendar.ical_parser import ICalParser
 from event_scheduling.config import Settings
 from event_scheduling.errors import ConflictError, NotFoundError, ValidationError
 from event_scheduling.ioc import AppProvider
@@ -20,6 +23,7 @@ from event_scheduling.publishing.dispatcher import run_dispatcher_loop
 from event_scheduling.publishing.interfaces import IReceiverClient, IUsersClient
 from event_scheduling.reminders.dispatcher import run_reminder_loop
 from event_scheduling.routers.booking import booking_router
+from event_scheduling.routers.calendar import calendar_router
 from event_scheduling.routers.event_type import event_type_router
 from event_scheduling.routers.schedule import schedule_router
 from event_scheduling.routers.slots import slots_router
@@ -72,6 +76,20 @@ async def lifespan(_: FastAPI) -> AsyncGenerator[None]:
                 )
             )
         )
+    if settings.calendar_sync_enabled:
+        tasks.append(
+            asyncio.create_task(
+                run_calendar_sync_loop(
+                    sessionmaker,
+                    ICalClient(settings.calendar_fetch_timeout_seconds),
+                    ICalParser(),
+                    clock,
+                    interval_s=settings.calendar_sync_interval_seconds,
+                    window_days=settings.calendar_sync_window_days,
+                    stop=stop,
+                )
+            )
+        )
     try:
         yield
     finally:
@@ -95,6 +113,7 @@ app.include_router(schedule_router)
 app.include_router(event_type_router)
 app.include_router(slots_router)
 app.include_router(booking_router)
+app.include_router(calendar_router)
 app.add_middleware(HttpMetricsMiddleware)
 
 _STATUS = {ValidationError: 422, NotFoundError: 404, ConflictError: 409}

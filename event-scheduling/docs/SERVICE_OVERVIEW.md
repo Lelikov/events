@@ -16,7 +16,7 @@ the external cal.com CRM.
 | 4a — Booking→events outbox | Transactional outbox + background dispatcher; publishes `booking.lifecycle` CloudEvents to event-receiver `POST /event/booking`; event-saver projects them | **Delivered** (this slice) |
 | 4a.2 — event-booking integration | Make event-booking act on the CloudEvent payload (chat creation, Jitsi meeting URLs, reminders) instead of only reading the cal.com DB | Planned |
 | 5 — Booker UI | Participant slot-picker SPA | Planned |
-| 6 — Calendar sync | External busy-times (Google/Office) | Deferred/optional |
+| 6 — Calendar sync | External busy-times via iCal-URL subscription (`calendar/`); OAuth providers (Google/Office) and export are deferred | **Delivered** |
 | 7 — Schedule editor | Organizer CRUD in their personal dashboard | Planned |
 
 cal.com is the **one-time ETL source** for existing schedule data; after ETL it is
@@ -33,10 +33,13 @@ no longer required by this service.
 | Ops endpoints (`/health`, `/ready`, `/metrics`) | `routes.py` | always on |
 | ETL from cal.com | `scripts/etl_from_calcom.py` | run once manually |
 | Booking→events outbox dispatcher (slice 4a) | `publishing/dispatcher.py`, started in `main.py`'s `lifespan` | always on (background `asyncio.Task`, polling every `OUTBOX_DISPATCH_INTERVAL`) |
+| Booking reminder poller (slice 4a.3) | `reminders/dispatcher.py`, started in `main.py`'s `lifespan` | `REMINDER_ENABLED` (default on) |
+| Calendar management API (`/api/v1/calendars`) | `routers/calendar.py` | always on |
+| Calendar-sync poller (slice 6) | `calendar/dispatcher.py`, started in `main.py`'s `lifespan` | `CALENDAR_SYNC_ENABLED` (default on) |
 
 No RabbitMQ, no FastStream consumer — `event-scheduling` remains request/response
-plus one background poller (the outbox dispatcher above), not a message-broker
-participant. The container is the single Alembic migration runner (`entrypoint.sh`
+plus three background pollers (outbox dispatcher, reminder poller, calendar-sync
+poller — see rows above), not a message-broker participant. The container is the single Alembic migration runner (`entrypoint.sh`
 runs `alembic upgrade head` first). Every booking mutation (`POST /api/v1/bookings`,
 `.../cancel`, `.../reschedule`) writes an `outbox` row in its own transaction;
 the request path itself is still synchronous HTTP-only — publishing to the events
@@ -114,6 +117,25 @@ resolves booking context from the cal.com DB by `booking_uid`, and an
 URLs, and reminders are a no-op for these bookings until slice 4a.2 makes
 event-booking payload/API-driven instead of cal.com-DB-driven.
 
+**Calendar sync (slice 6 — external busy-times via iCal URL).** A host can
+connect an external calendar by iCal-URL subscription
+(`POST /api/v1/calendars {host_user_id, url}`); a background poller
+(`calendar/dispatcher.py::run_calendar_sync_loop`, `CALENDAR_SYNC_ENABLED`
+toggle, default-on) fetches each enabled calendar's `.ics` on an interval,
+expands recurring events within a rolling window (`CALENDAR_SYNC_WINDOW_DAYS`,
+default 62 to match the slot engine's own cap) into `BusyInterval`s, and fully
+replaces (`external_calendar_event`: delete-all + insert) the calendar's busy
+cache in one transaction — a fetch/parse failure leaves the last good cache
+intact rather than clearing it. `ioc.py` binds `BusyTimesSource` to
+`CompositeBusyTimesSource`, which unions `BookingBusyTimesSource` with a new
+`ExternalCalendarBusyTimesSource` reading that cache; `SlotService` and
+`BookingService` are unchanged — they call the same Protocol they always did.
+This is **import-only**: no OAuth (Google/Microsoft Calendar API), no CalDAV,
+and no export of this service's own bookings anywhere — deferred beyond this
+slice. See `event-scheduling/CLAUDE.md` § "Calendar sync" for the SSRF-hardening
+gap this introduces (fetch validates only the URL scheme; private/loopback/
+metadata-IP blocking is deferred, required before production).
+
 ## Tracing
 
 OpenTelemetry auto-instrumentation (FastAPI, asyncpg); exported via OTLP/gRPC to
@@ -151,8 +173,16 @@ the OTel collector → Tempo; gated by `OTEL_SDK_DISABLED` (off by default).
   still return `409` if another request won the race. The DB exclusion constraint
   is the actual concurrency guard, not application-level locking.
 - **No slot caching.** Each request re-queries the DB and recomputes the pipeline.
-- **No external calendar integration.** Google/Office busy-times are out of scope
-  until slice 6.
+- **External calendar integration is now ACTIVE but iCal-URL/import-only
+  (slice 6).** `CompositeBusyTimesSource` subtracts a host's iCal-URL calendar
+  busy-times too — see "Calendar sync" above. Google/Office **OAuth** providers,
+  CalDAV, and exporting this service's own bookings to any external calendar
+  remain out of scope/deferred.
+- **Calendar-sync SSRF hardening is deferred — required before production.**
+  `ICalClient.fetch` validates only the URL scheme; private/loopback/metadata-IP
+  blocking, redirect-hop IP re-validation, and a response-size cap are not yet
+  implemented. The management endpoints are `require_api_key`-gated, which
+  limits but does not eliminate the risk (see `event-scheduling/CLAUDE.md`).
 - **Static single API key.** No per-caller keys or rotation mechanism (this also
   applies to the new dispatcher-side secrets — `BOOKING_API_KEY`/`EVENT_USERS_TOKEN`
   are single static values, no rotation).
@@ -186,3 +216,16 @@ stub receiver: sent on `202`, failed (no retry) on malformed payload/`400`/`401`
 retry-with-backoff on transport errors/other statuses/email-not-found, and
 `FOR UPDATE SKIP LOCKED` batching. Tests run against a real PostgreSQL (ephemeral
 local cluster, or `TEST_POSTGRES_DSN`).
+
+**Slice 6 (calendar sync) adds coverage for:** the `external_calendar`/
+`external_calendar_event` schema (constraints, cascade delete),
+`ICalParser.expand` (recurrence expansion, all-day events, `TRANSPARENT`/
+`CANCELLED` skipping, window clipping), `ICalClient.fetch` (scheme validation,
+timeout, non-2xx), `CalendarReadAdapter`/`CalendarWriteAdapter` (CRUD,
+`replace_cache`, unique-conflict → `ConflictError`), `ExternalCalendarBusyTimesSource`
+(enabled/host/window filtering), `CompositeBusyTimesSource` (union,
+`exclude_booking_id` forwarding), `sync_calendar` (success + fetch/parse-error →
+`mark_error` leaves the cache intact), and the `/api/v1/calendars` router
+(connect/list/delete/sync) plus an end-to-end test proving a synced external
+busy interval removes the corresponding slot from `GET /api/v1/slots`. The full
+suite is **148 tests** as of this slice (`uv run pytest -q`).

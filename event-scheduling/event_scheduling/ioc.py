@@ -18,6 +18,13 @@ from event_scheduling.booking.interfaces import (
 from event_scheduling.booking.read_adapter import BookingReadAdapter
 from event_scheduling.booking.service import BookingService
 from event_scheduling.booking.write_adapter import BookingWriteAdapter
+from event_scheduling.calendar.busy_source import ExternalCalendarBusyTimesSource
+from event_scheduling.calendar.composite_busy import CompositeBusyTimesSource
+from event_scheduling.calendar.ical_client import ICalClient
+from event_scheduling.calendar.ical_parser import ICalParser
+from event_scheduling.calendar.interfaces import ICalendarReadAdapter, ICalendarWriteAdapter, IICalClient, IICalParser
+from event_scheduling.calendar.read_adapter import CalendarReadAdapter
+from event_scheduling.calendar.write_adapter import CalendarWriteAdapter
 from event_scheduling.config import Settings, get_settings
 from event_scheduling.controllers.event_type import EventTypeController
 from event_scheduling.controllers.schedule import ScheduleController
@@ -95,7 +102,7 @@ class AppProvider(Provider):
 
     @provide(scope=Scope.REQUEST)
     def provide_busy_source(self, sql: ISqlExecutor) -> BusyTimesSource:
-        return BookingBusyTimesSource(sql)
+        return CompositeBusyTimesSource(BookingBusyTimesSource(sql), ExternalCalendarBusyTimesSource(sql))
 
     @provide(scope=Scope.REQUEST)
     def provide_slots_read_adapter(self, sql: ISqlExecutor) -> ISlotsReadAdapter:
@@ -150,3 +157,19 @@ class AppProvider(Provider):
     @provide(scope=Scope.REQUEST)
     def provide_booking_detail_service(self, read: IBookingReadAdapter, users: IUsersClient) -> IBookingDetailService:
         return BookingDetailService(read, users)
+
+    @provide(scope=Scope.REQUEST)
+    def provide_calendar_read(self, sql: ISqlExecutor) -> ICalendarReadAdapter:
+        return CalendarReadAdapter(sql)
+
+    @provide(scope=Scope.REQUEST)
+    def provide_calendar_write(self, sql: ISqlExecutor) -> ICalendarWriteAdapter:
+        return CalendarWriteAdapter(sql)
+
+    @provide(scope=Scope.APP)
+    def provide_ical_client(self, settings: Settings) -> IICalClient:
+        return ICalClient(settings.calendar_fetch_timeout_seconds)
+
+    @provide(scope=Scope.APP)
+    def provide_ical_parser(self) -> IICalParser:
+        return ICalParser()

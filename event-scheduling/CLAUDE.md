@@ -239,6 +239,39 @@ every REMINDER_INTERVAL_SECONDS tick (default 60s)
   background poll loop wired into `main.py`'s lifespan alongside the outbox
   dispatcher; own session per tick, commits after each batch, survives a
   failing tick, sleeps interruptibly on the same shutdown `asyncio.Event`).
+- **`calendar/dto.py`** — `ExternalCalendarDTO` (frozen): `id`, `host_user_id`,
+  `kind`, `url`, `enabled`, `last_synced_at`, `last_error`.
+- **`calendar/interfaces.py`** — `IICalClient`, `IICalParser`,
+  `ICalendarReadAdapter`, `ICalendarWriteAdapter` Protocols.
+- **`calendar/ical_client.py`** — `ICalClient.fetch(url) -> bytes`: `http(s)`-only
+  fetch (else `ValidationError`) via `httpx.AsyncClient` (`follow_redirects=True`,
+  `CALENDAR_FETCH_TIMEOUT_SECONDS`); non-2xx → `UpstreamError`.
+- **`calendar/ical_parser.py`** — `ICalParser.expand(ics_bytes, window) ->
+  list[BusyInterval]`: parses with `icalendar` + `recurring_ical_events`, clips
+  each occurrence to the window, skips `TRANSP:TRANSPARENT`/`STATUS:CANCELLED`,
+  and turns `VALUE=DATE` all-day events into one UTC-midnight-to-midnight
+  `BusyInterval`.
+- **`calendar/read_adapter.py`** / **`calendar/write_adapter.py`** —
+  `CalendarReadAdapter`/`CalendarWriteAdapter`: CRUD on `external_calendar`
+  (`create` wraps the `uq_external_calendar_host_url` `IntegrityError` in a
+  SAVEPOINT → `ConflictError`, same pattern as `booking/write_adapter.py`) plus
+  `replace_cache` (delete+insert `external_calendar_event` for one calendar),
+  `mark_synced`, `mark_error`.
+- **`calendar/busy_source.py`** — `ExternalCalendarBusyTimesSource.get_busy`:
+  reads cached busy intervals from `external_calendar_event` for enabled
+  calendars belonging to the requested hosts, overlapping the window.
+- **`calendar/composite_busy.py`** — `CompositeBusyTimesSource`: unions
+  `BookingBusyTimesSource` + `ExternalCalendarBusyTimesSource`; forwards
+  `exclude_booking_id` only to the booking source.
+- **`calendar/sync_service.py`** — `sync_calendar`: fetch → expand → full
+  replace-cache → `mark_synced`, or `mark_error` on any fetch/parse exception
+  (last good cache left intact).
+- **`calendar/dispatcher.py`** — `run_calendar_sync_loop`: background poller
+  (own session per tick, syncs every enabled calendar, commits, sleeps
+  interruptibly on the shared shutdown `asyncio.Event`) — same shape as
+  `publishing/dispatcher.py`/`reminders/dispatcher.py`.
+- **`routers/calendar.py`** / **`schemas/calendar.py`** — `/api/v1/calendars`
+  endpoints (connect/list/delete/sync) and their Pydantic request/response models.
 - **`dto/{schedule,event_type}.py`** — frozen dataclasses (`UpsertScheduleDTO`,
   `ScheduleBundleDTO`, `ActorDTO`, `WeeklyHourDTO`, `DateOverrideDTO`, `TravelDTO`,
   `UpsertEventTypeDTO`, `EventTypeDTO`, `HostDTO`, `BookingLimitDTO`).
@@ -256,19 +289,24 @@ every REMINDER_INTERVAL_SECONDS tick (default 60s)
   `async_sessionmaker`, `Clock` (SystemClock), `IReceiverClient` (`ReceiverClient`),
   `IUsersClient` (`UsersClient`). REQUEST scope: `AsyncSession`,
   `ISqlExecutor`, `IScheduleDBAdapter`, `IScheduleController`, `IEventTypeDBAdapter`,
-  `IEventTypeController`, `BusyTimesSource` (**`BookingBusyTimesSource`, real**),
+  `IEventTypeController`, `BusyTimesSource` (**`CompositeBusyTimesSource`, slice 5**
+  — unions `BookingBusyTimesSource` with `ExternalCalendarBusyTimesSource`),
   `ISlotsReadAdapter`, `ISlotService`, `IBookingReadAdapter`, `IBookingWriteAdapter`,
   `IOutboxWriter` (`OutboxWriter`), `IBookingService` (now takes `outbox` as a
   constructor arg), `IReminderReadAdapter` (`ReminderReadAdapter`),
-  `IReminderWriteAdapter` (`ReminderWriteAdapter`). Both the outbox dispatcher's
+  `IReminderWriteAdapter` (`ReminderWriteAdapter`), `ICalendarReadAdapter`
+  (`CalendarReadAdapter`), `ICalendarWriteAdapter` (`CalendarWriteAdapter`),
+  `IICalClient` (`ICalClient`). Both the outbox dispatcher's
   `run_dispatcher_loop` and the reminder poller's `run_reminder_loop` are
   started/stopped directly in `main.py`'s `lifespan` (neither is itself a
   Dishka-provided service) — each pulls `Settings`/`async_sessionmaker`/
   `IUsersClient`/`IReceiverClient`/`Clock` out of the container once at startup
   and constructs its own read/write adapters per tick from a fresh session.
-- **`db/models.py`** — SQLAlchemy ORM models (11 tables); used by Alembic only.
+  The calendar-sync poller (`run_calendar_sync_loop`, slice 5) is started the
+  same way, alongside the other two.
+- **`db/models.py`** — SQLAlchemy ORM models (13 tables); used by Alembic only.
 
-## Database Tables (11)
+## Database Tables (13)
 
 | Table | Description |
 |-------|-------------|
@@ -283,6 +321,8 @@ every REMINDER_INTERVAL_SECONDS tick (default 60s)
 | `booking` (slice 3) | One row per booking. `EXCLUDE USING gist (host_user_id WITH =, tstzrange(start_time, end_time) WITH &&) WHERE status='confirmed'` — DB-enforced no-double-booking per host, race-safe under concurrency. FK→event_type RESTRICT. |
 | `booking_change_log` (slice 3) | Append-only transition log (`created`/`rescheduled`/`cancelled`) per booking, written in the same statement as the mutation. No FK to `booking` (kept for parity with `schedule_change_log`'s survive-delete pattern, though bookings are soft-cancelled, never deleted). |
 | `outbox` (slice 4a) | Transactional outbox for `booking.lifecycle` CloudEvents. One row per booking mutation, written in the same transaction. `status` IN `('pending','sent','failed')`; `event_type` IN `('booking.created','booking.rescheduled','booking.cancelled')`; `event_ce_id` is the stable `ce-id` used for at-least-once dedup downstream; `next_attempt_at`/`attempts`/`last_error` drive the backoff retry loop. No FK (booking identity is carried as `booking_uid` text, not a DB FK, so the outbox row survives independent of the booking row's lifecycle). Index `ix_outbox_dispatch (status, next_attempt_at)` backs the dispatcher's poll query. |
+| `external_calendar` (slice 5) | One row per connected iCal-URL calendar. `kind` CHECK IN `('ical_url')`; `host_user_id`+`url` UNIQUE (`uq_external_calendar_host_url`); `enabled` gates whether the poller/busy-source consider it; `last_synced_at`/`last_error` track the most recent sync tick. |
+| `external_calendar_event` (slice 5) | Busy-interval cache for one `external_calendar`. Fully replaced (delete-all + insert) on every sync tick — not an incremental diff. FK→`external_calendar.id` ON DELETE CASCADE (deleting a calendar drops its cache). CHECK `busy_end > busy_start`. Index `ix_ext_cal_event_window (calendar_id, busy_start, busy_end)`. |
 
 ## Endpoints
 
@@ -305,6 +345,10 @@ every REMINDER_INTERVAL_SECONDS tick (default 60s)
 | POST | `/api/v1/bookings/{id}/cancel` | Bearer | Soft-cancel (`status='confirmed'→'cancelled'`); idempotent (second call returns the already-cancelled booking, no duplicate log row); frees the slot (exclusion constraint only applies `WHERE status='confirmed'`) |
 | POST | `/api/v1/bookings/{id}/reschedule` | Bearer | In-place move to a new `start_time`, **same host only**; re-checks host availability excluding the booking's own row (`exclude_booking_id`); `409` if cancelled or the new slot isn't free; `404` unknown booking |
 | GET | `/api/v1/bookings/{id}/history` | Bearer | Ordered `booking_change_log` entries (`created`→`rescheduled`*→`cancelled`?) |
+| POST | `/api/v1/calendars` | Bearer | Connect a host's iCal-URL calendar (slice 5). Body: `{host_user_id, url}`. `201`; `422` if `url` isn't `http(s)://`; `409` if this `host_user_id`+`url` is already connected. |
+| GET | `/api/v1/calendars?host_user_id=` | Bearer | List a host's connected calendars (id, kind, url, enabled, last_synced_at, last_error). |
+| DELETE | `/api/v1/calendars/{id}` | Bearer | Disconnect a calendar; `204`. Cascade-deletes its cached busy events. |
+| POST | `/api/v1/calendars/{id}/sync` | Bearer | Force an immediate fetch+expand+replace-cache sync outside the poller's own interval; `404` unknown id. |
 | GET | `/health` | public | Liveness — no deps |
 | GET | `/ready` | public | Static readiness probe — returns `{"status":"ready"}` with no DB check |
 | GET | `/metrics` | public | Prometheus exposition |
@@ -338,6 +382,10 @@ failure mode to these endpoints.
 | `REMINDER_SHIFT_FROM_MINUTES` | Lower bound of the "due soon" window, minutes before `start_time` (default `55`) |
 | `REMINDER_SHIFT_TO_MINUTES` | Upper bound of the "due soon" window, minutes before `start_time` (default `65`) |
 | `REMINDER_BATCH_SIZE` | Max due bookings claimed per reminder tick (default `100`; not overridden in `docker-compose.services.yml`, default is used) |
+| `CALENDAR_SYNC_ENABLED` | Kill-switch for the calendar-sync poller (default `true`); when `false`, `main.py` never starts the calendar-sync background task |
+| `CALENDAR_SYNC_INTERVAL_SECONDS` | Seconds between calendar-sync poll ticks (default `300`) |
+| `CALENDAR_SYNC_WINDOW_DAYS` | Rolling window (days from `now()`) over which each calendar's busy events are expanded and cached (default `62`, matches the slot-engine's own 62-day cap) |
+| `CALENDAR_FETCH_TIMEOUT_SECONDS` | HTTP timeout for `ICalClient.fetch` (default `15`) |
 
 ## ETL from cal.com
 
@@ -359,13 +407,16 @@ cal.com DB (`Schedule`, `Availability`, `users` tables) to `event_scheduling`.
 
 `interfaces/busy_times.py` defines `BusyTimesSource` (Protocol) and
 `StubBusyTimesSource` (returns `[]` always; still used directly in unit tests
-that don't need real bookings). **The seam is now ACTIVE**: `ioc.py` binds
-`BusyTimesSource` to `BookingBusyTimesSource` (`booking/busy_source.py`), which
-queries confirmed `booking` rows for the requested hosts/window, expanded by the
-owning event type's `buffer_before_minutes`/`buffer_after_minutes`. Both
-`SlotService` (read-side, `GET /api/v1/slots`) and `BookingService` (write-side
-availability re-check) call `get_busy(user_ids, window, exclude_booking_id=...)`
-through the same Protocol.
+that don't need real bookings). **The seam is now ACTIVE and, as of slice 5,
+composite**: `ioc.py` binds `BusyTimesSource` to `CompositeBusyTimesSource`
+(`calendar/composite_busy.py`), which unions `BookingBusyTimesSource`
+(`booking/busy_source.py` — confirmed `booking` rows, buffer-expanded) with
+`ExternalCalendarBusyTimesSource` (`calendar/busy_source.py` — cached iCal
+busy events, see "Calendar sync" above). Both `SlotService` (read-side, `GET
+/api/v1/slots`) and `BookingService` (write-side availability re-check) call
+`get_busy(user_ids, window, exclude_booking_id=...)` through the same Protocol,
+unaware that the implementation now also consults external calendars —
+`exclude_booking_id` is forwarded only to the booking half of the union.
 
 **Slice-3 maturity notes:**
 - `BusyTimesSource` is `BookingBusyTimesSource` (real) — slots and booking creation both exclude time overlapping a confirmed booking or its buffer.
@@ -407,6 +458,94 @@ through the same Protocol.
   *event-receiver* response, not to `UsersClient`). Net effect: without a valid admin
   token, outbox rows for real bookings retry forever and never reach `sent` — see
   `docs/DEPENDENCIES.md`.
+
+**Slice-5 maturity notes (calendar sync — external busy-times via iCal URL):**
+- `BusyTimesSource` is now `CompositeBusyTimesSource` — slots and booking creation
+  both exclude time overlapping a confirmed booking (as before) **and** time
+  covered by any of the host's enabled external iCal calendars.
+- **iCal-URL subscription only, import-only.** No OAuth (Google/Microsoft
+  Calendar API), no CalDAV, no export of this service's own bookings anywhere.
+  A single `kind='ical_url'` is the only supported connection type today.
+- **Poller-based, not real-time.** Freshness is bounded by
+  `CALENDAR_SYNC_INTERVAL_SECONDS` (default 300s) — an external event created
+  moments ago may not yet be reflected in availability. `POST
+  /api/v1/calendars/{id}/sync` exists for an on-demand refresh.
+- **Full replace per sync, not incremental.** Each tick deletes and reinserts
+  the *entire* cache for a calendar; a fetch/parse failure leaves the prior
+  good cache untouched rather than clearing it.
+- **SSRF hardening deferred — see the SECURITY note above.** This is the
+  primary known gap before wider/production exposure of this feature.
+- **Additive.** `slots/` and `booking/service.py` are unchanged; the only
+  wiring change is the `provide_busy_source` factory in `ioc.py`.
+
+## Calendar sync (slice 5 — external busy-times via iCal URL)
+
+A new `calendar/` module lets a host connect an external calendar by **iCal URL
+subscription** (e.g. a Google/Outlook "secret address in iCal format" export) so
+the slot engine and booking-create also treat time already busy on that external
+calendar as unavailable. This is **additive and import-only**: no OAuth, no
+writing/exporting events anywhere, and the existing `slots/` and
+`booking/service.py` code is unchanged — the only wiring change is the
+`BusyTimesSource` binding in `ioc.py`.
+
+```
+POST /api/v1/calendars {host_user_id, url}   → connects a calendar (kind='ical_url', enabled=true)
+  → background poller (run_calendar_sync_loop, 3rd lifespan task, tick every
+    CALENDAR_SYNC_INTERVAL_SECONDS, default 300s):
+      for each enabled external_calendar row:
+        ICalClient.fetch(url)                → raw .ics bytes (http/https only; UpstreamError on non-2xx)
+        ICalParser.expand(bytes, window)      → list[BusyInterval] (window = [now, now+CALENDAR_SYNC_WINDOW_DAYS])
+          (skips TRANSP:TRANSPARENT and STATUS:CANCELLED; all-day/VALUE=DATE
+           events become UTC-midnight-to-next-UTC-midnight busy)
+        CalendarWriteAdapter.replace_cache(calendar_id, events)
+          → DELETE all external_calendar_event rows for this calendar, then
+            INSERT the freshly-expanded set — full replace per calendar per
+            tick, in one transaction (not an incremental diff)
+        on fetch/parse failure: mark_error(calendar_id, now, err); the LAST
+          GOOD cache is left intact (no partial/empty overwrite)
+  → ExternalCalendarBusyTimesSource.get_busy(user_ids, window) reads the cache
+    (external_calendar_event JOIN external_calendar WHERE enabled)
+  → CompositeBusyTimesSource(booking, external).get_busy(user_ids, window, exclude_booking_id=None)
+    unions BookingBusyTimesSource's busy intervals with the external ones;
+    exclude_booking_id is forwarded ONLY to the booking source (the external
+    source has no notion of "this service's own booking")
+  → ioc.py binds BusyTimesSource → CompositeBusyTimesSource, so SlotService
+    (GET /api/v1/slots) and BookingService (create/reschedule re-validation)
+    pick up external busy-times with NO code change in slots/ or booking/
+```
+
+- **`CALENDAR_SYNC_ENABLED` toggle.** When `false`, `main.py` never starts the
+  calendar-sync background task at all (same kill-switch pattern as
+  `REMINDER_ENABLED`) — the outbox dispatcher and reminder poller are unaffected.
+- **Management endpoints** (`routers/calendar.py`, `/api/v1/calendars`, gated by
+  the same `require_api_key` as every other `/api/v1/*` route):
+  - `POST /api/v1/calendars` `{host_user_id, url}` — connect a calendar (`409` if
+    the same `host_user_id`+`url` pair already exists, via the
+    `uq_external_calendar_host_url` constraint); `422` if the URL isn't `http://`/`https://`.
+  - `GET /api/v1/calendars?host_user_id=` — list a host's connected calendars.
+  - `DELETE /api/v1/calendars/{id}` — disconnect (cascade-deletes its cached
+    `external_calendar_event` rows).
+  - `POST /api/v1/calendars/{id}/sync` — force an immediate sync outside the
+    poller's own interval; `404` if the calendar id is unknown.
+- **iCal-URL only, import-only.** `kind` is DB-constrained to `'ical_url'`
+  (`ck_external_calendar_kind`) — no Google/Microsoft OAuth flow, no CalDAV, and
+  no export of this service's own bookings into anyone's calendar. Deferred/out
+  of scope for this slice.
+
+**SECURITY — SSRF hardening is DEFERRED, required before production.**
+`calendar/ical_client.py::ICalClient.fetch` validates **only the URL scheme**
+(`http`/`https`, else `ValidationError`) before issuing the GET with
+`follow_redirects=True`. It does **not** block private/loopback/link-local/cloud
+metadata IPs (e.g. `127.0.0.1`, `169.254.169.254`, RFC1918 ranges), does not
+re-validate the resolved IP on each redirect hop, is not DNS-rebinding-safe, and
+has no response-size cap. A host-supplied calendar URL can currently be used to
+probe or fetch from the service's internal network. The `POST /api/v1/calendars`
+endpoint being gated by `require_api_key` (the shared `SCHEDULING_API_KEY`)
+**limits** who can register a malicious URL — it does **not eliminate** the SSRF
+risk, since any caller holding that one static key can still supply an arbitrary
+URL. This hardening (private/loopback/metadata-IP blocking, per-redirect-hop IP
+re-validation, and a response-size cap) must land before this feature is exposed
+beyond trusted admin use.
 
 ## Service Documentation
 
