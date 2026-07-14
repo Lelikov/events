@@ -419,6 +419,26 @@ services:
       start_period: 10s
     restart: unless-stopped
 
+  event-booker-frontend:
+    build:
+      context: ./event-booker-frontend
+      dockerfile: Dockerfile
+      args:
+        # Empty = same-origin: nginx in the container proxies /api and /health to event-booker:8888.
+        VITE_API_BASE_URL: ${VITE_API_BASE_URL:-}
+    ports:
+      - "${BOOKER_FRONTEND_PORT:-3002}:80"
+    depends_on:
+      event-booker:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO /dev/null http://127.0.0.1:80/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+
   jitsi-chat:
     build:
       context: ./jitsi-chat

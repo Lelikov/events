@@ -31,8 +31,8 @@ export class ErrorBoundary extends Component<Props, State> {
     }
 
     return (
-      <main className="login-shell">
-        <section className="login-card">
+      <main className="booker-shell">
+        <section className="booker-card">
           <h1>Что-то пошло не так</h1>
           <p className="muted">{this.state.error.message}</p>
           <div className="inline-actions">

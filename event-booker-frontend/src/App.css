@@ -4,6 +4,14 @@
   padding: 24px 16px;
 }
 
+.booker-card {
+  border: 1px solid #d0d3e0;
+  border-radius: 10px;
+  background: #fff;
+  padding: 24px;
+  margin-top: 24px;
+}
+
 .event-type-card {
   display: block;
   width: 100%;
