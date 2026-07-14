@@ -573,7 +573,28 @@ Upstream calls: `SchedulingClient` (Bearer `SCHEDULING_API_KEY` → event-schedu
 `EVENT_USERS_TOKEN` → event-users' `/api/users/by-identity`, `/api/users`). No database, no
 RabbitMQ, no background tasks.
 
-**Next up**: the public-facing frontend that calls these endpoints is slice 4b.2 — not built yet.
+The public-facing frontend that calls these endpoints is `event-booker-frontend` (slice 4b.2, below).
+
+---
+
+## event-booker-frontend (public Booker SPA)
+
+`event-booker-frontend` (slice 4b.2, port 3002) is a public React/Vite SPA that lets a guest
+self-book a meeting. It talks **only** to `event-booker` — never directly to
+event-scheduling or event-users — via a same-origin nginx proxy (`/api/*` → `event-booker:8888`),
+mirroring `event-admin-frontend`'s Dockerfile/nginx/`window._env_` pattern but with **no
+auth**: the fetch wrapper never attaches an `Authorization` header or redirects to a login page,
+since `event-booker` is the trust boundary.
+
+Two routes, hand-rolled (no react-router, same `modules/shared/routing.ts` pattern as
+event-admin-frontend):
+- `/` — list of bookable event types (`GET /api/public/event-types`)
+- `/book/{id}` — 3-step wizard: pick a slot (`GET /api/public/slots`) → enter name + email →
+  confirmation (`POST /api/public/bookings`)
+
+Full public booking chain: **browser → event-booker-frontend → event-booker → event-scheduling
+/ event-users**. No cancel/reschedule, no payments, no i18n framework (UI copy is hardcoded
+Russian) — all deferred.
 
 ---
 

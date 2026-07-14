@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Monorepo Overview
 
-This is a **multi-service event-driven system** for managing bookings and participants. Thirteen independent packages share this root directory; each has its own `CLAUDE.md` with service-specific commands and architecture.
+This is a **multi-service event-driven system** for managing bookings and participants. Fourteen independent packages share this root directory; each has its own `CLAUDE.md` with service-specific commands and architecture.
 
 | Service | Language/Stack | Role |
 |---|---|---|
@@ -13,6 +13,7 @@ This is a **multi-service event-driven system** for managing bookings and partic
 | `event-booking/` | Python, FastAPI, FastStream | Booking orchestrator: consumes lifecycle events, reads/writes the cal.com DB, creates GetStream chats + Jitsi meeting URLs, schedules reminders, publishes follow-up events via event-receiver |
 | `event-admin/` | Python, FastAPI | Read-only API over `event-saver`'s DB; publishes admin actions via event-receiver |
 | `event-admin-frontend/` | TypeScript, React, Vite | Admin UI for bookings and participants; Sentry error+perf monitoring (gated, off by default) |
+| `event-booker-frontend/` | TypeScript, React, Vite | Public Booker SPA: guest event-type → slot → booking, over event-booker BFF |
 | `event-users/` | Python, FastAPI | Separate user/contact management service with CRM sync; consumes `events.user.email` |
 | `event-notifier/` | Python, FastAPI, FastStream, asyncpg | Notification dispatcher: consumes `events.notification.commands`, outbox + email/Telegram delivery, publishes delivery-result events |
 | `event-shortener/` | Python, FastAPI | URL shortener (REST, own PostgreSQL); event-booking shortens meeting links via it. Replaced the `/shortify` WireMock stub |
@@ -92,6 +93,7 @@ Host ports:
 | 8005 | event-booker (public booking BFF) |
 | 8000 | event-shortener API (REST URL shortener; event-booking calls it) |
 | 3000 | event-admin-frontend (nginx, same-origin proxy to event-admin) |
+| 3002 | event-booker-frontend (public Booker SPA, nginx → event-booker) |
 | 8080 | jitsi-chat SPA |
 | 8089 | WireMock mocks (journal: `http://localhost:8089/__admin/requests`) |
 | 5672 / 15672 | RabbitMQ (AMQP / management UI) |
