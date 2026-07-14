@@ -32,3 +32,16 @@ async def test_non_2xx_raises_upstream() -> None:
 async def test_non_http_scheme_rejected() -> None:
     with pytest.raises(ValidationError):
         await ICalClient(10.0).fetch("file:///etc/passwd")
+
+
+@pytest.mark.asyncio
+async def test_oversized_body_rejected(monkeypatch) -> None:
+    import event_scheduling.calendar.ical_client as mod
+
+    monkeypatch.setattr(mod, "_MAX_ICS_BYTES", 8)
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=b"BEGIN:VCALENDAR-and-more-than-8-bytes")
+
+    with pytest.raises(UpstreamError):
+        await _client(handler).fetch("https://cal.example/c.ics")

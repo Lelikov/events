@@ -25,10 +25,15 @@ async def sync_calendar(
     now = clock.now()
     try:
         ics_bytes = await client.fetch(calendar.url)
+    except Exception as exc:  # noqa: BLE001 - fetch failure keeps the last good cache
+        logger.warning("calendar sync fetch failed", calendar_id=str(calendar.id), error=str(exc))
+        await write.mark_error(calendar.id, now, "fetch_failed")
+        return
+    try:
         events = parser.expand(ics_bytes, TimeWindow(now, now + timedelta(days=window_days)))
-    except Exception as exc:  # noqa: BLE001 - any fetch/parse failure keeps the last good cache
-        logger.warning("calendar sync failed", calendar_id=str(calendar.id), error=str(exc))
-        await write.mark_error(calendar.id, now, str(exc))
+    except Exception as exc:  # noqa: BLE001 - parse failure keeps the last good cache
+        logger.warning("calendar sync parse failed", calendar_id=str(calendar.id), error=str(exc))
+        await write.mark_error(calendar.id, now, "parse_failed")
         return
     await write.replace_cache(calendar.id, events)
     await write.mark_synced(calendar.id, now)

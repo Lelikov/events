@@ -33,6 +33,11 @@ class _Parser:
         return [BusyInterval(NOW + dt.timedelta(hours=1), NOW + dt.timedelta(hours=2))]
 
 
+class _BoomParser:
+    def expand(self, ics_bytes, window):
+        raise ValueError("malformed ics")
+
+
 async def _mk_cal(s):
     return await CalendarWriteAdapter(SqlExecutor(s)).create(uuid4(), f"https://c/{uuid4()}.ics")
 
@@ -82,4 +87,28 @@ async def test_sync_fetch_failure_marks_error_and_keeps_cache(sessionmaker_fixtu
         err = (
             await s.execute(text("SELECT last_error FROM external_calendar WHERE id=:c"), {"c": cal.id})
         ).scalar_one()
-        assert err is not None
+        assert err == "fetch_failed"
+        assert "network down" not in err
+
+
+@pytest.mark.asyncio
+async def test_sync_parse_failure_marks_error_and_keeps_cache(sessionmaker_fixture) -> None:
+    async with sessionmaker_fixture() as s:
+        cal = await _mk_cal(s)
+        await CalendarWriteAdapter(SqlExecutor(s)).replace_cache(
+            cal.id, [BusyInterval(NOW, NOW + dt.timedelta(hours=1))]
+        )
+        await s.commit()
+    async with sessionmaker_fixture() as s:
+        await sync_calendar(SqlExecutor(s), _OkClient(), _BoomParser(), _Clock(), cal, window_days=62)
+        await s.commit()
+    async with sessionmaker_fixture() as s:
+        n = (
+            await s.execute(text("SELECT count(*) FROM external_calendar_event WHERE calendar_id=:c"), {"c": cal.id})
+        ).scalar_one()
+        assert n == 1  # old cache preserved
+        err = (
+            await s.execute(text("SELECT last_error FROM external_calendar WHERE id=:c"), {"c": cal.id})
+        ).scalar_one()
+        assert err == "parse_failed"
+        assert "malformed ics" not in err
