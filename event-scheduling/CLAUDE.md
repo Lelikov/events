@@ -537,15 +537,20 @@ POST /api/v1/calendars {host_user_id, url}   → connects a calendar (kind='ical
 (`http`/`https`, else `ValidationError`) before issuing the GET with
 `follow_redirects=True`. It does **not** block private/loopback/link-local/cloud
 metadata IPs (e.g. `127.0.0.1`, `169.254.169.254`, RFC1918 ranges), does not
-re-validate the resolved IP on each redirect hop, is not DNS-rebinding-safe, and
-has no response-size cap. A host-supplied calendar URL can currently be used to
-probe or fetch from the service's internal network. The `POST /api/v1/calendars`
-endpoint being gated by `require_api_key` (the shared `SCHEDULING_API_KEY`)
-**limits** who can register a malicious URL — it does **not eliminate** the SSRF
-risk, since any caller holding that one static key can still supply an arbitrary
-URL. This hardening (private/loopback/metadata-IP blocking, per-redirect-hop IP
-re-validation, and a response-size cap) must land before this feature is exposed
-beyond trusted admin use.
+re-validate the resolved IP on each redirect hop, and is not DNS-rebinding-safe.
+A host-supplied calendar URL can currently be used to probe or fetch from the
+service's internal network. The `POST /api/v1/calendars` endpoint being gated by
+`require_api_key` (the shared `SCHEDULING_API_KEY`) **limits** who can register a
+malicious URL — it does **not eliminate** the SSRF risk, since any caller holding
+that one static key can still supply an arbitrary URL. This remaining hardening
+(private/loopback/metadata-IP blocking, per-redirect-hop IP re-validation, a host
+allowlist, and DNS-rebinding-safe IP pinning) must land before this feature is
+exposed beyond trusted admin use.
+
+*Partially hardened (already applied):* the fetch streams the body with a **2 MiB
+response-size cap** (`_MAX_ICS_BYTES` → `UpstreamError`), and sync failures persist
+only a **coarse `last_error` category** (`fetch_failed`/`parse_failed`) — the raw
+exception text goes to the server log, never to the DB column or the API response.
 
 ## Service Documentation
 
