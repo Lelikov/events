@@ -18,6 +18,8 @@ from event_scheduling.booking.interfaces import (
 from event_scheduling.booking.read_adapter import BookingReadAdapter
 from event_scheduling.booking.service import BookingService
 from event_scheduling.booking.write_adapter import BookingWriteAdapter
+from event_scheduling.calendar.busy_source import ExternalCalendarBusyTimesSource
+from event_scheduling.calendar.composite_busy import CompositeBusyTimesSource
 from event_scheduling.config import Settings, get_settings
 from event_scheduling.controllers.event_type import EventTypeController
 from event_scheduling.controllers.schedule import ScheduleController
@@ -95,7 +97,7 @@ class AppProvider(Provider):
 
     @provide(scope=Scope.REQUEST)
     def provide_busy_source(self, sql: ISqlExecutor) -> BusyTimesSource:
-        return BookingBusyTimesSource(sql)
+        return CompositeBusyTimesSource(BookingBusyTimesSource(sql), ExternalCalendarBusyTimesSource(sql))
 
     @provide(scope=Scope.REQUEST)
     def provide_slots_read_adapter(self, sql: ISqlExecutor) -> ISlotsReadAdapter:
