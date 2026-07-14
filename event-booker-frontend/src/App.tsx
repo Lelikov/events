@@ -1,10 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { parseRoute } from './modules/shared/routing.ts'
+import { EventTypeListPage } from './modules/booking/EventTypeListPage.tsx'
 import './App.css'
-
-function EventTypesPlaceholder() {
-  return <h1>Выберите тип встречи</h1>
-}
 
 function BookPlaceholder({ eventTypeId }: { eventTypeId: string }) {
   return <h1>Бронирование: {eventTypeId}</h1>
@@ -31,7 +28,7 @@ export default function App() {
     }
   }, [])
   const route = useMemo(() => parseRoute(pathname), [pathname])
-  if (route.name === 'event-types') return <EventTypesPlaceholder />
+  if (route.name === 'event-types') return <EventTypeListPage />
   if (route.name === 'book') return <BookPlaceholder eventTypeId={route.eventTypeId} />
   return <NotFound />
 }

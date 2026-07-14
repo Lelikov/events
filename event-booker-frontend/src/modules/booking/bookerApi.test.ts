@@ -3,7 +3,7 @@ import { ApiError } from '../shared/api.ts'
 import { createBooking, getEventType, getSlots, listEventTypes } from './bookerApi.ts'
 
 function mockFetch(status: number, jsonBody: unknown) {
-  return vi.fn(async () =>
+  return vi.fn<(input?: RequestInfo | URL, init?: RequestInit) => Promise<Response>>(async () =>
     new Response(JSON.stringify(jsonBody), {
       status,
       headers: { 'content-type': 'application/json' },
