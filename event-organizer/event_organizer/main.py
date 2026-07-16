@@ -20,6 +20,7 @@ from event_organizer.logger import setup_logger
 from event_organizer.metrics import HttpMetricsMiddleware
 from event_organizer.routers.admin import admin_router
 from event_organizer.routers.auth import auth_router
+from event_organizer.routers.me import me_router
 from event_organizer.routes import root_router
 from event_organizer.telemetry import instrument_fastapi, setup_tracing
 
@@ -36,6 +37,7 @@ setup_dishka(container=container, app=app)
 app.include_router(root_router)
 app.include_router(auth_router)
 app.include_router(admin_router)
+app.include_router(me_router)
 app.add_middleware(HttpMetricsMiddleware)
 
 _STATUS = {

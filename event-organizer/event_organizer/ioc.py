@@ -13,6 +13,8 @@ from event_organizer.credentials.adapter import CredentialAdapter
 from event_organizer.credentials.interfaces import ICredentialAdapter
 from event_organizer.interfaces.sql import ISqlExecutor
 from event_organizer.services.login_service import LoginService
+from event_organizer.services.password_change_service import PasswordChangeService
+from event_organizer.services.profile_service import ProfileService
 from event_organizer.services.provisioning_service import ProvisioningService
 
 
@@ -74,3 +76,13 @@ class AppProvider(Provider):
         self, credentials: ICredentialAdapter, passwords: PasswordService, users: IUsersClient
     ) -> ProvisioningService:
         return ProvisioningService(credentials, passwords, users)
+
+    @provide(scope=Scope.REQUEST)
+    def provide_profile_service(self, users: IUsersClient) -> ProfileService:
+        return ProfileService(users)
+
+    @provide(scope=Scope.REQUEST)
+    def provide_password_change_service(
+        self, credentials: ICredentialAdapter, passwords: PasswordService
+    ) -> PasswordChangeService:
+        return PasswordChangeService(credentials, passwords)
