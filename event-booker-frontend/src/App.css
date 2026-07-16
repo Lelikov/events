@@ -1,3 +1,6 @@
+/* App-specific layout: everything else (reset, body, button, a, .field,
+   .inline-actions, .muted) comes from events-design-system/styles.css. */
+
 .booker-shell {
   max-width: 640px;
   margin: 0 auto;
@@ -46,19 +49,6 @@
   background: #eaefff;
 }
 
-.field {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  margin: 12px 0;
-}
-
-.field input {
-  padding: 8px;
-  border: 1px solid #d0d3e0;
-  border-radius: 8px;
-}
-
 .field-error {
   color: #c92a2a;
   font-size: 0.85rem;
@@ -71,16 +61,6 @@
   padding: 10px;
   border-radius: 8px;
   margin: 8px 0;
-}
-
-.muted {
-  color: #6b7280;
-}
-
-.inline-actions {
-  display: flex;
-  gap: 8px;
-  margin-top: 16px;
 }
 
 .spinner {
