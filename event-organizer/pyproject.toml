@@ -1,0 +1,59 @@
+[project]
+name = "event-organizer"
+version = "0.1.0"
+description = "Organizer cabinet BFF: password auth + ownership-scoped schedule/bookings/profile over event-scheduling & event-users"
+requires-python = ">=3.14"
+dependencies = [
+    "alembic>=1.16.0",
+    "asyncpg>=0.31.0",
+    "bcrypt>=4.2.0",
+    "dishka>=1.8.0",
+    "fastapi>=0.135.1",
+    "greenlet>=3.2.4",
+    "httpx>=0.28.0",
+    "opentelemetry-sdk>=1.30.0",
+    "opentelemetry-exporter-otlp-proto-grpc>=1.30.0",
+    "opentelemetry-instrumentation-fastapi>=0.51b0",
+    "opentelemetry-instrumentation-httpx>=0.51b0",
+    "opentelemetry-instrumentation-asyncpg>=0.51b0",
+    "prometheus-client>=0.25.0",
+    "pydantic[email]>=2.10.0",
+    "pydantic-settings>=2.13.1",
+    "pyjwt>=2.10.0",
+    "sqlalchemy>=2.0.48",
+    "structlog>=25.5.0",
+    "ujson>=5.11.0",
+    "uvicorn>=0.41.0",
+]
+
+[dependency-groups]
+dev = [
+    "httpx>=0.28.0",
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.25.0",
+    "ruff>=0.15.4",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+pythonpath = ["."]
+
+[tool.ruff]
+exclude = [".env", ".git", ".mypy_cache", ".pytest_cache", ".venv", "alembic"]
+fix = true
+unsafe-fixes = true
+show-fixes = true
+target-version = "py314"
+line-length = 120
+
+[tool.ruff.format]
+docstring-code-format = true
+
+[tool.ruff.lint]
+ignore = ["ANN401", "COM812", "D1", "D203", "D213", "EM", "FA", "FBT", "G004", "INP001", "ISC001", "PERF203", "PLR", "RET501", "RUF001", "S311", "TC001", "TC002", "TC003", "TRY003", "UP040"]
+select = ["ALL"]
+
+[tool.ruff.lint.extend-per-file-ignores]
+"__init__.py" = ["F401", "F403"]
+"tests/*.py" = ["ANN001", "ANN002", "ANN003", "ANN201", "ANN202", "ANN401", "ARG001", "ARG002", "E402", "PLC0415", "PLR2004", "PT019", "S101", "S105", "S106", "S311", "S603", "S607"]

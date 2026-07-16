@@ -598,6 +598,59 @@ Russian) — all deferred.
 
 ---
 
+## event-organizer (organizer cabinet BFF)
+
+`event-organizer` (slice 6.1, port 8006) is a FastAPI **BFF** in front of
+`event-scheduling` and `event-users`, the counterpart to `event-booker` but for an
+**authenticated organizer** instead of an anonymous guest: `organizer browser
+(slice 6.2 SPA — not built yet) → event-organizer (holds keys, verifies password/JWT)
+→ event-scheduling + event-users`. It owns one small PostgreSQL table,
+`organizer_credential` (own DB `event_organizer`), holding only login state
+(`user_id`, `email`, bcrypt `password_hash`, `disabled`) — the organizer's actual
+schedule/booking/profile data still lives in event-scheduling and event-users.
+
+**Auth**: `POST /auth/login` (body `{email, password}`) verifies against
+`organizer_credential` and returns a session JWT (`access_token`, HS256, 60min
+default expiry). Every `/api/me/*` route requires `Authorization: Bearer
+<access_token>` and decodes it into `OrganizerIdentity{user_id, email}`
+(`auth/identity.py::require_organizer`).
+
+**Ownership by construction — closes the slice-5 IDOR class here.** Every
+`/api/me/*` handler uses `me.user_id` (from the decoded JWT) as the resource id
+passed to event-scheduling/event-users. No route accepts an owner/host/user id as a
+path or body parameter, so there is no id an organizer could substitute to read or
+write another organizer's schedule, bookings, or profile — the same class of bug
+(a caller-supplied id trusted without an ownership check) called out in the slice-5
+audit for other surfaces is structurally impossible on this BFF's surface.
+
+**The `/api/me` endpoints:**
+- `GET/PUT /api/me/schedule`, `PUT /api/me/schedule/travel` — proxy
+  `GET/PUT event-scheduling /api/v1/schedules/{me.user_id}` (+ `/travel`)
+- `GET /api/me/bookings` — proxies `GET event-scheduling /api/v1/bookings?host_user_id={me.user_id}`,
+  returns only `{id, start_time, end_time, status}` per booking (no other
+  participant's id or contact info)
+- `GET/PUT /api/me/profile` — proxies `GET/PATCH event-users /api/users/id/{me.user_id}`;
+  `PUT` forwards **only** `name`/`time_zone` — never `email`/`role`, even though
+  event-users' PATCH accepts them
+- `PUT /api/me/password` — re-verifies the old password, then updates the stored
+  bcrypt hash; `204` on success
+
+**Provisioning**: there is no self-registration. An operator calls `POST
+/admin/organizers` (body `{user_id, email, password}`, static `Authorization: Bearer
+ORGANIZER_ADMIN_KEY`) which first confirms the email is a real organizer in
+event-users (`GET /api/users/by-identity?email=&role=organizer`) before creating
+the credential row.
+
+Upstream calls: `SchedulingClient` (Bearer `SCHEDULING_API_KEY` → event-scheduling's
+`/api/v1/schedules*`, `/api/v1/bookings`) and `UsersClient` (Bearer
+`EVENT_USERS_TOKEN` → event-users' `/api/users/id/*`, `/api/users/by-identity`). No
+RabbitMQ, no background tasks. **Deferred**: TOTP/2FA, password reset,
+self-registration, login rate-limiting, and the organizer-facing frontend (slice
+6.2). event-scheduling's `/api/v1/event-types` and `/api/v1/calendars` are **not**
+fronted here — those remain admin/other-owned surfaces.
+
+---
+
 ## Minimum Viable Setup
 
 Not every service is needed for every task. Use this table to decide what to run:

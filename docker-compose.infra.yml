@@ -51,6 +51,9 @@ services:
       PG_SCHEDULING_USER: ${PG_SCHEDULING_USER:-event_scheduling}
       PG_SCHEDULING_PASSWORD: ${PG_SCHEDULING_PASSWORD:-event_scheduling}
       PG_SCHEDULING_DB: ${PG_SCHEDULING_DB:-event_scheduling}
+      PG_ORGANIZER_USER: ${PG_ORGANIZER_USER:-event_organizer}
+      PG_ORGANIZER_PASSWORD: ${PG_ORGANIZER_PASSWORD:-event_organizer}
+      PG_ORGANIZER_DB: ${PG_ORGANIZER_DB:-event_organizer}
     volumes:
       - pg-data:/var/lib/postgresql/data
       - ./docker/postgres-init:/docker-entrypoint-initdb.d:ro
