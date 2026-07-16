@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Monorepo Overview
 
-This is a **multi-service event-driven system** for managing bookings and participants. Fourteen independent packages share this root directory; each has its own `CLAUDE.md` with service-specific commands and architecture.
+This is a **multi-service event-driven system** for managing bookings and participants. Fifteen independent packages share this root directory; each has its own `CLAUDE.md` with service-specific commands and architecture.
 
 | Service | Language/Stack | Role |
 |---|---|---|
@@ -19,6 +19,7 @@ This is a **multi-service event-driven system** for managing bookings and partic
 | `event-shortener/` | Python, FastAPI | URL shortener (REST, own PostgreSQL); event-booking shortens meeting links via it. Replaced the `/shortify` WireMock stub |
 | `event-scheduling/` | Python, FastAPI | In-house scheduling domain: organizer schedules, event types, hosts, booking limits (replaces cal.com CRM dependency) |
 | `event-booker/` | Python, FastAPI | Public booking BFF: guest→client resolution + booking; holds scheduling/users keys server-side |
+| `event-organizer/` | Python, FastAPI | Organizer cabinet BFF: password+JWT auth, session-scoped `/api/me/*` proxy to event-scheduling (schedule, bookings) + event-users (profile); ownership by construction — id always from the JWT, never from the request |
 | `event-schemas/` | Python, Pydantic | Shared schema library (payloads, envelope, **canonical RabbitMQ topology**); no runtime service |
 | `jitsi-chat/` | TypeScript, React, Vite | Participant-facing video meeting + chat SPA; Sentry error+perf monitoring (gated, off by default) |
 | `event-db-sync/` | Python, FastAPI, asyncpg, FastStream | Trigger-driven cal.com→event-users sync: `pg_notify` listener, watermark reconcile, full-sync; publishes `user.upserted` directly to RabbitMQ (no event-receiver HTTP hop) |
@@ -57,7 +58,8 @@ cal.com DB ──(AFTER INSERT/UPDATE trigger → pg_notify 'user_sync')──�
                             └──► backfills bookings.organizer_user_id / client_user_id by participant email
 ```
 
-- **Database ownership**: `event-saver` owns all main-DB schema migrations (`alembic/` lives there). `event-admin` is read-only — never create migrations in `event-admin`. `event-users`, `event-notifier`, `event-db-sync`, and `event-scheduling` own their separate DBs. `event-booking` writes to the cal.com DB but NEVER migrates it (cal.com owns its schema).
+- **Database ownership**: `event-saver` owns all main-DB schema migrations (`alembic/` lives there). `event-admin` is read-only — never create migrations in `event-admin`. `event-users`, `event-notifier`, `event-db-sync`, `event-scheduling`, and `event-organizer` own their separate DBs. `event-booking` writes to the cal.com DB but NEVER migrates it (cal.com owns its schema).
+- **event-organizer — organizer cabinet BFF**: password+JWT auth over its own `event_organizer` DB (`organizer_credential` table only). Session-gated `/api/me/*` proxies to `event-scheduling` (schedule, bookings) and `event-users` (profile), injecting the JWT's `user_id` — no endpoint accepts a caller-supplied owner id, closing the slice-5 IDOR class for organizer-facing access. Pure HTTP, no RabbitMQ. See `event-organizer/CLAUDE.md`.
 - **event-scheduling — scheduling domain model**: `event-scheduling` owns organizer schedules, event types, hosts, and booking limits (own DB `event_scheduling`, port 8004). It is the **first slice of a phased cal.com CRM replacement**: cal.com is the one-time ETL source (`scripts/etl_from_calcom.py`); after ETL, `event-scheduling` is the authoritative source for schedule/event-type data. Pure HTTP — no RabbitMQ consumers. See `event-scheduling/CLAUDE.md` and `docs/superpowers/specs/2026-07-03-event-scheduling-domain-model-design.md`.
 - **Sanctioned cal.com trigger exception**: `event-db-sync` idempotently applies an **additive `AFTER INSERT/UPDATE` NOTIFY trigger** on cal.com `"Attendee"` and `"users"` (`pg_notify('user_sync', {table, id})`). This is a SANCTIONED integration hook, **NOT** a cal.com schema migration — it adds no columns/tables and does not alter cal.com's data model (cal.com still owns its schema; gated by `APPLY_TRIGGERS`).
 - **Shared schemas**: `event-schemas` (v0.2.0) is a local pip package imported by `event-receiver`, `event-saver`, `event-booking`, and `event-notifier`. Its `queues.py` is the single source of truth for the RabbitMQ topology; `envelope.py` defines the mandatory `{original, normalized}` consumer unwrap.
@@ -91,13 +93,14 @@ Host ports:
 | 8003 | event-db-sync API (→ container 8888; `POST /admin/full-sync`, health) |
 | 8004 | event-scheduling API (scheduling domain: schedules, event types, hosts) |
 | 8005 | event-booker (public booking BFF) |
+| 8006 | event-organizer (organizer cabinet BFF) |
 | 8000 | event-shortener API (REST URL shortener; event-booking calls it) |
 | 3000 | event-admin-frontend (nginx, same-origin proxy to event-admin) |
 | 3002 | event-booker-frontend (public Booker SPA, nginx → event-booker) |
 | 8080 | jitsi-chat SPA |
 | 8089 | WireMock mocks (journal: `http://localhost:8089/__admin/requests`) |
 | 5672 / 15672 | RabbitMQ (AMQP / management UI) |
-| 5432 | postgres (shared app DBs + calcom: event_saver, event_users, event_notifier, event_shortener, event_db_sync, event_scheduling, calcom; 127.0.0.1 only) |
+| 5432 | postgres (shared app DBs + calcom: event_saver, event_users, event_notifier, event_shortener, event_db_sync, event_scheduling, event_organizer, calcom; 127.0.0.1 only) |
 | 9090 | Prometheus *(observability profile; 127.0.0.1 only; scrapes services + RabbitMQ + postgres exporters)* |
 | 3001 | Grafana *(observability profile; admin/admin; dashboards: System Overview, Booking Flow)* |
 | 9093 | Alertmanager *(observability profile; 127.0.0.1 only; routes Prometheus alerts → ops Telegram)* |
@@ -211,6 +214,7 @@ Each service has its own `CLAUDE.md` (commands, architecture) and `docs/` direct
 | `event-notifier/` | notification dispatch, channels | SERVICE_OVERVIEW, API_CONTRACTS, DEPENDENCIES, AUDIT |
 | `event-shortener/` | REST URL shortener, idents, redirect | SERVICE_OVERVIEW, API_CONTRACTS, DEPENDENCIES, AUDIT |
 | `event-scheduling/` | scheduling domain model (slice 1 of cal.com replacement) | SERVICE_OVERVIEW, API_CONTRACTS, DATA_MODEL, DEPENDENCIES, AUDIT |
+| `event-organizer/` | organizer cabinet BFF (password+JWT auth, ownership-by-construction) | — |
 | `event-schemas/` | event types, priorities, versioning | SERVICE_OVERVIEW, API_CONTRACTS, DEPENDENCIES, AUDIT |
 | `jitsi-chat/` | Jitsi video + Stream Chat SPA | SERVICE_OVERVIEW, API_CONTRACTS, DEPENDENCIES |
 

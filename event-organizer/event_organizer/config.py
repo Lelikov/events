@@ -13,7 +13,7 @@ class Settings(BaseSettings):
     postgres_dsn: PostgresDsn = Field(strict=True)
 
     # Session JWT
-    jwt_secret_key: str = "dev-organizer-jwt-secret"  # noqa: S105 - dev default; real via env/Vault
+    jwt_secret_key: str = "dev-organizer-jwt-secret-change-me-please-000"  # noqa: S105 - dev default; real via env/Vault
     jwt_algorithm: str = "HS256"
     jwt_expire_minutes: int = 60
     jwt_audience: str | None = None

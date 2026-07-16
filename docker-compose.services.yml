@@ -368,6 +368,40 @@ services:
       start_period: 20s
     restart: unless-stopped
 
+  event-organizer:
+    build:
+      context: ./event-organizer
+    environment:
+      DEBUG: "false"
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      OTEL_SERVICE_NAME: event-organizer
+      OTEL_SDK_DISABLED: ${OTEL_SDK_DISABLED:-true}
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-http://otel-collector:4317}
+      OTEL_EXPORTER_OTLP_PROTOCOL: grpc
+      POSTGRES_DSN: postgresql+asyncpg://${PG_ORGANIZER_USER:-event_organizer}:${PG_ORGANIZER_PASSWORD:-event_organizer}@postgres:5432/${PG_ORGANIZER_DB:-event_organizer}
+      JWT_SECRET_KEY: ${ORGANIZER_JWT_SECRET:-dev-organizer-jwt-secret-change-me-please-000}
+      ORGANIZER_ADMIN_KEY: ${ORGANIZER_ADMIN_KEY:-dev-organizer-admin-key}
+      EVENT_SCHEDULING_URL: http://event-scheduling:8888
+      SCHEDULING_API_KEY: ${SCHEDULING_API_KEY:-dev-scheduling-api-key-3f9c2e1a7b64d508}
+      EVENT_USERS_URL: http://event-users:8888
+      EVENT_USERS_TOKEN: ${USERS_API_BEARER_TOKEN:-dev-users-bearer-2a7d9e4f8c1b6350}
+    ports:
+      - "${ORGANIZER_PORT:-8006}:8888"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      event-scheduling:
+        condition: service_started
+      event-users:
+        condition: service_started
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8888/health', timeout=5)\""]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    restart: unless-stopped
+
   event-booker:
     build:
       context: ./event-booker
