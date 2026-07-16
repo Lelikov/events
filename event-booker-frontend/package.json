@@ -12,7 +12,7 @@
   },
   "dependencies": {
     "@sentry/react": "^9.47.1",
-    "events-design-system": "file:../events-design-system",
+    "events-design-system": "github:Lelikov/events-design-system#v0.1.0",
     "react": "^19.2.4",
     "react-dom": "^19.2.4"
   },
