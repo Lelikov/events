@@ -1,3 +1,4 @@
+from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 import pytest
@@ -29,5 +30,16 @@ def test_garbage_token_rejected() -> None:
 def test_expired_token_rejected() -> None:
     s = _settings(jwt_expire_minutes=-1)  # already expired
     token = create_access_token(s, user_id=uuid4(), email="a@b.io")
+    with pytest.raises(Unauthorized):
+        decode_token(s, token)
+
+
+def test_malformed_sub_rejected() -> None:
+    import jwt
+
+    s = _settings()
+    expire = datetime.now(UTC) + timedelta(minutes=5)
+    claims = {"sub": "not-a-uuid", "email": "a@b.io", "exp": expire}
+    token = jwt.encode(claims, s.jwt_secret_key, algorithm=s.jwt_algorithm)
     with pytest.raises(Unauthorized):
         decode_token(s, token)

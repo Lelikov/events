@@ -14,6 +14,9 @@ class ProvisioningService:
         self._users = users
 
     async def create(self, user_id: UUID, email: str, password: str) -> OrganizerCredentialDTO:
-        if not await self._users.is_organizer(email):
+        resolved = await self._users.resolve_organizer(email)
+        if resolved is None:
             raise ValidationError("not an organizer in event-users")
+        if resolved != user_id:
+            raise ValidationError("user_id does not match the organizer for this email")
         return await self._credentials.create(user_id, email, self._passwords.hash(password))

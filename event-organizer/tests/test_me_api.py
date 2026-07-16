@@ -51,8 +51,8 @@ class _FakeUsers:
             "time_zone": body["time_zone"],
         }
 
-    async def is_organizer(self, email):
-        return True
+    async def resolve_organizer(self, email):
+        return uuid4()
 
 
 def _app_and_fakes():

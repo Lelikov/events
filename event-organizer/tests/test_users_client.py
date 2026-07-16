@@ -49,8 +49,9 @@ async def test_patch_user_forwards_body() -> None:
 
 
 @pytest.mark.asyncio
-async def test_is_organizer_true_false() -> None:
-    body = {"id": str(uuid4()), "email": "a@b.io", "name": "A", "role": "organizer", "time_zone": "UTC"}
+async def test_resolve_organizer_hit_and_miss() -> None:
+    uid = uuid4()
+    body = {"id": str(uid), "email": "a@b.io", "name": "A", "role": "organizer", "time_zone": "UTC"}
     ok_resp = httpx.Response(200, json=body)
-    assert await _c(lambda _req: ok_resp).is_organizer("a@b.io") is True
-    assert await _c(lambda _req: httpx.Response(404)).is_organizer("x@y.io") is False
+    assert await _c(lambda _req: ok_resp).resolve_organizer("a@b.io") == uid
+    assert await _c(lambda _req: httpx.Response(404)).resolve_organizer("x@y.io") is None

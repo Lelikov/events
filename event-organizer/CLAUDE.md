@@ -71,8 +71,9 @@ tamper with.
 **Request flow (admin provisioning):**
 `routers/admin.py POST /admin/organizers` (static `Authorization: Bearer ORGANIZER_ADMIN_KEY`,
 compared via `hmac.compare_digest`) → `services/provisioning_service.py::ProvisioningService.create`
-→ `IUsersClient.is_organizer` (event-users `GET /api/users/by-identity?email=&role=organizer`,
-`404` → not provisioned, `ValidationError` → `422`) → `PasswordService.hash` →
+→ `IUsersClient.resolve_organizer` (event-users `GET /api/users/by-identity?email=&role=organizer`,
+`404` → `None` → not provisioned, `ValidationError` → `422`; a resolved id that doesn't match the
+caller-supplied `user_id` also raises `ValidationError` → `422`) → `PasswordService.hash` →
 `ICredentialAdapter.create` (own DB, `409` on duplicate email/user_id).
 
 **Request flow (`/api/me/*`):**
@@ -116,8 +117,8 @@ for `profile`/`password`.
   `UpstreamError`.
 - **`adapters/users_client.py`** — `UsersClient`: Bearer `EVENT_USERS_TOKEN` httpx
   client for `GET /api/users/id/{user_id}`, `PATCH /api/users/id/{user_id}`,
-  `GET /api/users/by-identity?email=&role=organizer` (returns `bool`, `404` → `False`,
-  never raises for the not-found case).
+  `GET /api/users/by-identity?email=&role=organizer` (returns the resolved `UUID | None`,
+  `404` → `None`, never raises for the not-found case).
 - **`adapters/sql.py`** — `SqlExecutor`, copied verbatim from event-scheduling.
 - **`errors.py`** — `Unauthorized`(401)/`Forbidden`(403)/`NotFoundError`(404)/
   `ConflictError`(409)/`ValidationError`(422)/`UpstreamError`(502); mapped to HTTP
@@ -141,7 +142,7 @@ for `profile`/`password`.
 | Method | Path | Auth | Behaviour |
 |--------|------|------|-----------|
 | POST | `/auth/login` | none | Body `{email, password}`. `200 {access_token}` on success; `401` on unknown email, disabled credential, or wrong password. |
-| POST | `/admin/organizers` | static `Authorization: Bearer ORGANIZER_ADMIN_KEY` | Body `{user_id, email, password}`. Validates `email` is a real organizer in event-users (`422` if not), hashes the password, inserts the credential. `201 {id, user_id, email}`; `409` on duplicate email/user_id; `401` on wrong admin key. |
+| POST | `/admin/organizers` | static `Authorization: Bearer ORGANIZER_ADMIN_KEY` | Body `{user_id, email, password}`. Resolves `email` to the real event-users organizer id (`422` if not an organizer, `422` if it doesn't match the supplied `user_id`), hashes the password, inserts the credential. `201 {id, user_id, email}`; `409` on duplicate email/user_id; `401` on wrong admin key. |
 | GET | `/api/me/schedule` | JWT bearer | Proxies `GET /api/v1/schedules/{me.user_id}` on event-scheduling; `404` if the organizer has no schedule yet. |
 | PUT | `/api/me/schedule` | JWT bearer | Body `{time_zone, weekly_hours, date_overrides}`. Proxies `PUT /api/v1/schedules/{me.user_id}` (upsert). |
 | PUT | `/api/me/schedule/travel` | JWT bearer | Proxies `PUT /api/v1/schedules/{me.user_id}/travel`. |

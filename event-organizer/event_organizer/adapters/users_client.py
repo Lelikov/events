@@ -34,11 +34,11 @@ class UsersClient:
             raise UpstreamError(f"event-users returned {resp.status_code}")
         return resp.json()
 
-    async def is_organizer(self, email: str) -> bool:
+    async def resolve_organizer(self, email: str) -> UUID | None:
         async with self._http() as c:
             resp = await c.get(f"{self._base_url}/api/users/by-identity", params={"email": email, "role": "organizer"})
         if resp.status_code == httpx.codes.NOT_FOUND:
-            return False
+            return None
         if not resp.is_success:
             raise UpstreamError(f"event-users returned {resp.status_code}")
-        return True
+        return UUID(resp.json()["id"])

@@ -28,6 +28,6 @@ def decode_token(settings: Settings, token: str) -> OrganizerIdentity:
         kwargs["issuer"] = settings.jwt_issuer
     try:
         payload = jwt.decode(token, settings.jwt_secret_key, **kwargs)
-    except jwt.PyJWTError as exc:
+        return OrganizerIdentity(user_id=UUID(payload["sub"]), email=payload["email"])
+    except (jwt.PyJWTError, KeyError, ValueError) as exc:
         raise Unauthorized("invalid or expired token") from exc
-    return OrganizerIdentity(user_id=UUID(payload["sub"]), email=payload["email"])

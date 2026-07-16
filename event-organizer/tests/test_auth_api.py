@@ -4,17 +4,17 @@ import pytest
 
 
 class _FakeUsers:
-    def __init__(self, organizer: bool = True) -> None:
-        self._organizer = organizer
+    def __init__(self, resolved=None) -> None:
+        self._resolved = resolved
 
-    async def is_organizer(self, email):
-        return self._organizer
+    async def resolve_organizer(self, email):
+        return self._resolved
 
     async def get_user(self, user_id): ...
     async def patch_user(self, user_id, body): ...
 
 
-def _app(users_organizer: bool = True):
+def _app(resolved=None):
     from dishka import Provider, Scope, make_async_container, provide
     from dishka.integrations.fastapi import FastapiProvider, setup_dishka
     from fastapi import FastAPI
@@ -37,7 +37,7 @@ def _app(users_organizer: bool = True):
     class FakeUsersProvider(Provider):
         @provide(scope=Scope.APP, override=True)
         def users(self) -> IUsersClient:
-            return _FakeUsers(organizer=users_organizer)
+            return _FakeUsers(resolved=resolved)
 
     container = make_async_container(AppProvider(), FakeUsersProvider(), FastapiProvider())
     app = FastAPI()
@@ -58,12 +58,12 @@ async def test_provision_then_login(sessionmaker_fixture) -> None:
     # sessionmaker_fixture ensures migrations applied; the app uses its own container/engine over the same test DB.
     from starlette.testclient import TestClient
 
-    with TestClient(_app()) as c:
-        uid = str(uuid4())
+    uid = uuid4()
+    with TestClient(_app(resolved=uid)) as c:
         email = f"org-{uuid4()}@x.io"
         r = c.post(
             "/admin/organizers",
-            json={"user_id": uid, "email": email, "password": "pw12345"},
+            json={"user_id": str(uid), "email": email, "password": "pw12345"},
             headers={"Authorization": f"Bearer {ADMIN}"},
         )
         assert r.status_code == 201
@@ -73,11 +73,11 @@ async def test_provision_then_login(sessionmaker_fixture) -> None:
         assert lr.json()["access_token"]
         # wrong password
         assert c.post("/auth/login", json={"email": email, "password": "bad"}).status_code == 401
-        # dup provision
+        # dup provision — SAME user_id + SAME email must reach the DB conflict (409), not the id-mismatch guard
         assert (
             c.post(
                 "/admin/organizers",
-                json={"user_id": str(uuid4()), "email": email, "password": "x"},
+                json={"user_id": str(uid), "email": email, "password": "x"},
                 headers={"Authorization": f"Bearer {ADMIN}"},
             ).status_code
             == 409
@@ -97,10 +97,23 @@ async def test_provision_then_login(sessionmaker_fixture) -> None:
 async def test_provision_non_organizer_422(sessionmaker_fixture) -> None:
     from starlette.testclient import TestClient
 
-    with TestClient(_app(users_organizer=False)) as c:
+    with TestClient(_app(resolved=None)) as c:
         r = c.post(
             "/admin/organizers",
             json={"user_id": str(uuid4()), "email": f"z-{uuid4()}@x.io", "password": "pw"},
+            headers={"Authorization": f"Bearer {ADMIN}"},
+        )
+        assert r.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_provision_user_id_mismatch_422(sessionmaker_fixture) -> None:
+    from starlette.testclient import TestClient
+
+    with TestClient(_app(resolved=uuid4())) as c:  # event-users owns a DIFFERENT id
+        r = c.post(
+            "/admin/organizers",
+            json={"user_id": str(uuid4()), "email": f"m-{uuid4()}@x.io", "password": "pw"},
             headers={"Authorization": f"Bearer {ADMIN}"},
         )
         assert r.status_code == 422
