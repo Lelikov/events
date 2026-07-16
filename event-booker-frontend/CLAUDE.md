@@ -47,11 +47,16 @@ mirroring `event-admin-frontend`'s pattern:
 ### The booking flow (`src/modules/booking/`)
 
 `BookingFlowPage` drives a 3-step wizard for a given `eventTypeId`:
-1. **Slot** (`SlotPicker`) — fetches available slots for a fixed 14-day window (`GET
-   /api/public/slots?event_type_id=&start=&end=&time_zone=`, `start = now + offsetDays`,
-   `end = start + 14 days`); "Позже →" shifts the window forward by 14 days with no upper
-   cap, "← Раньше" shifts it back with a floor at the current day. Time zone is
-   auto-detected via `Intl.DateTimeFormat().resolvedOptions().timeZone` and editable.
+1. **Slot** (`SlotPicker`) — a compact cal.com-style calendar (`react-day-picker`): a month
+   grid where only days with availability are selectable (`GET
+   /api/public/slots?event_type_id=&start=&end=&time_zone=` fetched **per displayed month**),
+   plus a slots column for the picked day. Past/empty days are disabled; the first available
+   day is auto-selected. Month navigation refetches that month; `startMonth` blocks paging
+   into the past. Pure date/availability helpers live in `calendar.ts` (`dateKey`,
+   `monthRange`, `availableDaysFromSlots`, `firstAvailableDay`); the day grid derives day
+   identity from local calendar components. Time zone is auto-detected via
+   `Intl.DateTimeFormat().resolvedOptions().timeZone` and editable. The step renders in a
+   wider shell (`booker-shell--wide`); the other steps stay at the narrow width.
 2. **Details** (`GuestForm`) — collects name + email, then `POST /api/public/bookings`
    (`{event_type_id, name, email, start_time, time_zone}`).
 3. **Confirmation** (`Confirmation`) — shows the event type title, the booked time range

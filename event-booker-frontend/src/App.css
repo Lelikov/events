@@ -120,7 +120,7 @@
 }
 .rdp-day_button { border-radius: 8px; color: var(--text); }
 .rdp-selected .rdp-day_button { background: var(--primary); color: #fff; }
-.rdp-disabled { color: var(--muted); opacity: 0.45; }
+.rdp-disabled:not(.rdp-selected) { color: var(--muted); opacity: 0.45; }
 .rdp-available:not(.rdp-selected) .rdp-day_button { background: var(--primary-pale); color: var(--primary-dark); }
 .rdp-chevron { fill: var(--muted); }
 
