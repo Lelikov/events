@@ -11,3 +11,7 @@ export function formatDate(iso: string, timeZone: string): string {
 export function formatRange(startIso: string, endIso: string, timeZone: string): string {
   return `${formatDate(startIso, timeZone)}, ${formatTime(startIso, timeZone)}–${formatTime(endIso, timeZone)}`
 }
+
+export function formatDayLabel(d: Date): string {
+  return new Intl.DateTimeFormat('ru-RU', { weekday: 'short', day: 'numeric', month: 'long' }).format(d)
+}
