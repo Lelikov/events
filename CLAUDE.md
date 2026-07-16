@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Monorepo Overview
 
-This is a **multi-service event-driven system** for managing bookings and participants. Fifteen independent packages share this root directory; each has its own `CLAUDE.md` with service-specific commands and architecture.
+This is a **multi-service event-driven system** for managing bookings and participants. Sixteen independent packages share this root directory; each has its own `CLAUDE.md` with service-specific commands and architecture.
 
 | Service | Language/Stack | Role |
 |---|---|---|
@@ -21,6 +21,7 @@ This is a **multi-service event-driven system** for managing bookings and partic
 | `event-booker/` | Python, FastAPI | Public booking BFF: guest→client resolution + booking; holds scheduling/users keys server-side |
 | `event-organizer/` | Python, FastAPI | Organizer cabinet BFF: password+JWT auth, session-scoped `/api/me/*` proxy to event-scheduling (schedule, bookings) + event-users (profile); ownership by construction — id always from the JWT, never from the request |
 | `event-schemas/` | Python, Pydantic | Shared schema library (payloads, envelope, **canonical RabbitMQ topology**); no runtime service |
+| `events-design-system/` | TypeScript, React | Shared frontend design system (CSS tokens + light stylesheet + generic React components: Icon/Switch/ErrorBoundary/Badge/UserInfoView); consumed by event-admin-frontend, event-booker-frontend, jitsi-chat; distributed as a git-tag npm dep (mirrors event-schemas), `file:` link for local dev; no runtime service |
 | `jitsi-chat/` | TypeScript, React, Vite | Participant-facing video meeting + chat SPA; Sentry error+perf monitoring (gated, off by default) |
 | `event-db-sync/` | Python, FastAPI, asyncpg, FastStream | Trigger-driven cal.com→event-users sync: `pg_notify` listener, watermark reconcile, full-sync; publishes `user.upserted` directly to RabbitMQ (no event-receiver HTTP hop) |
 
