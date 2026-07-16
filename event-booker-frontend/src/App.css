@@ -2,9 +2,13 @@
    .inline-actions, .muted) comes from events-design-system/styles.css. */
 
 .booker-shell {
-  max-width: 860px;
+  max-width: 640px;
   margin: 0 auto;
   padding: 24px 16px;
+}
+
+.booker-shell.booker-shell--wide {
+  max-width: 960px;
 }
 
 .booker-card {
@@ -85,7 +89,8 @@
 /* ── Compact calendar step ─────────────────────────────────── */
 .cal-card {
   display: grid;
-  grid-template-columns: 200px 1fr auto;
+  grid-template-columns: 180px auto minmax(150px, max-content);
+  justify-content: center;
   gap: 20px;
   border: 1px solid var(--border);
   border-radius: 12px;
@@ -93,6 +98,7 @@
   box-shadow: var(--shadow);
   padding: 20px;
   margin-top: 16px;
+  overflow-x: auto;   /* safety: if the 3 columns ever exceed the card, scroll inside it — never bleed onto the page */
 }
 .cal-info { display: grid; gap: 10px; align-content: start; }
 .cal-info h2 { font-size: 18px; }

@@ -92,7 +92,7 @@ export function BookingFlowPage({ eventTypeId }: { eventTypeId: string }) {
   }
 
   return (
-    <main className="booker-shell">
+    <main className={`booker-shell${step === 'slot' ? ' booker-shell--wide' : ''}`}>
       <h1>{eventType ? eventType.title : 'Бронирование'}</h1>
       {durationLabel && <p className="muted">{durationLabel}</p>}
       {banner && <p className="banner-error">{banner}</p>}
