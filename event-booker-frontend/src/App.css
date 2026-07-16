@@ -24,6 +24,7 @@
   border: 1px solid #d0d3e0;
   border-radius: 10px;
   background: #fff;
+  color: var(--text);
 }
 
 .event-type-card:hover {
@@ -42,11 +43,13 @@
   border: 1px solid #d0d3e0;
   border-radius: 8px;
   background: #fff;
+  color: var(--text);
 }
 
 .slot-button.selected {
   border-color: #3b5bdb;
   background: #eaefff;
+  color: var(--primary);
 }
 
 .field-error {
