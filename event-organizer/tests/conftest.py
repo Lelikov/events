@@ -136,6 +136,27 @@ async def _clean_db(_migrated: str) -> AsyncGenerator[None]:
     return
 
 
+@pytest.fixture(autouse=True)
+async def _truncate_credentials_before_each_test(_migrated: str) -> AsyncGenerator[None]:
+    """Autouse, session-wide re-run safety net.
+
+    Some tests drive the DB directly via ``sessionmaker_fixture`` (bypassing the
+    ``app``/``_clean_db`` fixture chain) and hardcode emails/user ids. Without this,
+    re-running the suite twice against the same (non-ephemeral) Postgres fails on
+    stale rows from the previous run with a ``ConflictError``. Truncating here,
+    before every single test regardless of which fixtures it requests, makes the
+    whole suite idempotent across repeated invocations against a persistent DB.
+    """
+    from sqlalchemy import text
+    from sqlalchemy.ext.asyncio import create_async_engine
+
+    eng = create_async_engine(_migrated)
+    async with eng.begin() as conn:
+        await conn.execute(text("TRUNCATE organizer_credential RESTART IDENTITY CASCADE"))
+    await eng.dispose()
+    return
+
+
 @pytest.fixture
 def app(_migrated: str, _clean_db) -> Generator:
     """Build a fresh FastAPI app + Dishka container per test.
