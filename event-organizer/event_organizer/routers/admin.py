@@ -1,3 +1,4 @@
+import hmac
 from typing import Annotated
 
 from dishka.integrations.fastapi import DishkaRoute, FromDishka
@@ -19,7 +20,7 @@ async def create_organizer(
     authorization: Annotated[str, Header()] = "",
 ) -> OrganizerCreatedResponse:
     expected = f"Bearer {settings.organizer_admin_key}"
-    if authorization != expected:
+    if not hmac.compare_digest(authorization, expected):
         raise Unauthorized("invalid admin key")
     created = await service.create(body.user_id, str(body.email), body.password)
     return OrganizerCreatedResponse(id=created.id, user_id=created.user_id, email=created.email)
