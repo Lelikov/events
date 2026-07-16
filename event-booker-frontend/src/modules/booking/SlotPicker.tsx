@@ -1,90 +1,120 @@
 import { useEffect, useMemo, useState } from 'react'
+import { DayPicker } from 'react-day-picker'
+import { ru } from 'react-day-picker/locale'
+import 'react-day-picker/style.css'
 import { getSlots } from './bookerApi.ts'
-import { formatDate, formatTime } from './datetime.ts'
+import { formatDayLabel, formatTime } from './datetime.ts'
+import { availableDaysFromSlots, dateKey, firstAvailableDay, monthRange, startOfDay, startOfMonth } from './calendar.ts'
 import type { Slots } from './types.ts'
 
-const WINDOW_DAYS = 14
 const COMMON_ZONES = ['Europe/Moscow', 'Europe/Kaliningrad', 'Asia/Yekaterinburg', 'Asia/Novosibirsk', 'UTC']
 
 type Props = {
   eventTypeId: string
+  eventTitle: string
+  durationMinutes: number
   timeZone: string
   onTimeZoneChange: (tz: string) => void
-  onSelect: (startTime: string) => void
+  onSelectSlot: (startTime: string) => void
+  initialMonth?: Date
 }
 
-type FetchResult = { requestId: string; data: Slots | null; error: boolean }
+type FetchResult = { requestId: string; slots: Slots | null; error: boolean }
 
-export function SlotPicker({ eventTypeId, timeZone, onTimeZoneChange, onSelect }: Props) {
-  const [offsetDays, setOffsetDays] = useState(0)
-  const [result, setResult] = useState<FetchResult>({ requestId: '', data: null, error: false })
+export function SlotPicker({
+  eventTypeId,
+  eventTitle,
+  durationMinutes,
+  timeZone,
+  onTimeZoneChange,
+  onSelectSlot,
+  initialMonth,
+}: Props) {
+  const [month, setMonth] = useState<Date>(() => initialMonth ?? startOfMonth(new Date()))
+  const [clickedDay, setClickedDay] = useState<Date | null>(null)
+  const [result, setResult] = useState<FetchResult>({ requestId: '', slots: null, error: false })
 
-  const zones = useMemo(
-    () => (COMMON_ZONES.includes(timeZone) ? COMMON_ZONES : [timeZone, ...COMMON_ZONES]),
-    [timeZone],
-  )
-
-  const requestId = `${eventTypeId}|${timeZone}|${offsetDays}`
+  const { startISO, endISO } = useMemo(() => monthRange(month), [month])
+  const requestId = `${eventTypeId}|${timeZone}|${startISO}`
 
   useEffect(() => {
     let active = true
-    const start = new Date(Date.now() + offsetDays * 86_400_000)
-    const end = new Date(start.getTime() + WINDOW_DAYS * 86_400_000)
-    getSlots(eventTypeId, start.toISOString(), end.toISOString(), timeZone)
-      .then((d) => active && setResult({ requestId, data: d, error: false }))
-      .catch(() => active && setResult({ requestId, data: null, error: true }))
+    getSlots(eventTypeId, startISO, endISO, timeZone)
+      .then((s) => active && setResult({ requestId, slots: s, error: false }))
+      .catch(() => active && setResult({ requestId, slots: null, error: true }))
     return () => {
       active = false
     }
-  }, [eventTypeId, timeZone, offsetDays, requestId])
+  }, [eventTypeId, timeZone, startISO, endISO, requestId])
 
   const isCurrent = result.requestId === requestId
-  const data = isCurrent ? result.data : null
+  const slots = isCurrent ? result.slots : null
   const error = isCurrent && result.error
 
-  if (error) {
-    return <p className="banner-error">Не удалось загрузить слоты. Попробуйте ещё раз.</p>
-  }
+  const availableDays = useMemo(() => (slots ? availableDaysFromSlots(slots) : new Set<string>()), [slots])
 
-  const dates = data ? Object.keys(data.slots).sort() : []
+  // Effective selection: the user's clicked day if still available, else the first available day.
+  const selectedDay = useMemo(() => {
+    if (!slots) return null
+    if (clickedDay && availableDays.has(dateKey(clickedDay))) return clickedDay
+    return firstAvailableDay(slots)
+  }, [slots, clickedDay, availableDays])
+
+  const today = startOfDay(new Date())
+  const daySlots = slots && selectedDay ? (slots.slots[dateKey(selectedDay)] ?? []) : []
+  const zones = COMMON_ZONES.includes(timeZone) ? COMMON_ZONES : [timeZone, ...COMMON_ZONES]
 
   return (
-    <div>
-      <label className="field">
-        <span>Часовой пояс</span>
-        <select value={timeZone} onChange={(e) => onTimeZoneChange(e.target.value)}>
-          {zones.map((z) => (
-            <option key={z} value={z}>
-              {z}
-            </option>
-          ))}
-        </select>
-      </label>
-
-      {data === null && <p className="muted">Загрузка…</p>}
-      {data !== null && dates.length === 0 && <p className="muted">Нет свободных слотов в этом окне.</p>}
-
-      {dates.map((date) => (
-        <section key={date}>
-          <h3>{formatDate(data!.slots[date][0], timeZone)}</h3>
-          <div className="slot-grid">
-            {data!.slots[date].map((iso) => (
-              <button key={iso} type="button" className="slot-button" onClick={() => onSelect(iso)}>
-                {formatTime(iso, timeZone)}
-              </button>
+    <div className="cal-card">
+      <div className="cal-info">
+        <h2>{eventTitle}</h2>
+        <p className="muted">{durationMinutes} мин</p>
+        <label className="field">
+          <span>Часовой пояс</span>
+          <select value={timeZone} onChange={(e) => onTimeZoneChange(e.target.value)}>
+            {zones.map((z) => (
+              <option key={z} value={z}>
+                {z}
+              </option>
             ))}
-          </div>
-        </section>
-      ))}
+          </select>
+        </label>
+      </div>
 
-      <div className="inline-actions">
-        <button type="button" onClick={() => setOffsetDays((o) => o + WINDOW_DAYS)}>
-          Позже →
-        </button>
-        {offsetDays > 0 && (
-          <button type="button" onClick={() => setOffsetDays((o) => Math.max(0, o - WINDOW_DAYS))}>
-            ← Раньше
-          </button>
+      <div className="cal-grid">
+        <DayPicker
+          mode="single"
+          locale={ru}
+          month={month}
+          onMonthChange={setMonth}
+          startMonth={startOfMonth(new Date())}
+          selected={selectedDay ?? undefined}
+          onSelect={(d) => d && setClickedDay(d)}
+          disabled={(d) => d < today || !availableDays.has(dateKey(d))}
+          modifiers={{ available: (d) => availableDays.has(dateKey(d)) }}
+          modifiersClassNames={{ available: 'rdp-available' }}
+        />
+      </div>
+
+      <div className="cal-slots">
+        {error && <p className="banner-error">Не удалось загрузить слоты. Попробуйте ещё раз.</p>}
+        {!error && slots === null && <p className="muted">Загрузка…</p>}
+        {!error && slots !== null && selectedDay === null && <p className="muted">Нет свободных слотов</p>}
+        {!error && selectedDay !== null && (
+          <>
+            <h3 className="cal-day-header">{formatDayLabel(selectedDay)}</h3>
+            {daySlots.length === 0 ? (
+              <p className="muted">Нет свободных слотов</p>
+            ) : (
+              <div className="slot-grid">
+                {daySlots.map((iso) => (
+                  <button key={iso} type="button" className="slot-button" onClick={() => onSelectSlot(iso)}>
+                    {formatTime(iso, timeZone)}
+                  </button>
+                ))}
+              </div>
+            )}
+          </>
         )}
       </div>
     </div>

@@ -97,12 +97,14 @@ export function BookingFlowPage({ eventTypeId }: { eventTypeId: string }) {
       {durationLabel && <p className="muted">{durationLabel}</p>}
       {banner && <p className="banner-error">{banner}</p>}
 
-      {step === 'slot' && (
+      {step === 'slot' && eventType && (
         <SlotPicker
           eventTypeId={eventTypeId}
+          eventTitle={eventType.title}
+          durationMinutes={eventType.duration_minutes}
           timeZone={timeZone}
           onTimeZoneChange={setTimeZone}
-          onSelect={handleSelect}
+          onSelectSlot={handleSelect}
         />
       )}
 
