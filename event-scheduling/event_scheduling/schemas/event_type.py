@@ -58,7 +58,7 @@ class EventTypeResponse(BaseModel):
     buffer_after_minutes: int
     hosts: list[HostModel]
     booking_limits: list[BookingLimitModel]
-    booking_fields: list[BookingFieldModel]
+    booking_fields: list[BookingFieldModel] = []
 
     @classmethod
     def from_dto(cls, dto: EventTypeDTO) -> EventTypeResponse:
