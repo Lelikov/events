@@ -53,7 +53,17 @@ describe('GuestForm dynamic fields', () => {
     setInput('input[name="email"]', 'ada@x.io')
     await act(async () => (container.querySelector('form') as HTMLFormElement).requestSubmit())
     expect(onSubmit).not.toHaveBeenCalled()
-    expect(container.textContent).toContain('Причина')
+    // discriminating: the field-error message actually rendered (not just the field's own label)
+    expect(container.querySelector('.field-error')?.textContent).toBe('Заполните поле «Причина»')
+  })
+
+  it('blocks submit on an invalid email', async () => {
+    const { onSubmit } = await mount([])
+    setInput('input[name="name"]', 'Ada')
+    setInput('input[name="email"]', 'not-an-email')
+    await act(async () => (container.querySelector('form') as HTMLFormElement).requestSubmit())
+    expect(onSubmit).not.toHaveBeenCalled()
+    expect(container.querySelector('.field-error')?.textContent).toContain('email')
   })
 
   it('submits name, email and answers when valid', async () => {
@@ -64,5 +74,26 @@ describe('GuestForm dynamic fields', () => {
     setInput('input[name="field-reason"]', 'help')
     await act(async () => (container.querySelector('form') as HTMLFormElement).requestSubmit())
     expect(onSubmit).toHaveBeenCalledWith('Ada', 'ada@x.io', [{ key: 'reason', value: 'help' }])
+  })
+
+  it('collects checkbox (multi) and boolean answers', async () => {
+    const fields = [
+      field({ field_key: 'topics', field_type: 'checkbox', label: 'Темы',
+              options: [{ value: 'a', label: 'A' }, { value: 'b', label: 'B' }] }),
+      field({ field_key: 'agree', field_type: 'boolean', label: 'Согласие' }),
+    ]
+    const { onSubmit } = await mount(fields)
+    setInput('input[name="name"]', 'Ada')
+    setInput('input[name="email"]', 'ada@x.io')
+    const boxes = container.querySelectorAll('input[type="checkbox"]') // [topics-a, topics-b, agree]
+    await act(async () => (boxes[0] as HTMLInputElement).click()) // check topic 'a'
+    await act(async () => (boxes[1] as HTMLInputElement).click()) // check topic 'b'
+    await act(async () => (boxes[1] as HTMLInputElement).click()) // uncheck 'b' → membership removed
+    await act(async () => (boxes[2] as HTMLInputElement).click()) // agree = true
+    await act(async () => (container.querySelector('form') as HTMLFormElement).requestSubmit())
+    expect(onSubmit).toHaveBeenCalledWith('Ada', 'ada@x.io', [
+      { key: 'topics', value: ['a'] },
+      { key: 'agree', value: true },
+    ])
   })
 })
