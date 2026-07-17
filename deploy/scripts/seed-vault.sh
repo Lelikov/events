@@ -80,6 +80,7 @@ BOOKING_RECEIVER_BOOKING_URL="${RECEIVER_URL}/event/booking"
 ADMIN_RECEIVER_ADMIN_URL="${RECEIVER_URL}/event/admin"
 SHORTENER_INTERNAL_URL="http://event-shortener:8888"
 NOTIFIER_INTERNAL_URL="http://event-notifier:8888"
+SCHEDULING_INTERNAL_URL="http://event-scheduling:8888"
 
 # OpenTelemetry collector in-cluster endpoint (events-observability release).
 # The collector Service name is produced by the opentelemetry-collector chart:
@@ -115,6 +116,8 @@ OTEL_COLLECTOR_ENDPOINT="http://events-observability-opentelemetry-collector:431
 : "${RABBIT_URL_PH:=amqp://events:CHANGE-ME-rabbit-password@10.16.0.20:5672/events}"
 # event-db-sync admin API token (guards its /admin endpoints).
 : "${SYNC_ADMIN_TOKEN:=CHANGE-ME-sync-admin-token}"
+# event-scheduling API key (event-admin proxies to it for the booking-fields editor).
+: "${SCHEDULING_API_KEY:=CHANGE-ME-scheduling-api-key}"
 
 put() {
   local svc="$1"; shift
@@ -226,6 +229,8 @@ put event-admin \
   NOTIFIER_ADMIN_TOKEN="${NOTIFIER_ADMIN_TOKEN}" \
   SHORTENER_URL="${SHORTENER_INTERNAL_URL}" \
   SHORTENER_API_KEY="${SHORTENER_API_KEY}" \
+  EVENT_SCHEDULING_URL="${SCHEDULING_INTERNAL_URL}" \
+  SCHEDULING_API_KEY="${SCHEDULING_API_KEY}" \
   OTEL_SDK_DISABLED="false" \
   OTEL_EXPORTER_OTLP_ENDPOINT="${OTEL_COLLECTOR_ENDPOINT}" \
   OTEL_SERVICE_NAME="event-admin" \

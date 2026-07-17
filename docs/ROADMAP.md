@@ -6,7 +6,8 @@ specs in `docs/superpowers/specs/` and plans in `docs/superpowers/plans/`.
 
 ## TL;DR
 
-Four feature lines are **done, reviewed, and merged to `main`** (plus the two nested-repo main lines):
+Five feature lines are **done and reviewed** (four merged to `main`; the fifth — Phase 3 — built
+on branches, pending merge):
 
 1. **`events-design-system`** — a shared, self-contained light design package (CSS tokens +
    stylesheet + generic React components), published as a git-tag dependency `v0.1.0`.
@@ -15,9 +16,14 @@ Four feature lines are **done, reviewed, and merged to `main`** (plus the two ne
    + answers on bookings).
 4. **Configurable booking fields — Phase 2** (public rendering: size hardening + event-booker BFF
    surfaces fields/forwards answers + dynamic guest form).
+5. **Configurable booking fields — Phase 3** (admin editor: event-admin `/api/scheduling/*` proxy +
+   admin-frontend "Поля записи" editor). **The feature is now end-to-end** — admins configure fields
+   in a UI instead of via the API. Built on `feat/booking-fields-phase3` branches (root events,
+   event-admin, event-admin-frontend); reviewed clean per task; **not yet merged**.
 
-**Next:** Configurable booking fields **Phase 3** — the event-admin editor UI. After that, the
-feature is end-to-end (admin configures fields in a UI instead of via the API).
+**Next:** merge the Phase-3 branches, then the post-Phase-3 follow-up: **viewing** the collected
+answers (admin booking detail / organizer ЛК / notification emails) — the answers are already
+stored + on the `booking.lifecycle` payload; only the display UIs are missing.
 
 ---
 
@@ -79,6 +85,22 @@ Per-event-type custom "booking questions", configurable via API:
   limit. Name + email remain built-in.
 - **Plan:** `.../plans/2026-07-17-booking-fields-phase2-public.md`.
 
+### 5. Configurable booking fields — Phase 3 (admin editor)
+- **event-admin (new upstream):** first `event-scheduling` client in this service — an
+  `ISchedulingClient`/`SchedulingClient` httpx proxy (`EVENT_SCHEDULING_URL` + `SCHEDULING_API_KEY`,
+  `Authorization: Bearer`), DI-provided like the notifier client. Three admin-JWT routes under
+  `/api/scheduling/*` (`GET event-types`, `GET`/`PUT event-types/{id}/booking-fields`) that
+  **forward verbatim** and map upstream errors to `scheduling_service_error` **preserving the
+  status code** — event-scheduling stays the sole validator (`404`/`422` reach the frontend).
+- **event-admin-frontend:** a "Поля записи" screen (sidebar → `/booking-fields`) — pick an event
+  type, then an editor to add/remove/reorder fields and set `field_type`/`label`/`placeholder`/
+  `required`/`options` (6 types; option types get an inline options sub-editor). Client validation
+  mirrors the server (non-empty label, ≥1 distinct option); Save = `PUT` the ordered list; an
+  upstream `422` surfaces inline and keeps the form filled. Built on the design system (`Icon`/
+  `Switch`, `.card`/`.field`/`.error-text`).
+- **Plan:** `.../plans/2026-07-17-booking-fields-phase3-admin-editor.md`. Reviewed clean per task
+  (proxy 11/11 tests; frontend module 18/18, full suite 90/90). **On branches, pending merge.**
+
 ### (Earlier in the same arc) `event-organizer` BFF — slice 6.1
 - Organizer cabinet BFF (password + JWT auth, own DB, port 8006): `/api/me/*` proxies event-scheduling
   (schedule, bookings) + event-users (profile) with the user id always from the JWT session
@@ -102,22 +124,20 @@ nested repos, untouched by this arc.
 
 ---
 
-## Next: Configurable booking fields — Phase 3 (admin editor) — NOT STARTED
+## Next: merge Phase 3, then surface the collected answers
 
-The final phase makes fields configurable in the **admin UI** instead of via the API. Design is
-already captured in the Phase-spec (`.../specs/2026-07-17-configurable-booking-fields-design.md`,
-§ "Admin config (Phase 3)"). Scope:
+**Merge the Phase-3 branches** (`feat/booking-fields-phase3` in root events, event-admin, and
+event-admin-frontend). Root events carries the plan + the `docker-compose.services.yml` wiring
+(event-admin gets `EVENT_SCHEDULING_URL`/`SCHEDULING_API_KEY` + a `depends_on`); event-admin carries
+the proxy; event-admin-frontend carries the editor (branch off its active `feature/ui-redesign`).
+Manual UI smoke (needs an admin login, so run it yourself): admin UI → **Поля записи** → pick a
+type → add a required `textarea` → Save → open that type in the Booker and confirm it renders +
+submits (closes the loop Phases 1–2 already built).
 
-- **`event-admin` (new upstream — it does not talk to event-scheduling today):** add config
-  (`EVENT_SCHEDULING_URL` + `SCHEDULING_API_KEY`, dev defaults matching the compose values used by
-  event-booker/event-organizer), an `adapters/scheduling_client.py` (list event types, GET/PUT a
-  type's booking-fields), and routes under the existing admin JWT auth
-  (`GET /api/scheduling/event-types`, `GET`/`PUT /api/scheduling/event-types/{id}/booking-fields`).
-- **`event-admin-frontend`:** a "Поля записи" screen — list event types → pick one → editor to
-  add/remove/reorder fields and set `field_type`/`label`/`placeholder`/`required`/`options`; Save =
-  `PUT` the ordered list. Uses the design-system components.
-- **To resume:** brainstorm not needed (design is in the spec); go straight to writing the Phase-3
-  plan, then subagent-driven execution. Branch off `main`.
+**Then — viewing answers (the natural follow-up):** answers are already stored on
+`booking.field_answers` and echoed on the `booking.created` payload, but no UI surfaces them. Add a
+read view in the admin booking detail (and/or organizer ЛК / notification emails). This consumes the
+stored snapshot / event payload — no re-collection needed.
 
 ---
 

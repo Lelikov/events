@@ -191,6 +191,9 @@ services:
       # Shortener stats API (must match event-shortener SHORTENER_API_KEY).
       SHORTENER_URL: ${SHORTENER_URL:-http://event-shortener:8888}
       SHORTENER_API_KEY: ${SHORTENER_API_KEY:-dev-shortify-api-key-8c4e1f7b2a93d650}
+      # event-scheduling API proxy (must match event-scheduling's own SCHEDULING_API_KEY).
+      EVENT_SCHEDULING_URL: http://event-scheduling:8888
+      SCHEDULING_API_KEY: ${SCHEDULING_API_KEY:-dev-scheduling-api-key-3f9c2e1a7b64d508}
     ports:
       - "${ADMIN_PORT:-8002}:8888"
     depends_on:
@@ -198,6 +201,8 @@ services:
         condition: service_healthy
       event-users:
         condition: service_healthy
+      event-scheduling:
+        condition: service_started
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8888/health', timeout=5)\""]
       interval: 10s

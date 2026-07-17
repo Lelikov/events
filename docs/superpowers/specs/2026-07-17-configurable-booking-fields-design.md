@@ -1,7 +1,7 @@
 # Configurable Booking Fields — Design Spec
 
 **Date:** 2026-07-17
-**Status:** Approved-in-brainstorm (pending spec review)
+**Status:** Implemented — Phases 1, 2, and 3 all built + reviewed (Phase 3 on `feat/booking-fields-phase3` branches, pending merge)
 **Scope:** Cross-service. `event-scheduling` (data + validation), `event-booker` BFF + `event-booker-frontend` (public rendering), `event-admin` + `event-admin-frontend` (admin config). Built in three self-standing phases.
 
 ## Goal
