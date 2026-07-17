@@ -162,8 +162,9 @@ class AppProvider(Provider):
         busy: BusyTimesSource,
         clock: Clock,
         outbox: IOutboxWriter,
+        fields: IBookingFieldAdapter,
     ) -> IBookingService:
-        return BookingService(slots_read, read, write, busy, clock, outbox)
+        return BookingService(slots_read, read, write, busy, clock, outbox, fields)
 
     @provide(scope=Scope.REQUEST)
     def provide_booking_detail_service(self, read: IBookingReadAdapter, users: IUsersClient) -> IBookingDetailService:

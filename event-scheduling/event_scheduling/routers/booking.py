@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, Header, Query, status
 from event_scheduling.auth import require_api_key
 from event_scheduling.booking.dto import CreateBookingDTO
 from event_scheduling.booking.interfaces import IBookingDetailService, IBookingService
+from event_scheduling.booking_fields.dto import AnswerDTO
 from event_scheduling.dto.schedule import ActorDTO
 from event_scheduling.errors import NotFoundError, ValidationError
 from event_scheduling.schemas.booking import (
@@ -37,7 +38,13 @@ async def create_booking(
     actor_source: Annotated[str, Header()] = "api",
     actor_user_id: Annotated[UUID | None, Header()] = None,
 ) -> BookingResponse:
-    dto = CreateBookingDTO(body.event_type_id, body.client_user_id, body.start_time, body.attendee_time_zone)
+    dto = CreateBookingDTO(
+        body.event_type_id,
+        body.client_user_id,
+        body.start_time,
+        body.attendee_time_zone,
+        field_answers=[AnswerDTO(key=a.key, value=a.value) for a in body.field_answers],
+    )
     return BookingResponse.from_dto(await service.create(dto, _actor(actor_source, actor_user_id)))
 
 

@@ -1,15 +1,20 @@
+import json
 from datetime import datetime
 from uuid import UUID
 
 from sqlalchemy.exc import IntegrityError
 
 from event_scheduling.booking.dto import BookingDTO
+from event_scheduling.booking_fields.dto import AnsweredFieldDTO
 from event_scheduling.dto.schedule import ActorDTO
 from event_scheduling.errors import ConflictError
 from event_scheduling.interfaces.sql import ISqlExecutor
 
 
-_COLS = "id, event_type_id, host_user_id, client_user_id, start_time, end_time, status, attendee_time_zone, created_at"
+_COLS = (
+    "id, event_type_id, host_user_id, client_user_id, start_time, end_time, status, attendee_time_zone, "
+    "created_at, field_answers"
+)
 
 
 def _row_to_dto(r) -> BookingDTO:  # noqa: ANN001
@@ -23,6 +28,10 @@ def _row_to_dto(r) -> BookingDTO:  # noqa: ANN001
         status=r["status"],
         attendee_time_zone=r["attendee_time_zone"],
         created_at=r["created_at"],
+        field_answers=[
+            AnsweredFieldDTO(key=x["key"], label=x["label"], field_type=x["type"], value=x["value"])
+            for x in (r["field_answers"] or [])
+        ],
     )
 
 
@@ -31,7 +40,14 @@ class BookingWriteAdapter:
         self._sql = sql
 
     async def insert(
-        self, event_type_id: UUID, host_user_id: UUID, client_user_id: UUID, start: datetime, end: datetime, tz: str
+        self,
+        event_type_id: UUID,
+        host_user_id: UUID,
+        client_user_id: UUID,
+        start: datetime,
+        end: datetime,
+        tz: str,
+        field_answers: list[AnsweredFieldDTO],
     ) -> BookingDTO:
         # Each attempt runs inside its own SAVEPOINT (nested transaction). The
         # exclusion constraint (ex_booking_no_overlap) raises IntegrityError when the
@@ -41,15 +57,26 @@ class BookingWriteAdapter:
         # fail with "current transaction is aborted" for the rest of the request.
         # The `async with` block rolls back just the SAVEPOINT on error, leaving the
         # outer transaction (and the session) healthy for the caller's next attempt.
+        answers_json = json.dumps(
+            [{"key": a.key, "label": a.label, "type": a.field_type, "value": a.value} for a in field_answers]
+        )
         try:
             async with self._sql.begin_nested():
                 row = await self._sql.fetch_one(
                     f"""
                     INSERT INTO booking (event_type_id, host_user_id, client_user_id, start_time, end_time,
-                                          attendee_time_zone)
-                    VALUES (:et, :h, :c, :s, :e, :tz) RETURNING {_COLS}
+                                          attendee_time_zone, field_answers)
+                    VALUES (:et, :h, :c, :s, :e, :tz, CAST(:fa AS JSONB)) RETURNING {_COLS}
                     """,  # noqa: S608
-                    {"et": event_type_id, "h": host_user_id, "c": client_user_id, "s": start, "e": end, "tz": tz},
+                    {
+                        "et": event_type_id,
+                        "h": host_user_id,
+                        "c": client_user_id,
+                        "s": start,
+                        "e": end,
+                        "tz": tz,
+                        "fa": answers_json,
+                    },
                 )
         except IntegrityError as e:
             raise ConflictError("slot taken") from e

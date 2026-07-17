@@ -304,9 +304,9 @@ every REMINDER_INTERVAL_SECONDS tick (default 60s)
   and constructs its own read/write adapters per tick from a fresh session.
   The calendar-sync poller (`run_calendar_sync_loop`, slice 5) is started the
   same way, alongside the other two.
-- **`db/models.py`** — SQLAlchemy ORM models (13 tables); used by Alembic only.
+- **`db/models.py`** — SQLAlchemy ORM models (14 tables); used by Alembic only.
 
-## Database Tables (13)
+## Database Tables (14)
 
 | Table | Description |
 |-------|-------------|
@@ -318,11 +318,12 @@ every REMINDER_INTERVAL_SECONDS tick (default 60s)
 | `host` | `(event_type_id, user_id)` composite PK; references a `schedule_id`. FK→event_type CASCADE, FK→schedule RESTRICT. |
 | `booking_limit` | Per-event-type limits by `limit_type`+`period` (UNIQUE). CHECK value>0. FK→event_type CASCADE. |
 | `schedule_change_log` | Append-only audit log: JSONB snapshot of the full schedule bundle written on every PUT. No FK to schedule (survives delete). |
-| `booking` (slice 3) | One row per booking. `EXCLUDE USING gist (host_user_id WITH =, tstzrange(start_time, end_time) WITH &&) WHERE status='confirmed'` — DB-enforced no-double-booking per host, race-safe under concurrency. FK→event_type RESTRICT. |
+| `booking` (slice 3) | One row per booking. `EXCLUDE USING gist (host_user_id WITH =, tstzrange(start_time, end_time) WITH &&) WHERE status='confirmed'` — DB-enforced no-double-booking per host, race-safe under concurrency. FK→event_type RESTRICT. `field_answers` (booking fields phase 1) is a JSONB snapshot `[{"key","label","type","value"}]` of the guest's answers at booking time, validated against `booking_field` and stored/echoed by `BookingWriteAdapter.insert`/`BookingReadAdapter`. |
 | `booking_change_log` (slice 3) | Append-only transition log (`created`/`rescheduled`/`cancelled`) per booking, written in the same statement as the mutation. No FK to `booking` (kept for parity with `schedule_change_log`'s survive-delete pattern, though bookings are soft-cancelled, never deleted). |
 | `outbox` (slice 4a) | Transactional outbox for `booking.lifecycle` CloudEvents. One row per booking mutation, written in the same transaction. `status` IN `('pending','sent','failed')`; `event_type` IN `('booking.created','booking.rescheduled','booking.cancelled')`; `event_ce_id` is the stable `ce-id` used for at-least-once dedup downstream; `next_attempt_at`/`attempts`/`last_error` drive the backoff retry loop. No FK (booking identity is carried as `booking_uid` text, not a DB FK, so the outbox row survives independent of the booking row's lifecycle). Index `ix_outbox_dispatch (status, next_attempt_at)` backs the dispatcher's poll query. |
 | `external_calendar` (slice 5) | One row per connected iCal-URL calendar. `kind` CHECK IN `('ical_url')`; `host_user_id`+`url` UNIQUE (`uq_external_calendar_host_url`); `enabled` gates whether the poller/busy-source consider it; `last_synced_at`/`last_error` track the most recent sync tick. |
 | `external_calendar_event` (slice 5) | Busy-interval cache for one `external_calendar`. Fully replaced (delete-all + insert) on every sync tick — not an incremental diff. FK→`external_calendar.id` ON DELETE CASCADE (deleting a calendar drops its cache). CHECK `busy_end > busy_start`. Index `ix_ext_cal_event_window (calendar_id, busy_start, busy_end)`. |
+| `booking_field` (booking fields phase 1) | Per-event-type configurable guest-facing form fields (`text`/`textarea`/`select`/`radio`/`checkbox`/`boolean`). `field_key` is slugified from `label` and unique per event type (`uq_booking_field_key`); `options` (JSONB) holds `[{"value","label"}]` for choice types; `position` orders display. FK→event_type CASCADE. Managed via `PUT/GET /api/v1/event-types/{id}/booking-fields` (`booking_fields/` module); read by `BookingService.create` to validate `POST /api/v1/bookings`' `field_answers` (`booking_fields.domain.validate_and_snapshot`) before the snapshot is stored on `booking.field_answers`. |
 
 ## Endpoints
 

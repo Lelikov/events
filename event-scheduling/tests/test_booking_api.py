@@ -20,6 +20,7 @@ from event_scheduling.booking.dto import BookingDTO, CreateBookingDTO
 from event_scheduling.booking.read_adapter import BookingReadAdapter
 from event_scheduling.booking.service import BookingService
 from event_scheduling.booking.write_adapter import BookingWriteAdapter
+from event_scheduling.booking_fields.adapter import BookingFieldAdapter
 from event_scheduling.dto.schedule import ActorDTO
 from event_scheduling.errors import ConflictError, NotFoundError, ValidationError
 from event_scheduling.publishing.outbox_writer import OutboxWriter
@@ -47,6 +48,7 @@ def _build_service(sql: SqlExecutor, now: dt.datetime) -> BookingService:
         BookingBusyTimesSource(sql),
         _FixedClock(now),
         OutboxWriter(sql),
+        BookingFieldAdapter(sql),
     )
 
 

@@ -8,8 +8,9 @@ Migrations:
 - `alembic/versions/0003_outbox.py` — adds `outbox` (slice 4a, transactional outbox for `booking.lifecycle` CloudEvents).
 - `alembic/versions/0004_booking_reminder_sent.py` — adds `booking.reminder_sent_at` + the partial index `ix_booking_reminder` (slice 4a.3, in-service booking reminders).
 - `alembic/versions/0005_external_calendar.py` — adds `external_calendar` + `external_calendar_event` (slice 5, calendar-sync: iCal-URL busy-time import).
+- `alembic/versions/0006_booking_fields.py` — adds `booking_field` + `booking.field_answers` (configurable booking fields, phase 1).
 
-13 tables total.
+14 tables total.
 
 ## Tables
 
@@ -160,6 +161,7 @@ for reschedule — bookings are never deleted, only soft-cancelled or moved).
 | `created_at` | `timestamptz` | NOT NULL, `server_default now()` | |
 | `updated_at` | `timestamptz` | NOT NULL, `server_default now()` | Bumped on reschedule/cancel |
 | `reminder_sent_at` (slice 4a.3) | `timestamptz` | NULLABLE | Set by the reminder poller (`reminders/write_adapter.py::ReminderWriteAdapter.mark_sent`) once the ~1h-before reminder has been dispatched for this booking. `NULL` = not yet reminded (or eligible again). `BookingWriteAdapter.update_times` (reschedule) resets it back to `NULL` in the same `UPDATE` so a moved booking is re-armed for a fresh reminder. |
+| `field_answers` (booking fields phase 1) | `jsonb` | NOT NULL, `server_default '[]'::jsonb` | Snapshot of the guest's answers to this event type's `booking_field`s at booking time: `[{"key","label","type","value"}]`. Validated against `booking_field` by `booking_fields.domain.validate_and_snapshot` (raises `ValidationError`→`422` on an unknown key, a missing required field, or a value that fails its type check) in `BookingService.create`, before the host search; written by `BookingWriteAdapter.insert`, read back by `BookingReadAdapter`/`BookingWriteAdapter`, and echoed on `BookingResponse.field_answers` and the `booking.created` outbox payload. |
 
 Indexes: `ix_booking_host (host_user_id, status, start_time)`,
 `ix_booking_event_type (event_type_id, status, start_time)`,

@@ -10,11 +10,24 @@ def _iso_z(value: datetime) -> str:
     return value.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+class AnswerModel(BaseModel):
+    key: str
+    value: str | list[str] | bool
+
+
+class AnsweredFieldModel(BaseModel):
+    key: str
+    label: str
+    type: str
+    value: str | list[str] | bool
+
+
 class CreateBookingRequest(BaseModel):
     event_type_id: UUID
     client_user_id: UUID
     start_time: datetime
     attendee_time_zone: str
+    field_answers: list[AnswerModel] = []
 
 
 class RescheduleRequest(BaseModel):
@@ -31,6 +44,7 @@ class BookingResponse(BaseModel):
     status: str
     attendee_time_zone: str
     created_at: datetime
+    field_answers: list[AnsweredFieldModel]
 
     @field_serializer("start_time", "end_time", "created_at")
     def _serialize_utc_z(self, value: datetime) -> str:
@@ -38,7 +52,20 @@ class BookingResponse(BaseModel):
 
     @classmethod
     def from_dto(cls, b: BookingDTO) -> BookingResponse:
-        return cls(**b.__dict__)
+        return cls(
+            id=b.id,
+            event_type_id=b.event_type_id,
+            host_user_id=b.host_user_id,
+            client_user_id=b.client_user_id,
+            start_time=b.start_time,
+            end_time=b.end_time,
+            status=b.status,
+            attendee_time_zone=b.attendee_time_zone,
+            created_at=b.created_at,
+            field_answers=[
+                AnsweredFieldModel(key=a.key, label=a.label, type=a.field_type, value=a.value) for a in b.field_answers
+            ],
+        )
 
 
 class BookingListResponse(BaseModel):
