@@ -22,6 +22,16 @@ def test_slugify_and_dedupe():
     assert assign_keys(items) == ["reason", "reason-2"]
 
 
+def test_assign_keys_avoids_collision_with_suffixed_key():
+    # A later "Reason" must not collide with an earlier "Reason 2" that already produced "reason-2".
+    items = [UpsertBookingFieldDTO("text", "Reason", None, False, []),
+             UpsertBookingFieldDTO("text", "Reason 2", None, False, []),
+             UpsertBookingFieldDTO("text", "Reason", None, False, [])]
+    keys = assign_keys(items)
+    assert keys == ["reason", "reason-2", "reason-3"]
+    assert len(set(keys)) == len(keys)
+
+
 def test_validate_field_items_rejects_bad_shapes():
     with pytest.raises(ValidationError):
         validate_field_items([UpsertBookingFieldDTO("select", "Pick", None, False, [])])  # option type, no options

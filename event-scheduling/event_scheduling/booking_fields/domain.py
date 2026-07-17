@@ -59,16 +59,20 @@ def slugify_key(label: str) -> str:
 
 
 def assign_keys(items: list[UpsertBookingFieldDTO]) -> list[str]:
-    seen: dict[str, int] = {}
+    # Dedupe against every key already emitted (not just a per-base counter): a later
+    # label whose slug is "reason" must not collide with an earlier "Reason 2" that already
+    # produced "reason-2". Bump the suffix until the candidate is unique.
+    used: set[str] = set()
     keys: list[str] = []
     for it in items:
         base = slugify_key(it.label)
-        if base not in seen:
-            seen[base] = 1
-            keys.append(base)
-            continue
-        seen[base] += 1
-        keys.append(f"{base}-{seen[base]}")
+        candidate = base
+        suffix = 1
+        while candidate in used:
+            suffix += 1
+            candidate = f"{base}-{suffix}"
+        used.add(candidate)
+        keys.append(candidate)
     return keys
 
 
