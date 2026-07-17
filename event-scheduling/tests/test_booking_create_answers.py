@@ -1,11 +1,7 @@
-import pytest
-
-
 AUTH = {"Authorization": "Bearer test-scheduling-key"}
 
 
-@pytest.mark.asyncio
-async def test_booking_requires_and_stores_answers(client, bookable_event_type):
+def test_booking_requires_and_stores_answers(client, bookable_event_type):
     et_id, client_user_id, a_valid_start = bookable_event_type  # fixture: seeds a host+schedule so a slot is bookable
     # configure a required textarea
     client.put(
