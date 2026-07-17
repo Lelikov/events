@@ -6,7 +6,7 @@ import { GuestForm } from './GuestForm.tsx'
 import { Confirmation } from './Confirmation.tsx'
 import { formatRange } from './datetime.ts'
 import { navigateTo } from '../shared/routing.ts'
-import type { BookingConfirmation, EventType } from './types.ts'
+import type { Answer, BookingConfirmation, EventType } from './types.ts'
 
 type Step = 'slot' | 'details' | 'done'
 
@@ -60,7 +60,7 @@ export function BookingFlowPage({ eventTypeId }: { eventTypeId: string }) {
     setStep('details')
   }
 
-  async function handleSubmit(name: string, email: string) {
+  async function handleSubmit(name: string, email: string, answers: Answer[]) {
     if (selected === null) return
     setSubmitting(true)
     setSubmitError(null)
@@ -71,6 +71,7 @@ export function BookingFlowPage({ eventTypeId }: { eventTypeId: string }) {
         email,
         start_time: selected,
         time_zone: timeZone,
+        answers,
       })
       setConfirmation(result)
       setStep('done')
@@ -111,7 +112,13 @@ export function BookingFlowPage({ eventTypeId }: { eventTypeId: string }) {
       {step === 'details' && selected && (
         <div>
           <p className="muted">Выбрано: {formatRange(selected, selected, timeZone)}</p>
-          <GuestForm onSubmit={handleSubmit} onBack={() => setStep('slot')} submitError={submitError} submitting={submitting} />
+          <GuestForm
+            fields={eventType?.booking_fields ?? []}
+            onSubmit={handleSubmit}
+            onBack={() => setStep('slot')}
+            submitError={submitError}
+            submitting={submitting}
+          />
         </div>
       )}
 

@@ -70,6 +70,20 @@
   margin: 8px 0;
 }
 
+.radio-group,
+.checkbox-group {
+  display: grid;
+  gap: 6px;
+  margin-top: 4px;
+}
+.radio-option,
+.checkbox-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+}
+
 .spinner {
   display: inline-block;
   width: 16px;
