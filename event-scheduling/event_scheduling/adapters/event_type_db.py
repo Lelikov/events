@@ -3,6 +3,7 @@ from uuid import UUID
 
 from sqlalchemy.exc import IntegrityError
 
+from event_scheduling.booking_fields.dto import BookingFieldDTO, OptionDTO
 from event_scheduling.dto.event_type import BookingLimitDTO, EventTypeDTO, HostDTO, UpsertEventTypeDTO
 
 
@@ -34,7 +35,36 @@ class EventTypeDBAdapter:
         )
         return [BookingLimitDTO(limit_type=r["limit_type"], period=r["period"], value=r["value"]) for r in rows]
 
-    def _build_dto(self, row: RowMapping, hosts: list[HostDTO], limits: list[BookingLimitDTO]) -> EventTypeDTO:
+    async def _fetch_booking_fields(self, event_type_id: UUID) -> list[BookingFieldDTO]:
+        rows = await self._sql.fetch_all(
+            "SELECT field_key, field_type, label, placeholder, required, options, position "
+            "FROM booking_field WHERE event_type_id = :et ORDER BY position",
+            {"et": event_type_id},
+        )
+        result = []
+        for r in rows:
+            raw = r["options"]
+            opts = [OptionDTO(value=o["value"], label=o["label"]) for o in (raw or [])]
+            result.append(
+                BookingFieldDTO(
+                    field_key=r["field_key"],
+                    field_type=r["field_type"],
+                    label=r["label"],
+                    placeholder=r["placeholder"],
+                    required=r["required"],
+                    options=opts,
+                    position=r["position"],
+                )
+            )
+        return result
+
+    def _build_dto(
+        self,
+        row: RowMapping,
+        hosts: list[HostDTO],
+        limits: list[BookingLimitDTO],
+        booking_fields: list[BookingFieldDTO],
+    ) -> EventTypeDTO:
         return EventTypeDTO(
             id=row["id"],
             slug=row["slug"],
@@ -47,6 +77,7 @@ class EventTypeDBAdapter:
             buffer_after_minutes=row["buffer_after_minutes"],
             hosts=hosts,
             booking_limits=limits,
+            booking_fields=booking_fields,
         )
 
     async def insert(self, dto: UpsertEventTypeDTO) -> EventTypeDTO:
@@ -104,7 +135,8 @@ class EventTypeDBAdapter:
             return None
         hosts = await self._fetch_hosts(event_type_id)
         limits = await self._fetch_limits(event_type_id)
-        return self._build_dto(row, hosts, limits)
+        booking_fields = await self._fetch_booking_fields(event_type_id)
+        return self._build_dto(row, hosts, limits, booking_fields)
 
     async def list_all(self) -> list[EventTypeDTO]:
         rows = await self._sql.fetch_all(
@@ -121,7 +153,7 @@ class EventTypeDBAdapter:
             et_id: UUID = row["id"]
             hosts = await self._fetch_hosts(et_id)
             limits = await self._fetch_limits(et_id)
-            result.append(self._build_dto(row, hosts, limits))
+            result.append(self._build_dto(row, hosts, limits, []))
         return result
 
     async def update(self, event_type_id: UUID, dto: UpsertEventTypeDTO) -> EventTypeDTO | None:

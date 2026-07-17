@@ -18,6 +18,7 @@ def _created_body(booking_uid: str, payload: dict, users: list[dict]) -> dict:
         "volunteer_id": payload["host_user_id"],
         "client_id": payload["client_user_id"],
         "booking_uid": booking_uid,
+        "field_answers": payload.get("field_answers", []),
     }
 
 

@@ -281,13 +281,27 @@ Request:
   "event_type_id": "<uuid>",
   "client_user_id": "<uuid>",
   "start_time": "2026-10-01T09:00:00Z",
-  "attendee_time_zone": "Europe/Berlin"
+  "attendee_time_zone": "Europe/Berlin",
+  "field_answers": [
+    {"key": "reason", "value": "help please"},
+    {"key": "topics", "value": ["anxiety", "sleep"]}
+  ]
 }
 ```
+
+`field_answers` is optional (default `[]`); each answer's `value` is a string
+(`text`/`textarea`/`select`/`radio`), a list of strings (`checkbox`), or a boolean
+(`boolean`), per the event type's configured booking fields (see
+`GET/PUT /api/v1/event-types/{id}/booking-fields`).
 
 Flow:
 1. Validate `attendee_time_zone` (IANA) and `start_time` (must not be in the past).
 2. Load the event type + its hosts + their schedules (same bundle the slot engine uses).
+   Validate `field_answers` against the type's `booking_field`s (required present & non-empty;
+   `select`/`radio` value ∈ options; `checkbox` ⊆ options; `boolean` is a bool; unknown key
+   rejected) **before** host assignment — `422` on any violation, with no booking created.
+   The validated answers are stored as a snapshot (`[{key, label, type, value}]`) on
+   `booking.field_answers` and echoed on the response + the `booking.created` event payload.
 3. For each host, recompute availability over `[start, start+duration]` — weekly hours/overrides/travel via `slots/domain.py`, minus busy intervals from `BookingBusyTimesSource` (buffer-expanded) — and keep only hosts free for this exact window. `409` if none are free.
 4. Rank the free hosts with `rank_hosts` (getLuckyUser): fewest future confirmed bookings first, then never-assigned before assigned, then oldest `last_assigned_at` first.
 5. Enforce `booking_limit`s (see below) for the top-ranked host; `409` if exceeded.
@@ -296,7 +310,7 @@ Flow:
 
 Response `201` — `BookingResponse` (see shape below).
 
-Errors: `404` unknown `event_type_id`; `422` `start_time` in the past or invalid `attendee_time_zone`; `409` no host available for the slot / booking_limit exceeded / slot taken concurrently by all ranked hosts.
+Errors: `404` unknown `event_type_id`; `422` `start_time` in the past / invalid `attendee_time_zone` / invalid or missing-required `field_answers`; `409` no host available for the slot / booking_limit exceeded / slot taken concurrently by all ranked hosts.
 
 ### GET /api/v1/bookings/{id}
 
@@ -316,7 +330,10 @@ Errors: `404` unknown `event_type_id`; `422` `start_time` in the past or invalid
   "end_time": "2026-10-01T10:00:00Z",
   "status": "confirmed",
   "attendee_time_zone": "Europe/Berlin",
-  "created_at": "2026-09-15T12:00:00Z"
+  "created_at": "2026-09-15T12:00:00Z",
+  "field_answers": [
+    {"key": "reason", "label": "Почему нужна помощь", "type": "textarea", "value": "help please"}
+  ]
 }
 ```
 

@@ -1,5 +1,7 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from uuid import UUID
+
+from event_scheduling.booking_fields.dto import BookingFieldDTO
 
 
 @dataclass(frozen=True)
@@ -28,6 +30,7 @@ class EventTypeDTO:
     buffer_after_minutes: int
     hosts: list[HostDTO]
     booking_limits: list[BookingLimitDTO]
+    booking_fields: list[BookingFieldDTO] = field(default_factory=list)
 
 
 @dataclass(frozen=True)

@@ -23,6 +23,7 @@ from event_scheduling.publishing.dispatcher import run_dispatcher_loop
 from event_scheduling.publishing.interfaces import IReceiverClient, IUsersClient
 from event_scheduling.reminders.dispatcher import run_reminder_loop
 from event_scheduling.routers.booking import booking_router
+from event_scheduling.routers.booking_field import booking_field_router
 from event_scheduling.routers.calendar import calendar_router
 from event_scheduling.routers.event_type import event_type_router
 from event_scheduling.routers.schedule import schedule_router
@@ -111,6 +112,7 @@ setup_dishka(container=container, app=app)
 app.include_router(root_router)
 app.include_router(schedule_router)
 app.include_router(event_type_router)
+app.include_router(booking_field_router)
 app.include_router(slots_router)
 app.include_router(booking_router)
 app.include_router(calendar_router)

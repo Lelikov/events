@@ -40,18 +40,18 @@ async def test_conflicting_insert_raises_conflict_and_session_stays_usable(sessi
     async with sessionmaker_fixture() as s:
         adapter = BookingWriteAdapter(SqlExecutor(s))
 
-        first = await adapter.insert(et_id, host, uuid4(), START, END, "Europe/Berlin")
+        first = await adapter.insert(et_id, host, uuid4(), START, END, "Europe/Berlin", [])
         assert first.status == "confirmed"
 
         # Same host, overlapping window -> exclusion constraint -> IntegrityError -> ConflictError.
         # This must NOT abort the outer transaction (proves the SAVEPOINT rolled back cleanly).
         with pytest.raises(ConflictError):
-            await adapter.insert(et_id, host, uuid4(), START, END, "Europe/Berlin")
+            await adapter.insert(et_id, host, uuid4(), START, END, "Europe/Berlin", [])
 
         # The session must still be usable for further statements in the SAME transaction —
         # this is exactly what BookingService.create relies on to retry the next ranked host.
         other_host = uuid4()
-        second = await adapter.insert(et_id, other_host, uuid4(), START, END, "Europe/Berlin")
+        second = await adapter.insert(et_id, other_host, uuid4(), START, END, "Europe/Berlin", [])
         assert second.status == "confirmed"
         assert second.host_user_id == other_host
 

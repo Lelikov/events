@@ -2,11 +2,15 @@ from datetime import datetime
 from uuid import UUID
 
 from event_scheduling.booking.dto import BookingChangeEntryDTO, BookingDTO, HostStat
+from event_scheduling.booking_fields.dto import AnsweredFieldDTO
 from event_scheduling.dto.event_type import BookingLimitDTO
 from event_scheduling.interfaces.sql import ISqlExecutor
 
 
-_COLS = "id, event_type_id, host_user_id, client_user_id, start_time, end_time, status, attendee_time_zone, created_at"
+_COLS = (
+    "id, event_type_id, host_user_id, client_user_id, start_time, end_time, status, attendee_time_zone, "
+    "created_at, field_answers"
+)
 
 
 class BookingReadAdapter:
@@ -112,4 +116,8 @@ class BookingReadAdapter:
             status=row["status"],
             attendee_time_zone=row["attendee_time_zone"],
             created_at=row["created_at"],
+            field_answers=[
+                AnsweredFieldDTO(key=x["key"], label=x["label"], field_type=x["type"], value=x["value"])
+                for x in (row["field_answers"] or [])
+            ],
         )

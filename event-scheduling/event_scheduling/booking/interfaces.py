@@ -9,6 +9,7 @@ from event_scheduling.booking.dto import (
     CreateBookingDTO,
     HostStat,
 )
+from event_scheduling.booking_fields.dto import AnsweredFieldDTO
 from event_scheduling.dto.event_type import BookingLimitDTO
 from event_scheduling.dto.schedule import ActorDTO
 
@@ -31,7 +32,14 @@ class IBookingReadAdapter(Protocol):
 
 class IBookingWriteAdapter(Protocol):
     async def insert(
-        self, event_type_id: UUID, host_user_id: UUID, client_user_id: UUID, start: datetime, end: datetime, tz: str
+        self,
+        event_type_id: UUID,
+        host_user_id: UUID,
+        client_user_id: UUID,
+        start: datetime,
+        end: datetime,
+        tz: str,
+        field_answers: list[AnsweredFieldDTO],
     ) -> BookingDTO: ...
     async def update_times(self, booking_id: UUID, start: datetime, end: datetime) -> BookingDTO: ...
     async def set_cancelled(self, booking_id: UUID) -> BookingDTO: ...

@@ -24,6 +24,9 @@ class OutboxWriter:
             "start_time": booking.start_time.isoformat(),
             "end_time": booking.end_time.isoformat(),
             "attendee_time_zone": booking.attendee_time_zone,
+            "field_answers": [
+                {"key": a.key, "label": a.label, "type": a.field_type, "value": a.value} for a in booking.field_answers
+            ],
         }
         if previous_start_time is not None:
             payload["previous_start_time"] = previous_start_time.isoformat()

@@ -18,6 +18,9 @@ from event_scheduling.booking.interfaces import (
 from event_scheduling.booking.read_adapter import BookingReadAdapter
 from event_scheduling.booking.service import BookingService
 from event_scheduling.booking.write_adapter import BookingWriteAdapter
+from event_scheduling.booking_fields.adapter import BookingFieldAdapter
+from event_scheduling.booking_fields.controller import BookingFieldController
+from event_scheduling.booking_fields.interfaces import IBookingFieldAdapter, IBookingFieldController
 from event_scheduling.calendar.busy_source import ExternalCalendarBusyTimesSource
 from event_scheduling.calendar.composite_busy import CompositeBusyTimesSource
 from event_scheduling.calendar.ical_client import ICalClient
@@ -96,6 +99,14 @@ class AppProvider(Provider):
     def provide_event_type_controller(self, db: IEventTypeDBAdapter) -> IEventTypeController:
         return EventTypeController(db)
 
+    @provide(scope=Scope.REQUEST)
+    def provide_booking_field_adapter(self, sql: ISqlExecutor) -> IBookingFieldAdapter:
+        return BookingFieldAdapter(sql)
+
+    @provide(scope=Scope.REQUEST)
+    def provide_booking_field_controller(self, adapter: IBookingFieldAdapter) -> IBookingFieldController:
+        return BookingFieldController(adapter)
+
     @provide(scope=Scope.APP)
     def provide_clock(self) -> Clock:
         return SystemClock()
@@ -151,8 +162,9 @@ class AppProvider(Provider):
         busy: BusyTimesSource,
         clock: Clock,
         outbox: IOutboxWriter,
+        fields: IBookingFieldAdapter,
     ) -> IBookingService:
-        return BookingService(slots_read, read, write, busy, clock, outbox)
+        return BookingService(slots_read, read, write, busy, clock, outbox, fields)
 
     @provide(scope=Scope.REQUEST)
     def provide_booking_detail_service(self, read: IBookingReadAdapter, users: IUsersClient) -> IBookingDetailService:

@@ -5,6 +5,8 @@ from event_scheduling.booking.assignment import rank_hosts
 from event_scheduling.booking.dto import BookingChangeEntryDTO, BookingDTO, CreateBookingDTO
 from event_scheduling.booking.interfaces import IBookingReadAdapter, IBookingWriteAdapter
 from event_scheduling.booking.limits import limit_exceeded, period_bounds_utc
+from event_scheduling.booking_fields.domain import validate_and_snapshot
+from event_scheduling.booking_fields.interfaces import IBookingFieldAdapter
 from event_scheduling.dto.schedule import ActorDTO
 from event_scheduling.errors import ConflictError, NotFoundError, ValidationError
 from event_scheduling.interfaces.busy_times import BusyTimesSource, TimeWindow
@@ -24,6 +26,7 @@ class BookingService:
         busy: BusyTimesSource,
         clock: Clock,
         outbox: IOutboxWriter,
+        fields: IBookingFieldAdapter,
     ) -> None:
         self._slots = slots_read
         self._read = read
@@ -31,6 +34,7 @@ class BookingService:
         self._busy = busy
         self._clock = clock
         self._outbox = outbox
+        self._fields = fields
 
     async def _free_host(
         self,
@@ -60,6 +64,8 @@ class BookingService:
         bundle = await self._slots.load(dto.event_type_id)
         if bundle is None:
             raise NotFoundError(f"event_type {dto.event_type_id} not found")
+        fields = await self._fields.list_for(dto.event_type_id)
+        snapshot = validate_and_snapshot(fields, dto.field_answers)
         cfg = bundle.event_type
         end = start + timedelta(minutes=cfg.duration_minutes)
 
@@ -79,7 +85,7 @@ class BookingService:
         for host_id in ranked:
             try:
                 booking = await self._write.insert(
-                    dto.event_type_id, host_id, dto.client_user_id, start, end, dto.attendee_time_zone
+                    dto.event_type_id, host_id, dto.client_user_id, start, end, dto.attendee_time_zone, snapshot
                 )
             except ConflictError:
                 continue

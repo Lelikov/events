@@ -164,6 +164,7 @@ def app(_migrated: str, _clean_db) -> Generator:
     from event_scheduling.main import _domain_error_handler
     from event_scheduling.metrics import HttpMetricsMiddleware
     from event_scheduling.routers.booking import booking_router
+    from event_scheduling.routers.booking_field import booking_field_router
     from event_scheduling.routers.calendar import calendar_router
     from event_scheduling.routers.event_type import event_type_router
     from event_scheduling.routers.schedule import schedule_router
@@ -176,6 +177,7 @@ def app(_migrated: str, _clean_db) -> Generator:
     application.include_router(root_router)
     application.include_router(schedule_router)
     application.include_router(event_type_router)
+    application.include_router(booking_field_router)
     application.include_router(slots_router)
     application.include_router(booking_router)
     application.include_router(calendar_router)
@@ -192,6 +194,44 @@ def client(app) -> Generator:
     with TestClient(app) as test_client:
         test_client.headers.update({"Authorization": f"Bearer {API_KEY}"})
         yield test_client
+
+
+@pytest.fixture
+def bookable_event_type(client) -> tuple[str, str, str]:
+    """Seed a bookable schedule + single-host event type via HTTP.
+
+    Mirrors test_booking_api.py's ``_seed_single_host_et_http``. Returns
+    ``(event_type_id, client_user_id, a_valid_start_time_iso)`` — a fresh
+    random client_user_id and a start_time (Thursday 09:00 Europe/Berlin, within
+    the seeded weekly hours) that ``POST /api/v1/bookings`` can successfully book.
+    """
+    from uuid import uuid4
+
+    owner = str(uuid4())
+    client.put(
+        f"/api/v1/schedules/{owner}",
+        json={
+            "name": "s",
+            "time_zone": "Europe/Berlin",
+            "weekly_hours": [{"day_of_week": 4, "start_time": "09:00", "end_time": "17:00"}],  # Thursday
+            "date_overrides": [],
+        },
+        headers={"actor-source": "admin"},
+    )
+    sid = client.get(f"/api/v1/schedules/{owner}").json()["schedule"]["id"]
+    body = {
+        "slug": f"et-{uuid4().hex[:8]}",
+        "title": "Intro",
+        "duration_minutes": 60,
+        "slot_interval_minutes": 30,
+        "min_booking_notice_minutes": 0,
+        "buffer_before_minutes": 0,
+        "buffer_after_minutes": 0,
+        "hosts": [{"user_id": owner, "schedule_id": sid}],
+        "booking_limits": [],
+    }
+    et_id = client.post("/api/v1/event-types", json=body).json()["id"]
+    return et_id, str(uuid4()), "2026-10-01T09:00:00Z"
 
 
 @pytest.fixture
@@ -223,6 +263,7 @@ def client_fake_users(_migrated: str, _clean_db) -> Generator:
     from event_scheduling.publishing.dto import ParticipantInfo
     from event_scheduling.publishing.interfaces import IUsersClient
     from event_scheduling.routers.booking import booking_router
+    from event_scheduling.routers.booking_field import booking_field_router
     from event_scheduling.routers.calendar import calendar_router
     from event_scheduling.routers.event_type import event_type_router
     from event_scheduling.routers.schedule import schedule_router
@@ -247,6 +288,7 @@ def client_fake_users(_migrated: str, _clean_db) -> Generator:
     application.include_router(root_router)
     application.include_router(schedule_router)
     application.include_router(event_type_router)
+    application.include_router(booking_field_router)
     application.include_router(slots_router)
     application.include_router(booking_router)
     application.include_router(calendar_router)

@@ -7,6 +7,7 @@ Alembic can autogenerate / compare migrations via Base.metadata.
 from datetime import date, datetime, time
 
 from sqlalchemy import (
+    Boolean,
     CheckConstraint,
     Date,
     DateTime,
@@ -144,6 +145,32 @@ class BookingLimit(Base):
     )
 
 
+class BookingField(Base):
+    __tablename__ = "booking_field"
+
+    id: Mapped[str] = _uuid_pk()
+    event_type_id: Mapped[str] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("event_type.id", ondelete="CASCADE"), nullable=False
+    )
+    field_key: Mapped[str] = mapped_column(Text, nullable=False)
+    field_type: Mapped[str] = mapped_column(Text, nullable=False)
+    label: Mapped[str] = mapped_column(Text, nullable=False)
+    placeholder: Mapped[str | None] = mapped_column(Text, nullable=True)
+    required: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
+    options: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+    position: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("now()"), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("now()"), nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("event_type_id", "field_key", name="uq_booking_field_key"),
+        CheckConstraint(
+            "field_type IN ('text','textarea','select','radio','checkbox','boolean')", name="ck_booking_field_type"
+        ),
+        Index("ix_booking_field_event_type", "event_type_id", "position"),
+    )
+
+
 class Booking(Base):
     """Booking write-side table.
 
@@ -168,6 +195,7 @@ class Booking(Base):
     attendee_time_zone: Mapped[str] = mapped_column(Text, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("now()"), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("now()"), nullable=False)
+    field_answers: Mapped[list] = mapped_column(JSONB, nullable=False, server_default=text("'[]'::jsonb"))
 
     __table_args__ = (
         CheckConstraint("end_time > start_time", name="ck_booking_range"),

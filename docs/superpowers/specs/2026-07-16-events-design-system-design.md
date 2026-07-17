@@ -26,7 +26,7 @@ Mirror `event-schemas` exactly:
 
 ### Ships in the package
 
-**CSS design system** — the generic core of admin's current `index.css`. Delivered primarily as one importable stylesheet, with the token layer also exported for future token-only needs. Every current consumer (admin, booker, jitsi) imports the full `styles.css`:
+**CSS design system** — the generic core of admin's current `index.css`. Delivered primarily as one importable stylesheet, with the token layer also exported for future token-only needs. `event-admin-frontend` and `event-booker-frontend` import the full `styles.css`; `jitsi-chat` imports only `tokens.css` (see its migration section below for why):
 
 - `tokens.css` — only the `:root` custom properties (palette, semantic pales, shadows, radii, `--mono`, `--th-bg`, `--zebra`, `--row-hover`) **plus the Plus Jakarta Sans `@import`** and the base `font-family`/`font-size`/`line-height`. Imported by `styles.css`; also exported standalone (`./tokens.css`) for any future app that wants tokens without the opinionated element/component styles. No current consumer uses it alone.
 - `styles.css` — the full opinionated stylesheet: `@import`s `tokens.css`, then reset, typography, and every generic component class. Selectors carried over verbatim: buttons (`button`, `.secondary`, `.icon-button`, `.link-button`, `.back-button`), forms (`.form`, `.field`, `.checkbox-field`, `.inline-actions`), `.card`, shell + sidebar (`.admin-shell`, `.app-sidebar`, `.app-brand`, `.app-nav*`, `.app-user*`, `.app-logout`, `.app-search`, legacy `.sidebar`/`.menu-item`), content/page structure (`.content`, `.stack`, `.page-header`, `.eyebrow`, `.breadcrumb`, `.muted`, `.error-text`, `.hint`), tables (`table`/`th`/`td`, zebra, sticky, `.table-wrap`, `.cell-*`, `.row-link`), `.tag`/`.tag-list`, semantic `.badge` + `.badge--*` (status + generic variants), `.uid-chip`/`.id-chip`, `.grid-2`/`.filters*`, `.list`/`.events-list`, `.kpi-*`, `.switch*`, `.seg`, `.modal-*`, `.user-info*`, `.picker*`, `.status-filter*`/`.status-option-btn`, `.tz-picker*`/`.tz-*`, `.results-count`/`.tabular`, animations (`fadeUp`), and the responsive `@media` blocks.
@@ -100,10 +100,10 @@ Each migration is an independent, individually-testable task. Fidelity for admin
 - Drop bespoke button / `.field` input / `.booker-card` / error-banner styling in favor of design-system equivalents (`.card`, `.field`, `button`, `.error-text`); keep app-specific layout (`.booker-shell`, `.slot-grid`, `.slot-button`, `.event-type-card`, `.spinner`).
 - Reconcile conflicts introduced by the design-system's global element selectors (e.g. global `button {}` now styles booker's buttons). Booker's existing vitest suite must stay green; the wizard UX (slot → guest form → confirmation) is unchanged, only restyled to the shared brand.
 
-### jitsi-chat (light — full sheet, dark theme dropped)
+### jitsi-chat (light — tokens only, dark theme dropped)
 
-- `main.tsx`: `import 'events-design-system/styles.css'` then its own local layout CSS (replacing the dark `layout.css` globals).
-- **Drop the dark theme**: remove `--bg-color:#1a1a1a`/`--text-color:#fff` light-on-dark globals; the app chrome (chat panel `.chat-section`, header, `.chat-toggle-btn`, `.toast-notification`, `.stub-container`, `.chat-loading`, loading screens) is recolored to the shared light tokens (`--card`, `--bg`, `--text`, `--border`, `--primary`, `--danger`). The `.video-section` background stays black — video tiles are inherently dark, which is not a "theme".
+- `main.tsx`: `import 'events-design-system/tokens.css'` then its own local layout CSS (replacing the dark `layout.css` globals). Jitsi imports **`tokens.css`, not the full `styles.css`**: it embeds `stream-chat-react`, and `styles.css`'s global `button {}` element rule would collide with stream-chat's own buttons. `tokens.css` gives it the shared palette/typography variables with no reset and no component rules, so nothing outside jitsi's own selectors is styled by the package.
+- **Drop the dark theme**: remove `--bg-color:#1a1a1a`/`--text-color:#fff` light-on-dark globals; the app chrome (chat panel `.chat-section`, header, `.chat-toggle-btn`, `.toast-notification`, `.stub-container`, `.chat-loading`, loading screens) is recolored using the shared tokens (`--card`, `--bg`, `--text`, `--border`, `--primary`, `--danger`) via jitsi's own local CSS selectors. The `.video-section` background stays black — video tiles are inherently dark, which is not a "theme".
 - Switch the `stream-chat-react` CSS to its **light** theme (`str-chat__theme-light`) so the embedded chat matches.
 - Keep the meeting/chat **layout** (`.app-container`, `.video-section`, `.chat-section`, responsive `@media`), only recolored. The video-first UX and stream-chat integration must not break. Jitsi's build must stay green; the visual change (dark → light) is intended and verified by manual smoke.
 
@@ -128,7 +128,7 @@ Each migration is an independent, individually-testable task. Fidelity for admin
 1. Build & publish `events-design-system` (`v0.1.0`): package scaffold, `tokens.css` + `styles.css` extracted verbatim from admin, five components, tests, CI, tag.
 2. Migrate `event-admin-frontend` (fidelity) — proves the extraction.
 3. Migrate `event-booker-frontend` (light, full sheet).
-4. Migrate `jitsi-chat` (light, full sheet — dark theme dropped, stream-chat switched to light).
+4. Migrate `jitsi-chat` (light, `tokens.css` only — dark theme dropped, stream-chat switched to light).
 
 Each consumer migration bumps its `package.json` to the `v0.1.0` tag (or `file:` link during local dev), then is validated independently. A design fix discovered during a later migration → patch the package, new tag, bump the already-migrated consumers.
 

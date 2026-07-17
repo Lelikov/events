@@ -1,8 +1,28 @@
+export type FieldOption = {
+  value: string
+  label: string
+}
+
+export type BookingField = {
+  field_key: string
+  field_type: 'text' | 'textarea' | 'select' | 'radio' | 'checkbox' | 'boolean'
+  label: string
+  placeholder: string | null
+  required: boolean
+  options: FieldOption[]
+}
+
+export type Answer = {
+  key: string
+  value: string | string[] | boolean
+}
+
 export type EventType = {
   id: string
   slug: string
   title: string
   duration_minutes: number
+  booking_fields?: BookingField[]
 }
 
 export type Slots = {
@@ -17,6 +37,7 @@ export type CreateBookingBody = {
   email: string
   start_time: string
   time_zone: string
+  answers?: Answer[]
 }
 
 export type BookingConfirmation = {

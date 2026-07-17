@@ -3,12 +3,22 @@ from uuid import UUID
 
 import httpx
 
-from event_booker.dto import BookingResult, EventTypeDTO, SlotsResult
-from event_booker.errors import NotFoundError, SlotUnavailableError, UpstreamError
+from event_booker.dto import AnswerDTO, BookingFieldDTO, BookingResult, EventTypeDTO, OptionDTO, SlotsResult
+from event_booker.errors import NotFoundError, SlotUnavailableError, UpstreamError, ValidationError
 
 
 def _dt(value: str) -> datetime:
     return datetime.fromisoformat(value)
+
+
+def _detail(resp: httpx.Response, fallback: str) -> str:
+    try:
+        body = resp.json()
+    except ValueError:
+        return fallback
+    if isinstance(body, dict) and isinstance(body.get("detail"), str):
+        return body["detail"]
+    return fallback
 
 
 class SchedulingClient:
@@ -50,13 +60,19 @@ class SchedulingClient:
         return SlotsResult(event_type_id=event_type_id, time_zone=data["time_zone"], slots=data["slots"])
 
     async def create_booking(
-        self, event_type_id: UUID, client_user_id: UUID, start_time: datetime, attendee_time_zone: str
+        self,
+        event_type_id: UUID,
+        client_user_id: UUID,
+        start_time: datetime,
+        attendee_time_zone: str,
+        field_answers: list[AnswerDTO] | None = None,
     ) -> BookingResult:
         body = {
             "event_type_id": str(event_type_id),
             "client_user_id": str(client_user_id),
             "start_time": start_time.isoformat(),
             "attendee_time_zone": attendee_time_zone,
+            "field_answers": [{"key": a.key, "value": a.value} for a in (field_answers or [])],
         }
         async with self._http() as client:
             resp = await client.post(f"{self._base_url}/api/v1/bookings", json=body, headers={"actor_source": "booker"})
@@ -64,6 +80,10 @@ class SchedulingClient:
             raise SlotUnavailableError("slot no longer available")
         if resp.status_code == httpx.codes.NOT_FOUND:
             raise NotFoundError("event type not found")
+        if resp.status_code == httpx.codes.UNPROCESSABLE_ENTITY:
+            # Surface event-scheduling's booking-field validation error to the guest form as a 422
+            # (e.g. a required answer missing), instead of an opaque 502.
+            raise ValidationError(_detail(resp, "invalid booking details"))
         self._raise_for_status(resp)
         data = resp.json()
         return BookingResult(
@@ -75,11 +95,23 @@ class SchedulingClient:
 
     @staticmethod
     def _to_event_type(item: dict) -> EventTypeDTO:
+        fields = [
+            BookingFieldDTO(
+                field_key=f["field_key"],
+                field_type=f["field_type"],
+                label=f["label"],
+                placeholder=f.get("placeholder"),
+                required=f["required"],
+                options=[OptionDTO(value=o["value"], label=o["label"]) for o in (f.get("options") or [])],
+            )
+            for f in item.get("booking_fields", [])
+        ]
         return EventTypeDTO(
             id=UUID(item["id"]),
             slug=item["slug"],
             title=item["title"],
             duration_minutes=item["duration_minutes"],
+            booking_fields=fields,
         )
 
     @staticmethod

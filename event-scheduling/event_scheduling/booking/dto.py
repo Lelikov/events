@@ -1,6 +1,8 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from uuid import UUID
+
+from event_scheduling.booking_fields.dto import AnswerDTO, AnsweredFieldDTO
 
 
 @dataclass(frozen=True)
@@ -9,6 +11,7 @@ class CreateBookingDTO:
     client_user_id: UUID
     start_time: datetime
     attendee_time_zone: str
+    field_answers: list[AnswerDTO] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -22,6 +25,7 @@ class BookingDTO:
     status: str
     attendee_time_zone: str
     created_at: datetime
+    field_answers: list[AnsweredFieldDTO] = field(default_factory=list)
 
 
 @dataclass(frozen=True)

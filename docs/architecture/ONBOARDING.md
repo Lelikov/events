@@ -441,6 +441,27 @@ Both React/Vite SPAs (`event-admin-frontend`, `jitsi-chat`) ship `@sentry/react`
 `SENTRY_AUTH_TOKEN`, `SENTRY_ORG`, `SENTRY_PROJECT` — add as GitHub Actions repo secrets in
 `Lelikov/event-admin-frontend` and `Lelikov/jitsi-chat` for source-map uploads to activate.
 
+### Frontend design system (`events-design-system`)
+
+The three SPAs (`event-admin-frontend`, `event-booker-frontend`, `jitsi-chat`) share
+a single **light** visual language via `events-design-system`, a small library package
+(CSS + generic React components — Icon, Switch, ErrorBoundary, Badge, UserInfoView).
+Key facts:
+
+- **Two CSS entry points, deliberately split**: `styles.css` is the full light
+  stylesheet — tokens, reset, and component rules — used by `event-admin-frontend`
+  and `event-booker-frontend`. `tokens.css` is CSS variables + font only, no reset
+  and no component rules; `jitsi-chat` imports this narrower entry point because it
+  embeds `stream-chat-react`, and the full sheet's global `button {}` element rule
+  would collide with stream-chat's own buttons. `jitsi-chat` recolors its own chrome
+  with the shared tokens and switches `stream-chat-react` to its light theme —
+  it dropped its former dark theme to join the shared light brand.
+- **Build**: components are built with `tsup` to `dist/` (both ESM output and type
+  declarations); consumers import compiled output, not source.
+- **Distribution**: consumed as a git-tag npm dependency
+  (`github:Lelikov/events-design-system#vX.Y.Z`), with a `file:../events-design-system`
+  link for local dev — the same model as `event-schemas`.
+
 ### Logging (Vector + VictoriaLogs)
 
 In the same `observability` profile, **Vector** tails every container's
