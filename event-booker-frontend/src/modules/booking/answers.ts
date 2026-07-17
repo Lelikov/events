@@ -21,7 +21,9 @@ export function initialValues(fields: BookingField[]): AnswerValues {
 function isEmpty(field: BookingField, value: string | string[] | boolean): boolean {
   if (field.field_type === 'checkbox') return !Array.isArray(value) || value.length === 0
   if (field.field_type === 'boolean') return value !== true
-  return typeof value === 'string' && value.trim() === ''
+  // Text-like: a missing key (runtime undefined) or a blank/whitespace string is empty —
+  // matching the server, which treats an absent required answer as a violation.
+  return typeof value !== 'string' || value.trim() === ''
 }
 
 export function validateAnswers(fields: BookingField[], values: AnswerValues): string | null {

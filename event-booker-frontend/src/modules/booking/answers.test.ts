@@ -28,3 +28,17 @@ describe('answers helpers', () => {
     expect(out).toEqual([{ key: 'topics', value: ['a'] }, { key: 'agree', value: true }])
   })
 })
+
+describe('answers helpers — required-empty edge cases (mirror server)', () => {
+  it('flags required checkbox/boolean/whitespace and a missing key as empty', () => {
+    expect(validateAnswers([f({ field_key: 'c', field_type: 'checkbox', required: true })], { c: [] })).toContain('L')
+    expect(validateAnswers([f({ field_key: 'b', field_type: 'boolean', required: true })], { b: false })).toContain('L')
+    expect(validateAnswers([f({ field_key: 't', field_type: 'text', required: true })], { t: '   ' })).toContain('L')
+    // missing key for a required text field → still flagged (server treats absent as empty)
+    expect(validateAnswers([f({ field_key: 't', field_type: 'text', required: true })], {})).toContain('L')
+  })
+
+  it('buildAnswers omits a text field whose key is missing', () => {
+    expect(buildAnswers([f({ field_key: 't', field_type: 'text' })], {})).toEqual([])
+  })
+})
