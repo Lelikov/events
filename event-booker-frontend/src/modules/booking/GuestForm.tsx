@@ -3,6 +3,8 @@ import type { Answer, BookingField } from './types.ts'
 import { type AnswerValues, buildAnswers, initialValues, validateAnswers } from './answers.ts'
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+// Mirror event-scheduling's MAX_TEXT_ANSWER_LEN so the input caps before the server 422s.
+const MAX_TEXT_ANSWER_LEN = 10000
 
 type Props = {
   fields: BookingField[]
@@ -102,6 +104,7 @@ function DynamicField({ field, value, onChange, onToggle }: FieldProps) {
           name={name}
           placeholder={field.placeholder ?? ''}
           value={value as string}
+          maxLength={MAX_TEXT_ANSWER_LEN}
           onChange={(e) => onChange(field.field_key, e.target.value)}
         />
       </label>
@@ -179,6 +182,7 @@ function DynamicField({ field, value, onChange, onToggle }: FieldProps) {
         name={name}
         placeholder={field.placeholder ?? ''}
         value={value as string}
+        maxLength={MAX_TEXT_ANSWER_LEN}
         onChange={(e) => onChange(field.field_key, e.target.value)}
       />
     </label>
