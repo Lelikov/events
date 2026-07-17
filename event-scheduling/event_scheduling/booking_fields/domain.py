@@ -13,6 +13,13 @@ from event_scheduling.errors import ValidationError
 FIELD_TYPES = frozenset({"text", "textarea", "select", "radio", "checkbox", "boolean"})
 OPTION_TYPES = frozenset({"select", "radio", "checkbox"})
 
+MAX_FIELDS = 50
+MAX_OPTIONS = 100
+MAX_LABEL_LEN = 200
+MAX_PLACEHOLDER_LEN = 500
+MAX_OPTION_LEN = 200
+MAX_TEXT_ANSWER_LEN = 10000
+
 _CYR = {
     "а": "a",
     "б": "b",
@@ -76,20 +83,34 @@ def assign_keys(items: list[UpsertBookingFieldDTO]) -> list[str]:
     return keys
 
 
+def _validate_one_item(it: UpsertBookingFieldDTO) -> None:
+    if not it.label.strip():
+        raise ValidationError("booking field label must not be empty")
+    if len(it.label) > MAX_LABEL_LEN:
+        raise ValidationError(f"label too long (max {MAX_LABEL_LEN})")
+    if it.placeholder is not None and len(it.placeholder) > MAX_PLACEHOLDER_LEN:
+        raise ValidationError(f"placeholder too long (max {MAX_PLACEHOLDER_LEN})")
+    if it.field_type not in FIELD_TYPES:
+        raise ValidationError(f"unknown field_type {it.field_type!r}")
+    is_option = it.field_type in OPTION_TYPES
+    if is_option and len(it.options) < 1:
+        raise ValidationError(f"field {it.label!r} of type {it.field_type} needs at least one option")
+    if is_option and len(it.options) > MAX_OPTIONS:
+        raise ValidationError(f"field {it.label!r} has too many options (max {MAX_OPTIONS})")
+    if not is_option and it.options:
+        raise ValidationError(f"field {it.label!r} of type {it.field_type} must not have options")
+    values = [o.value for o in it.options]
+    if is_option and (any(not v.strip() for v in values) or len(set(values)) != len(values)):
+        raise ValidationError(f"field {it.label!r} has empty or duplicate option values")
+    if is_option and any(len(o.value) > MAX_OPTION_LEN or len(o.label) > MAX_OPTION_LEN for o in it.options):
+        raise ValidationError(f"field {it.label!r} has an option value/label that is too long (max {MAX_OPTION_LEN})")
+
+
 def validate_field_items(items: list[UpsertBookingFieldDTO]) -> None:
+    if len(items) > MAX_FIELDS:
+        raise ValidationError(f"too many booking fields (max {MAX_FIELDS})")
     for it in items:
-        if not it.label.strip():
-            raise ValidationError("booking field label must not be empty")
-        if it.field_type not in FIELD_TYPES:
-            raise ValidationError(f"unknown field_type {it.field_type!r}")
-        is_option = it.field_type in OPTION_TYPES
-        if is_option and len(it.options) < 1:
-            raise ValidationError(f"field {it.label!r} of type {it.field_type} needs at least one option")
-        if not is_option and it.options:
-            raise ValidationError(f"field {it.label!r} of type {it.field_type} must not have options")
-        values = [o.value for o in it.options]
-        if is_option and (any(not v.strip() for v in values) or len(set(values)) != len(values)):
-            raise ValidationError(f"field {it.label!r} has empty or duplicate option values")
+        _validate_one_item(it)
 
 
 def _validate_one(field: BookingFieldDTO, value: object) -> str | list[str] | bool:
@@ -98,6 +119,8 @@ def _validate_one(field: BookingFieldDTO, value: object) -> str | list[str] | bo
     if ftype in ("text", "textarea"):
         if not isinstance(value, str):
             raise ValidationError(f"field {field.field_key!r} expects text")
+        if len(value) > MAX_TEXT_ANSWER_LEN:
+            raise ValidationError(f"field {field.field_key!r} answer is too long (max {MAX_TEXT_ANSWER_LEN})")
         return value
     if ftype in ("select", "radio"):
         if not isinstance(value, str) or value not in opt_values:

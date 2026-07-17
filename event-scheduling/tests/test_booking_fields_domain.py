@@ -85,3 +85,34 @@ def test_validate_and_snapshot_required_and_membership():
     assert by_key["reason"].label == "Reason"
     assert by_key["reason"].field_type == "textarea"
     assert by_key["topics"].value == ["anx"]
+
+
+def test_validate_field_items_enforces_size_bounds():
+    from event_scheduling.booking_fields.domain import MAX_FIELDS, MAX_OPTIONS
+
+    # too many fields
+    many = [UpsertBookingFieldDTO("text", f"F{i}", None, False, []) for i in range(MAX_FIELDS + 1)]
+    with pytest.raises(ValidationError):
+        validate_field_items(many)
+    # too many options
+    opts = [OptionDTO(value=f"v{i}", label=f"L{i}") for i in range(MAX_OPTIONS + 1)]
+    with pytest.raises(ValidationError):
+        validate_field_items([UpsertBookingFieldDTO("select", "Pick", None, False, opts)])
+    # label too long
+    with pytest.raises(ValidationError):
+        validate_field_items([UpsertBookingFieldDTO("text", "x" * 201, None, False, [])])
+    # placeholder too long
+    with pytest.raises(ValidationError):
+        validate_field_items([UpsertBookingFieldDTO("text", "ok", "p" * 501, False, [])])
+    # option value too long
+    with pytest.raises(ValidationError):
+        validate_field_items([UpsertBookingFieldDTO("radio", "R", None, False, [OptionDTO("v" * 201, "L")])])
+
+
+def test_validate_and_snapshot_caps_text_length():
+    fields = [_field("note", "textarea", required=False)]
+    with pytest.raises(ValidationError):
+        validate_and_snapshot(fields, [AnswerDTO("note", "x" * 10001)])
+    # at the cap is fine
+    snap = validate_and_snapshot(fields, [AnswerDTO("note", "x" * 10000)])
+    assert snap[0].value == "x" * 10000
