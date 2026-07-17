@@ -66,3 +66,17 @@ async def test_create_booking_forwards_answers():
         field_answers=[AnswerDTO("reason", "help"), AnswerDTO("topics", ["a", "b"])],
     )
     assert sent["field_answers"] == [{"key": "reason", "value": "help"}, {"key": "topics", "value": ["a", "b"]}]
+
+
+@pytest.mark.asyncio
+async def test_create_booking_maps_upstream_422_to_validation_error():
+    from event_booker.errors import ValidationError
+
+    def handler(_req: httpx.Request) -> httpx.Response:
+        return httpx.Response(422, json={"detail": "field 'reason' is required"})
+
+    c = SchedulingClient("http://sched", "k", transport=httpx.MockTransport(handler))
+    with pytest.raises(ValidationError, match="reason"):
+        await c.create_booking(
+            uuid4(), uuid4(), __import__("datetime").datetime(2026, 10, 1, 9, 0), "UTC", field_answers=[]
+        )

@@ -4,11 +4,21 @@ from uuid import UUID
 import httpx
 
 from event_booker.dto import AnswerDTO, BookingFieldDTO, BookingResult, EventTypeDTO, OptionDTO, SlotsResult
-from event_booker.errors import NotFoundError, SlotUnavailableError, UpstreamError
+from event_booker.errors import NotFoundError, SlotUnavailableError, UpstreamError, ValidationError
 
 
 def _dt(value: str) -> datetime:
     return datetime.fromisoformat(value)
+
+
+def _detail(resp: httpx.Response, fallback: str) -> str:
+    try:
+        body = resp.json()
+    except ValueError:
+        return fallback
+    if isinstance(body, dict) and isinstance(body.get("detail"), str):
+        return body["detail"]
+    return fallback
 
 
 class SchedulingClient:
@@ -70,6 +80,10 @@ class SchedulingClient:
             raise SlotUnavailableError("slot no longer available")
         if resp.status_code == httpx.codes.NOT_FOUND:
             raise NotFoundError("event type not found")
+        if resp.status_code == httpx.codes.UNPROCESSABLE_ENTITY:
+            # Surface event-scheduling's booking-field validation error to the guest form as a 422
+            # (e.g. a required answer missing), instead of an opaque 502.
+            raise ValidationError(_detail(resp, "invalid booking details"))
         self._raise_for_status(resp)
         data = resp.json()
         return BookingResult(
