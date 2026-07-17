@@ -1,6 +1,28 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from uuid import UUID
+
+
+@dataclass(frozen=True)
+class OptionDTO:
+    value: str
+    label: str
+
+
+@dataclass(frozen=True)
+class BookingFieldDTO:
+    field_key: str
+    field_type: str
+    label: str
+    placeholder: str | None
+    required: bool
+    options: list[OptionDTO]
+
+
+@dataclass(frozen=True)
+class AnswerDTO:
+    key: str
+    value: str | list[str] | bool
 
 
 @dataclass(frozen=True)
@@ -9,6 +31,7 @@ class EventTypeDTO:
     slug: str
     title: str
     duration_minutes: int
+    booking_fields: list[BookingFieldDTO] = field(default_factory=list)
 
 
 @dataclass(frozen=True)

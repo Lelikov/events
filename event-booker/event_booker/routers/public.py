@@ -4,6 +4,7 @@ from uuid import UUID
 from dishka.integrations.fastapi import DishkaRoute, FromDishka
 from fastapi import APIRouter
 
+from event_booker.dto import AnswerDTO
 from event_booker.interfaces.clients import ISchedulingClient
 from event_booker.schemas.public import (
     BookingConfirmationResponse,
@@ -44,5 +45,8 @@ async def get_slots(
 async def create_booking(
     body: CreateBookingPublicRequest, service: FromDishka[GuestBookingService]
 ) -> BookingConfirmationResponse:
-    confirmation = await service.book(body.event_type_id, body.name, body.email, body.start_time, body.time_zone)
+    answers = [AnswerDTO(key=a.key, value=a.value) for a in body.answers]
+    confirmation = await service.book(
+        body.event_type_id, body.name, body.email, body.start_time, body.time_zone, answers=answers
+    )
     return BookingConfirmationResponse.from_confirmation(confirmation)

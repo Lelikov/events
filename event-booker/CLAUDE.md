@@ -25,8 +25,9 @@ uv sync
 uv run pytest
 ```
 No database, no external processes — all upstream calls (`event-scheduling`, `event-users`) are
-faked via `httpx.MockTransport` in `tests/conftest.py`. 23 tests: health (3) + `SchedulingClient` (6)
-+ `UsersClient` (5) + `GuestBookingService` (3) + `/api/public/*` (6).
+faked via `httpx.MockTransport` in `tests/conftest.py`. 25 tests: health (3) + `SchedulingClient` (6)
++ `UsersClient` (5) + `GuestBookingService` (3) + `/api/public/*` (6) + booking-fields passthrough (2,
+`test_booking_fields_bff.py`).
 
 **Configuration:** All settings have dev defaults baked in (see `config.py`); no `.env` required
 locally. Override via env vars — see the table below.
@@ -51,19 +52,26 @@ logger/routes/config) minus DB/alembic/lifespan.
 - **`routers/public.py`** — the 4 public endpoints, all under `/api/public`, wired via Dishka
   (`DishkaRoute`/`FromDishka`). No auth dependency on this router — see "Trust boundary" below.
 - **`routes.py`** — ops endpoints (`/health`, `/ready`, `/metrics`), also unauthenticated.
-- **`schemas/public.py`** — Pydantic request/response models (`EventTypeModel`,
-  `EventTypeListResponse`, `SlotsPublicResponse`, `CreateBookingPublicRequest`,
-  `BookingConfirmationResponse`), each with a `from_dto`/`from_result`/`from_confirmation`
-  classmethod that maps from the internal frozen DTOs — this is the seam that keeps internal ids
-  (`client_user_id`, `host_user_id`) and raw upstream response bodies out of public responses.
-- **`dto.py`** — frozen dataclasses: `EventTypeDTO`, `SlotsResult`, `BookingResult`,
+- **`schemas/public.py`** — Pydantic request/response models (`EventTypeModel` incl.
+  `booking_fields: list[BookingFieldModel]`, `OptionModel`, `BookingFieldModel`,
+  `EventTypeListResponse`, `SlotsPublicResponse`, `CreateBookingPublicRequest` incl.
+  `answers: list[AnswerModel]`, `AnswerModel`, `BookingConfirmationResponse`), each with a
+  `from_dto`/`from_result`/`from_confirmation` classmethod that maps from the internal frozen
+  DTOs — this is the seam that keeps internal ids (`client_user_id`, `host_user_id`) and raw
+  upstream response bodies out of public responses.
+- **`dto.py`** — frozen dataclasses: `EventTypeDTO` (incl. `booking_fields: list[BookingFieldDTO]`,
+  default `[]`), `OptionDTO`, `BookingFieldDTO`, `AnswerDTO`, `SlotsResult`, `BookingResult`,
   `BookingConfirmation` (the public-facing confirmation: `booking_id`, `event_type_title`,
-  `start_time`, `end_time`, `status`, `time_zone` — no user ids).
+  `start_time`, `end_time`, `status`, `time_zone` — no user ids). `booking_fields`/`answers` are
+  carried through as-is — `event-scheduling` is the authoritative validator; the BFF does not
+  re-validate them.
 - **`services/guest_booking.py`** — `GuestBookingService.book`: resolves-or-creates the guest as a
   `client` user, then creates the booking; see "Guest→client resolution" below.
-- **`interfaces/clients.py`** — `ISchedulingClient`, `IUsersClient` Protocols.
-- **`adapters/scheduling_client.py`** — `SchedulingClient`: `list_event_types`, `get_event_type`,
-  `get_slots`, `create_booking`; Bearer `SCHEDULING_API_KEY`.
+- **`interfaces/clients.py`** — `ISchedulingClient`, `IUsersClient` Protocols;
+  `create_booking(..., field_answers: list[AnswerDTO] | None = None)`.
+- **`adapters/scheduling_client.py`** — `SchedulingClient`: `list_event_types`, `get_event_type`
+  (parses `booking_fields`), `get_slots`, `create_booking` (sends `field_answers` in the POST
+  body); Bearer `SCHEDULING_API_KEY`.
 - **`adapters/users_client.py`** — `UsersClient`: `get_client_by_email`, `create_client`; Bearer
   `EVENT_USERS_TOKEN`; role is hard-coded `"client"` (`_CLIENT_ROLE`), never taken from the request.
 - **`errors.py`** — `DomainError` base + `ValidationError`, `NotFoundError`, `ConflictError`,
@@ -82,10 +90,10 @@ logger/routes/config) minus DB/alembic/lifespan.
 
 | Method | Path | Auth | Behaviour |
 |--------|------|------|-----------|
-| GET | `/api/public/event-types` | none | List all event types: `{"items":[{"id","slug","title","duration_minutes"}]}`, proxied from `event-scheduling GET /api/v1/event-types` |
-| GET | `/api/public/event-types/{event_type_id}` | none | Single event type; `404` if `event-scheduling` returns 404 |
+| GET | `/api/public/event-types` | none | List all event types: `{"items":[{"id","slug","title","duration_minutes","booking_fields"}]}`, proxied from `event-scheduling GET /api/v1/event-types` |
+| GET | `/api/public/event-types/{event_type_id}` | none | Single event type incl. `booking_fields: [{"field_key","field_type","label","placeholder","required","options":[{"value","label"}]}]`; `404` if `event-scheduling` returns 404 |
 | GET | `/api/public/slots` | none | Query params `event_type_id`, `start`, `end`, `time_zone`; proxies `event-scheduling GET /api/v1/slots`; response `{"event_type_id","time_zone","slots":{"<date>":["<iso>"]}}` |
-| POST | `/api/public/bookings` | none | Body `{"event_type_id","name","email","start_time","time_zone"}` → resolves/creates the guest as a `client` user, then creates the booking (`actor_source: booker` header to event-scheduling); `201` `{"booking_id","event_type_title","start_time","end_time","status","time_zone"}`; `409` if the slot was taken concurrently; `404` unknown event type |
+| POST | `/api/public/bookings` | none | Body `{"event_type_id","name","email","start_time","time_zone","answers":[{"key","value"}]}` → resolves/creates the guest as a `client` user, then creates the booking, forwarding `answers` to event-scheduling as `field_answers` (`actor_source: booker` header; event-scheduling validates the answers — the BFF does not); `201` `{"booking_id","event_type_title","start_time","end_time","status","time_zone"}`; `409` if the slot was taken concurrently; `404` unknown event type |
 | GET | `/health` | none | Liveness — no deps |
 | GET | `/ready` | none | Static readiness — `{"status":"ready"}`, no upstream check |
 | GET | `/metrics` | none | Prometheus exposition |

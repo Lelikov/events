@@ -96,6 +96,7 @@ async def test_create_booking_success_and_sets_actor_header() -> None:
             "client_user_id": str(client_id),
             "start_time": "2026-10-01T09:00:00+00:00",
             "attendee_time_zone": "Europe/Berlin",
+            "field_answers": [],
         }
         return httpx.Response(
             201,

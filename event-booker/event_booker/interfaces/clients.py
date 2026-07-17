@@ -2,7 +2,7 @@ from datetime import datetime
 from typing import Protocol
 from uuid import UUID
 
-from event_booker.dto import BookingResult, EventTypeDTO, SlotsResult
+from event_booker.dto import AnswerDTO, BookingResult, EventTypeDTO, SlotsResult
 
 
 class ISchedulingClient(Protocol):
@@ -10,7 +10,12 @@ class ISchedulingClient(Protocol):
     async def get_event_type(self, event_type_id: UUID) -> EventTypeDTO: ...
     async def get_slots(self, event_type_id: UUID, start: datetime, end: datetime, time_zone: str) -> SlotsResult: ...
     async def create_booking(
-        self, event_type_id: UUID, client_user_id: UUID, start_time: datetime, attendee_time_zone: str
+        self,
+        event_type_id: UUID,
+        client_user_id: UUID,
+        start_time: datetime,
+        attendee_time_zone: str,
+        field_answers: list[AnswerDTO] | None = None,
     ) -> BookingResult: ...
 
 

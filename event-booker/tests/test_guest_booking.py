@@ -21,7 +21,7 @@ class _Scheduling:
     async def get_event_type(self, event_type_id):
         return EventTypeDTO(id=event_type_id, slug="intro", title="Intro call", duration_minutes=30)
 
-    async def create_booking(self, event_type_id, client_user_id, start_time, attendee_time_zone):
+    async def create_booking(self, event_type_id, client_user_id, start_time, attendee_time_zone, field_answers=None):
         if self._conflict:
             raise SlotUnavailableError("slot no longer available")
         self.created_with = (event_type_id, client_user_id, start_time, attendee_time_zone)
