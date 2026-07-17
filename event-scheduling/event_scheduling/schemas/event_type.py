@@ -3,6 +3,7 @@ from uuid import UUID
 from pydantic import BaseModel
 
 from event_scheduling.dto.event_type import BookingLimitDTO, EventTypeDTO, HostDTO, UpsertEventTypeDTO
+from event_scheduling.schemas.booking_field import BookingFieldModel
 
 
 class HostModel(BaseModel):
@@ -57,6 +58,7 @@ class EventTypeResponse(BaseModel):
     buffer_after_minutes: int
     hosts: list[HostModel]
     booking_limits: list[BookingLimitModel]
+    booking_fields: list[BookingFieldModel]
 
     @classmethod
     def from_dto(cls, dto: EventTypeDTO) -> EventTypeResponse:
@@ -74,6 +76,7 @@ class EventTypeResponse(BaseModel):
             booking_limits=[
                 BookingLimitModel(limit_type=b.limit_type, period=b.period, value=b.value) for b in dto.booking_limits
             ],
+            booking_fields=[BookingFieldModel.from_dto(f) for f in dto.booking_fields],
         )
 
 

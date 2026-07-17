@@ -164,6 +164,7 @@ def app(_migrated: str, _clean_db) -> Generator:
     from event_scheduling.main import _domain_error_handler
     from event_scheduling.metrics import HttpMetricsMiddleware
     from event_scheduling.routers.booking import booking_router
+    from event_scheduling.routers.booking_field import booking_field_router
     from event_scheduling.routers.calendar import calendar_router
     from event_scheduling.routers.event_type import event_type_router
     from event_scheduling.routers.schedule import schedule_router
@@ -176,6 +177,7 @@ def app(_migrated: str, _clean_db) -> Generator:
     application.include_router(root_router)
     application.include_router(schedule_router)
     application.include_router(event_type_router)
+    application.include_router(booking_field_router)
     application.include_router(slots_router)
     application.include_router(booking_router)
     application.include_router(calendar_router)
@@ -223,6 +225,7 @@ def client_fake_users(_migrated: str, _clean_db) -> Generator:
     from event_scheduling.publishing.dto import ParticipantInfo
     from event_scheduling.publishing.interfaces import IUsersClient
     from event_scheduling.routers.booking import booking_router
+    from event_scheduling.routers.booking_field import booking_field_router
     from event_scheduling.routers.calendar import calendar_router
     from event_scheduling.routers.event_type import event_type_router
     from event_scheduling.routers.schedule import schedule_router
@@ -247,6 +250,7 @@ def client_fake_users(_migrated: str, _clean_db) -> Generator:
     application.include_router(root_router)
     application.include_router(schedule_router)
     application.include_router(event_type_router)
+    application.include_router(booking_field_router)
     application.include_router(slots_router)
     application.include_router(booking_router)
     application.include_router(calendar_router)
