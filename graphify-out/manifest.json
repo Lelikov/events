@@ -1,8 +1,8 @@
 {
   ".claude/settings.json": {
-    "mtime": 1776421207.4596517,
-    "ast_hash": "a4c199fd912d2c7b133fbacec4f1d43c",
-    "semantic_hash": "a4c199fd912d2c7b133fbacec4f1d43c"
+    "mtime": 1784407060.5045664,
+    "ast_hash": "866c26312ec89f6bce8e0ca3bc5aad17",
+    "semantic_hash": ""
   },
   ".claude/settings.local.json": {
     "mtime": 1782414899.3141432,
@@ -1045,14 +1045,14 @@
     "semantic_hash": "da2f737a9df6d750e5b061c1ae50f263"
   },
   "event-booker-frontend/src/modules/booking/BookingFlowPage.tsx": {
-    "mtime": 1784287553.5458014,
-    "ast_hash": "64437fb2b1dbaf15b42751631087dce2",
-    "semantic_hash": "64437fb2b1dbaf15b42751631087dce2"
+    "mtime": 1784414884.7028644,
+    "ast_hash": "6f4263337e5cb853be4f1973b8f158be",
+    "semantic_hash": ""
   },
   "event-booker-frontend/src/modules/booking/Confirmation.tsx": {
-    "mtime": 1784036564.1706004,
-    "ast_hash": "609c7f234b7cb05f19a43137c6c57da0",
-    "semantic_hash": "609c7f234b7cb05f19a43137c6c57da0"
+    "mtime": 1784414884.7030091,
+    "ast_hash": "37cd099de9df0999f89da9393fdda478",
+    "semantic_hash": ""
   },
   "event-booker-frontend/src/modules/booking/EventTypeListPage.test.tsx": {
     "mtime": 1784036564.1708925,
@@ -1070,9 +1070,9 @@
     "semantic_hash": "efca82a5630aad7b02c3bb3fa6334b7d"
   },
   "event-booker-frontend/src/modules/booking/GuestForm.tsx": {
-    "mtime": 1784287553.5462868,
-    "ast_hash": "98a61e666b2b7fff4e50de51ff172854",
-    "semantic_hash": "98a61e666b2b7fff4e50de51ff172854"
+    "mtime": 1784414884.7031696,
+    "ast_hash": "3a771a37c565107b7ea69744dedc3556",
+    "semantic_hash": ""
   },
   "event-booker-frontend/src/modules/booking/SlotPicker.test.tsx": {
     "mtime": 1784287553.5468435,
@@ -1080,9 +1080,9 @@
     "semantic_hash": "4611f2723c2dd9912098d93119b528bf"
   },
   "event-booker-frontend/src/modules/booking/SlotPicker.tsx": {
-    "mtime": 1784287553.5471685,
-    "ast_hash": "f2a12178d18ece4cce7fd99b2f35b43a",
-    "semantic_hash": "f2a12178d18ece4cce7fd99b2f35b43a"
+    "mtime": 1784414884.7033622,
+    "ast_hash": "3769524791bce98744de6cfe8ced2d19",
+    "semantic_hash": ""
   },
   "event-booker-frontend/src/modules/booking/answers.test.ts": {
     "mtime": 1784287553.547362,
@@ -1115,9 +1115,9 @@
     "semantic_hash": "46fce0670418383c0f39462f3b5dbeab"
   },
   "event-booker-frontend/src/modules/booking/datetime.ts": {
-    "mtime": 1784287553.548413,
-    "ast_hash": "f326951a32bc518b01158d861fa2d9d2",
-    "semantic_hash": "f326951a32bc518b01158d861fa2d9d2"
+    "mtime": 1784414884.7037332,
+    "ast_hash": "83eb9fd7a344acc6cebe1d63c97e3a6e",
+    "semantic_hash": ""
   },
   "event-booker-frontend/src/modules/booking/types.ts": {
     "mtime": 1784287553.548686,
@@ -4875,9 +4875,9 @@
     "semantic_hash": "85785109b1c3db1926f650ef5d7ded5f"
   },
   "CLAUDE.md": {
-    "mtime": 1784287553.5400565,
-    "ast_hash": "90607538b2eb4ba7c7814e679a5ebe31",
-    "semantic_hash": "90607538b2eb4ba7c7814e679a5ebe31"
+    "mtime": 1784407060.504285,
+    "ast_hash": "ca5b3184e42921ee0d494b1b2ae5b200",
+    "semantic_hash": ""
   },
   "GEMINI.md": {
     "mtime": 1776421207.4588223,
@@ -6598,5 +6598,25 @@
     "mtime": 1782370090.111845,
     "ast_hash": "f0402b67b6ce880f65666bb49e841696",
     "semantic_hash": "f0402b67b6ce880f65666bb49e841696"
+  },
+  "event-booker-frontend/src/modules/booking/BookingAside.tsx": {
+    "mtime": 1784414884.7027078,
+    "ast_hash": "9fe9f3617c11a2bb2067619b7b45b906",
+    "semantic_hash": ""
+  },
+  "event-booker-frontend/src/modules/booking/TimeZoneField.tsx": {
+    "mtime": 1784414884.7035015,
+    "ast_hash": "0693b0696be2628618f1bc1e32f2b00b",
+    "semantic_hash": ""
+  },
+  "event-booker-frontend/src/modules/booking/datetime.test.ts": {
+    "mtime": 1784414884.7036152,
+    "ast_hash": "d0779806d2b6c22060f6cdd81cd19589",
+    "semantic_hash": ""
+  },
+  "event-booker-frontend/src/modules/booking/timezones.ts": {
+    "mtime": 1784414884.7038598,
+    "ast_hash": "d604797fa84d40070a61236eeb39de9d",
+    "semantic_hash": ""
   }
 }

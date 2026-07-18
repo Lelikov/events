@@ -3,3 +3,6 @@
 .graphify_python
 .graphify_root
 cache/
+
+# Date-stamped curated-graph backups written by `graphify update`.
+20*-*-*/
