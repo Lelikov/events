@@ -1,4 +1,5 @@
 import { useState, type FormEvent } from 'react'
+import { BookingAside } from './BookingAside.tsx'
 import type { Answer, BookingField } from './types.ts'
 import { type AnswerValues, buildAnswers, initialValues, validateAnswers } from './answers.ts'
 
@@ -12,9 +13,23 @@ type Props = {
   onBack: () => void
   submitError?: string | null
   submitting?: boolean
+  eventTitle?: string
+  durationMinutes?: number
+  selectedLabel?: string
+  timeZone?: string
 }
 
-export function GuestForm({ fields, onSubmit, onBack, submitError, submitting }: Props) {
+export function GuestForm({
+  fields,
+  onSubmit,
+  onBack,
+  submitError,
+  submitting,
+  eventTitle,
+  durationMinutes,
+  selectedLabel,
+  timeZone,
+}: Props) {
   const [name, setName] = useState('')
   const [email, setEmail] = useState('')
   const [values, setValues] = useState<AnswerValues>(() => initialValues(fields))
@@ -52,31 +67,51 @@ export function GuestForm({ fields, onSubmit, onBack, submitError, submitting }:
   }
 
   return (
-    <form onSubmit={handleSubmit}>
-      <label className="field">
-        <span>Имя</span>
-        <input name="name" value={name} onChange={(e) => setName(e.target.value)} />
-      </label>
-      <label className="field">
-        <span>Email</span>
-        <input name="email" value={email} onChange={(e) => setEmail(e.target.value)} />
-      </label>
+    <div className="form-card">
+      {eventTitle !== undefined && (
+        <BookingAside
+          eventTitle={eventTitle}
+          durationMinutes={durationMinutes ?? 0}
+          timeZone={timeZone ?? 'UTC'}
+          selectedLabel={selectedLabel}
+        />
+      )}
 
-      {fields.map((f) => (
-        <DynamicField key={f.field_key} field={f} value={values[f.field_key]} onChange={setValue} onToggle={toggleCheckbox} />
-      ))}
+      <form className="form-main" onSubmit={handleSubmit}>
+        <div className="form-fields">
+          <label className="field">
+            <span>Имя *</span>
+            <input name="name" value={name} onChange={(e) => setName(e.target.value)} />
+          </label>
+          <label className="field">
+            <span>Email *</span>
+            <input name="email" value={email} onChange={(e) => setEmail(e.target.value)} />
+          </label>
 
-      {error && <p className="field-error">{error}</p>}
-      {submitError && <p className="banner-error">{submitError}</p>}
-      <div className="inline-actions">
-        <button type="button" onClick={onBack} disabled={submitting}>
-          ← Назад
-        </button>
-        <button type="submit" disabled={submitting}>
-          {submitting ? 'Бронируем…' : 'Забронировать'}
-        </button>
-      </div>
-    </form>
+          {fields.map((f) => (
+            <DynamicField
+              key={f.field_key}
+              field={f}
+              value={values[f.field_key]}
+              onChange={setValue}
+              onToggle={toggleCheckbox}
+            />
+          ))}
+
+          {error && <p className="field-error">{error}</p>}
+          {submitError && <p className="banner-error">{submitError}</p>}
+        </div>
+
+        <div className="form-footer">
+          <button type="button" className="btn-ghost" onClick={onBack} disabled={submitting}>
+            ← Назад
+          </button>
+          <button type="submit" disabled={submitting}>
+            {submitting ? 'Бронируем…' : 'Забронировать'}
+          </button>
+        </div>
+      </form>
+    </div>
   )
 }
 

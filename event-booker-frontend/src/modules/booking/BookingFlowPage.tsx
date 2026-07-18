@@ -1,10 +1,10 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { ApiError } from '../shared/api.ts'
 import { createBooking, getEventType } from './bookerApi.ts'
 import { SlotPicker } from './SlotPicker.tsx'
 import { GuestForm } from './GuestForm.tsx'
 import { Confirmation } from './Confirmation.tsx'
-import { formatRange } from './datetime.ts'
+import { addMinutes, formatRange } from './datetime.ts'
 import { navigateTo } from '../shared/routing.ts'
 import type { Answer, BookingConfirmation, EventType } from './types.ts'
 
@@ -34,8 +34,6 @@ export function BookingFlowPage({ eventTypeId }: { eventTypeId: string }) {
       active = false
     }
   }, [eventTypeId])
-
-  const durationLabel = useMemo(() => (eventType ? `${eventType.duration_minutes} мин` : ''), [eventType])
 
   if (notFound) {
     return (
@@ -92,10 +90,12 @@ export function BookingFlowPage({ eventTypeId }: { eventTypeId: string }) {
     }
   }
 
+  // Both interactive steps (slot + details) share one shell width so the card
+  // footprint stays stable when moving between them (no size jump).
+  const shellWidth = step === 'done' ? '' : ' booker-shell--book'
+
   return (
-    <main className={`booker-shell${step === 'slot' ? ' booker-shell--wide' : ''}`}>
-      <h1>{eventType ? eventType.title : 'Бронирование'}</h1>
-      {durationLabel && <p className="muted">{durationLabel}</p>}
+    <main className={`booker-shell${shellWidth}`}>
       {banner && <p className="banner-error">{banner}</p>}
 
       {step === 'slot' && eventType && (
@@ -110,20 +110,21 @@ export function BookingFlowPage({ eventTypeId }: { eventTypeId: string }) {
       )}
 
       {step === 'details' && selected && (
-        <div>
-          <p className="muted">Выбрано: {formatRange(selected, selected, timeZone)}</p>
-          <GuestForm
-            fields={eventType?.booking_fields ?? []}
-            onSubmit={handleSubmit}
-            onBack={() => setStep('slot')}
-            submitError={submitError}
-            submitting={submitting}
-          />
-        </div>
+        <GuestForm
+          fields={eventType?.booking_fields ?? []}
+          eventTitle={eventType?.title ?? ''}
+          durationMinutes={eventType?.duration_minutes ?? 0}
+          selectedLabel={formatRange(selected, addMinutes(selected, eventType?.duration_minutes ?? 0), timeZone)}
+          timeZone={timeZone}
+          onSubmit={handleSubmit}
+          onBack={() => setStep('slot')}
+          submitError={submitError}
+          submitting={submitting}
+        />
       )}
 
       <p className="inline-actions">
-        <button type="button" onClick={() => navigateTo('/')}>
+        <button type="button" className="link-button" onClick={() => navigateTo('/')}>
           ← Все типы встреч
         </button>
       </p>

@@ -7,7 +7,9 @@
   padding: 24px 16px;
 }
 
-.booker-shell.booker-shell--wide {
+/* Shared width for the interactive booking steps (slot + details) so the card
+   footprint is identical between them — no size jump on step change. */
+.booker-shell.booker-shell--book {
   max-width: 960px;
 }
 
@@ -103,19 +105,16 @@
 /* ── Compact calendar step ─────────────────────────────────── */
 .cal-card {
   display: grid;
-  grid-template-columns: 180px auto minmax(150px, max-content);
-  justify-content: center;
+  grid-template-columns: 200px auto minmax(150px, max-content);
   gap: 20px;
   border: 1px solid var(--border);
   border-radius: 12px;
   background: var(--card);
   box-shadow: var(--shadow);
-  padding: 20px;
+  padding: 24px;   /* match .form-card so the shared aside sits at the same spot on both steps */
   margin-top: 16px;
   overflow-x: auto;   /* safety: if the 3 columns ever exceed the card, scroll inside it — never bleed onto the page */
 }
-.cal-info { display: grid; gap: 10px; align-content: start; }
-.cal-info h2 { font-size: 18px; }
 .cal-grid { display: flex; justify-content: center; }
 .cal-slots { min-width: 150px; display: grid; gap: 10px; align-content: start; }
 .cal-day-header { font-size: 13px; font-weight: 600; color: var(--text-2); }
@@ -141,4 +140,98 @@
 @media (max-width: 720px) {
   .cal-card { grid-template-columns: 1fr; }
   .cal-slots .slot-grid { flex-direction: row; flex-wrap: wrap; max-height: none; }
+}
+
+/* ── Details step: booking form card ───────────────────────── */
+.form-card {
+  display: grid;
+  grid-template-columns: 200px 1fr;
+  gap: 28px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--card);
+  box-shadow: var(--shadow);
+  padding: 24px;
+  margin-top: 16px;
+}
+/* Shared booking context panel (slot + details steps) — identical on both. */
+.booking-aside { display: grid; gap: 10px; align-content: start; }
+.booking-aside h2 { font-size: 18px; }
+.booking-aside-meta {
+  display: grid;
+  gap: 4px;
+  margin-top: 6px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+}
+.booking-aside-time { font-weight: 600; color: var(--text); }
+
+/* Editable time zone reuses the design-system picker classes
+   (.tz-picker-input / .tz-dropdown / .tz-option) so it matches the rest of the
+   UI; the dropdown is portaled to <body> and positioned via inline styles.
+   The wrapper only exists to keep the input out of `.field > input`. */
+.tz-field { display: block; }
+
+/* Read-only time zone (details step): plain muted text, visibly not a control. */
+.tz-readonly {
+  display: block;
+  padding: 7px 2px;
+  color: var(--text-2);
+  font-size: 13px;
+}
+
+/* ── Confirmation card ─────────────────────────────────────── */
+.confirm-card {
+  max-width: 480px;
+  margin: 40px auto 0;
+  display: grid;
+  gap: 12px;
+  justify-items: center;
+  text-align: center;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--card);
+  box-shadow: var(--shadow);
+  padding: 40px 32px;
+}
+.confirm-emoji { font-size: 56px; line-height: 1; }
+.confirm-card h1 { font-size: 26px; }
+.confirm-title { font-size: 18px; font-weight: 600; }
+.confirm-weekday { font-size: 15px; color: var(--text-2); }
+.confirm-time { font-size: 16px; }
+.confirm-card button { margin-top: 12px; }
+
+.form-main { display: flex; flex-direction: column; min-width: 0; }
+.form-fields { display: grid; gap: 16px; }
+
+.form-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+  margin-top: 28px;
+  padding-top: 18px;
+  border-top: 1px solid var(--border);
+}
+
+.btn-ghost {
+  background: transparent;
+  color: var(--text-2);
+  border: 1px solid var(--border);
+  box-shadow: none;
+}
+.btn-ghost:hover:not(:disabled) { background: var(--primary-pale); color: var(--primary-dark); }
+
+.link-button {
+  background: transparent;
+  border: none;
+  box-shadow: none;
+  color: var(--muted);
+  padding: 8px 0;
+}
+.link-button:hover { color: var(--primary); text-decoration: underline; }
+
+@media (max-width: 720px) {
+  .form-card { grid-template-columns: 1fr; }
+  .form-footer { justify-content: stretch; }
+  .form-footer button { flex: 1; }
 }

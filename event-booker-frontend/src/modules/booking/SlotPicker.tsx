@@ -3,11 +3,10 @@ import { DayPicker } from 'react-day-picker'
 import { ru } from 'react-day-picker/locale'
 import 'react-day-picker/style.css'
 import { getSlots } from './bookerApi.ts'
+import { BookingAside } from './BookingAside.tsx'
 import { formatDayLabel, formatTime } from './datetime.ts'
 import { availableDaysFromSlots, dateKey, firstAvailableDay, monthRange, startOfDay, startOfMonth } from './calendar.ts'
 import type { Slots } from './types.ts'
-
-const COMMON_ZONES = ['Europe/Moscow', 'Europe/Kaliningrad', 'Asia/Yekaterinburg', 'Asia/Novosibirsk', 'UTC']
 
 type Props = {
   eventTypeId: string
@@ -62,24 +61,15 @@ export function SlotPicker({
 
   const today = startOfDay(new Date())
   const daySlots = slots && selectedDay ? (slots.slots[dateKey(selectedDay)] ?? []) : []
-  const zones = COMMON_ZONES.includes(timeZone) ? COMMON_ZONES : [timeZone, ...COMMON_ZONES]
 
   return (
     <div className="cal-card">
-      <div className="cal-info">
-        <h2>{eventTitle}</h2>
-        <p className="muted">{durationMinutes} мин</p>
-        <label className="field">
-          <span>Часовой пояс</span>
-          <select value={timeZone} onChange={(e) => onTimeZoneChange(e.target.value)}>
-            {zones.map((z) => (
-              <option key={z} value={z}>
-                {z}
-              </option>
-            ))}
-          </select>
-        </label>
-      </div>
+      <BookingAside
+        eventTitle={eventTitle}
+        durationMinutes={durationMinutes}
+        timeZone={timeZone}
+        onTimeZoneChange={onTimeZoneChange}
+      />
 
       <div className="cal-grid">
         <DayPicker
