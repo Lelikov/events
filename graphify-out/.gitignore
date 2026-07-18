@@ -1,0 +1,5 @@
+# Machine-specific / regenerable graphify scratch — do not commit.
+# (absolute interpreter + scan-root paths, and the extraction cache)
+.graphify_python
+.graphify_root
+cache/
