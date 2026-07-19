@@ -48,6 +48,15 @@ describe('bundleToState', () => {
     const s = bundleToState(bundle, 'UTC')
     expect(s.travels[0]).toEqual({ start_date: '2026-08-01', end_date: '2026-08-10', time_zone: 'Asia/Dubai' })
   })
+
+  it('maps day_of_week 7 (Sunday) to day index 6', () => {
+    const sundayBundle: ScheduleBundle = {
+      ...bundle,
+      weekly_hours: [{ day_of_week: 7, start_time: '10:00:00', end_time: '11:00:00' }],
+    }
+    const s = bundleToState(sundayBundle, 'UTC')
+    expect(s.days[6]).toEqual({ enabled: true, intervals: [{ start: '10:00', end: '11:00' }] })
+  })
 })
 
 describe('buildUpsert', () => {
@@ -126,7 +135,25 @@ describe('validate', () => {
   it('flags an empty interval time', () => {
     const s = base()
     s.days[0].intervals = [{ start: '', end: '12:00' }]
-    expect(validate(s).length).toBeGreaterThan(0)
+    expect(validate(s).some((e) => e.includes('заполните время интервала'))).toBe(true)
+  })
+
+  it('flags an enabled day with zero intervals', () => {
+    const s = base()
+    s.days[0] = { enabled: true, intervals: [] }
+    expect(validate(s).some((e) => e.includes('добавьте хотя бы один интервал или отключите день'))).toBe(true)
+  })
+
+  it('flags an override with an empty date', () => {
+    const s = base()
+    s.overrides = [{ date: '', fullDay: false, start: '09:00', end: '10:00' }]
+    expect(validate(s).some((e) => e.includes('Укажите дату исключения'))).toBe(true)
+  })
+
+  it('does not flag adjacent, touching, non-overlapping intervals (half-open overlap check)', () => {
+    const s = base()
+    s.days[0].intervals = [{ start: '09:00', end: '12:00' }, { start: '12:00', end: '15:00' }]
+    expect(validate(s)).toEqual([])
   })
 
   it('uses emptyDays for 7 disabled days', () => {
