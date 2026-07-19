@@ -1,6 +1,10 @@
 import { getJwtToken, removeJwtToken } from '../auth/storage.ts'
+import { getEnv } from './runtimeEnv.ts'
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? ''
+// Runtime window._env_ (written by docker-entrypoint.d/40-env-config.sh) wins over
+// the build-time value, so one image serves every environment. getEnv falls back
+// to import.meta.env when no runtime value is present (dev + tests).
+const API_BASE_URL = getEnv('VITE_API_BASE_URL')
 
 if (!import.meta.env.DEV && !API_BASE_URL) {
   console.warn(
