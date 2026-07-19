@@ -18,6 +18,7 @@ class DateOverrideModel(BaseModel):
 
 
 class SchedulePutRequest(BaseModel):
+    name: str
     time_zone: str
     weekly_hours: list[WeeklyHourModel]
     date_overrides: list[DateOverrideModel]
