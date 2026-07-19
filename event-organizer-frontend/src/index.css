@@ -1,0 +1,107 @@
+/* App-specific layout. Reset, body, button, .field, .inline-actions, .card,
+   .login-*, .tz-*, .badge--* all come from events-design-system/styles.css. */
+
+.org-shell {
+  display: grid;
+  grid-template-columns: 240px 1fr;
+  min-height: 100vh;
+}
+
+.org-content {
+  padding: 28px 32px;
+  max-width: 900px;
+}
+
+.page-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 20px;
+}
+
+.section {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--card);
+  padding: 20px;
+  margin-bottom: 18px;
+  display: grid;
+  gap: 14px;
+}
+
+.section h2 { font-size: 15px; font-weight: 600; }
+
+.weekday-row {
+  display: grid;
+  grid-template-columns: 90px 1fr;
+  gap: 12px;
+  align-items: start;
+  padding: 8px 0;
+  border-top: 1px solid var(--border);
+}
+
+.weekday-name { font-weight: 600; padding-top: 6px; }
+.interval-row { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.interval-row input[type="time"] { width: 120px; }
+
+.override-row,
+.travel-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 8px 0;
+  border-top: 1px solid var(--border);
+}
+
+.icon-button {
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 4px 10px;
+  cursor: pointer;
+  color: var(--muted);
+}
+.icon-button:hover { color: var(--danger, #c92a2a); }
+
+.link-button {
+  background: transparent;
+  border: none;
+  box-shadow: none;
+  color: var(--primary);
+  padding: 6px 0;
+  cursor: pointer;
+}
+
+.error-text { color: #c92a2a; font-size: 0.9rem; }
+.ok-text { color: #2b8a3e; font-size: 0.9rem; }
+
+.booking-group { display: grid; gap: 8px; margin-bottom: 20px; }
+.booking-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px 14px;
+  background: var(--card);
+}
+.empty-state { color: var(--muted); padding: 24px 0; text-align: center; }
+
+.login-form-panel .field + .field { margin-top: 12px; }
+
+/* Editable time zone reuses the design-system picker classes
+   (.tz-picker-input / .tz-dropdown / .tz-option) so it matches the rest of the
+   UI; the dropdown is portaled to <body> and positioned via inline styles.
+   The wrapper only exists to keep the input out of `.field > input`. */
+.tz-field { display: block; }
+
+/* Read-only time zone (details step): plain muted text, visibly not a control. */
+.tz-readonly {
+  display: block;
+  padding: 7px 2px;
+  color: var(--text-2);
+  font-size: 13px;
+}

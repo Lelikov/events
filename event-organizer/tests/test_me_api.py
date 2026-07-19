@@ -9,6 +9,7 @@ from event_organizer.config import get_settings
 class _FakeScheduling:
     def __init__(self) -> None:
         self.seen_owner = None
+        self.seen_body = None
 
     async def get_schedule(self, owner_user_id):
         self.seen_owner = owner_user_id
@@ -16,6 +17,7 @@ class _FakeScheduling:
 
     async def put_schedule(self, owner_user_id, body):
         self.seen_owner = owner_user_id
+        self.seen_body = body
         return {"schedule": {"owner_user_id": str(owner_user_id)}, "weekly_hours": [], "date_overrides": []}
 
     async def put_travel(self, owner_user_id, body):
@@ -143,6 +145,23 @@ async def test_no_token_401(sessionmaker_fixture) -> None:
     app, _, _ = _app_and_fakes()
     with TestClient(app) as c:
         assert c.get("/api/me/schedule").status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_schedule_put_forwards_name(sessionmaker_fixture) -> None:
+    from starlette.testclient import TestClient
+
+    app, sched, _ = _app_and_fakes()
+    body = {
+        "name": "Моё расписание",
+        "time_zone": "Europe/Moscow",
+        "weekly_hours": [{"day_of_week": 1, "start_time": "09:00", "end_time": "18:00"}],
+        "date_overrides": [],
+    }
+    with TestClient(app) as c:
+        r = c.put("/api/me/schedule", headers=_auth(uuid4()), json=body)
+        assert r.status_code == 200
+        assert sched.seen_body["name"] == "Моё расписание"  # BFF must forward name to event-scheduling
 
 
 @pytest.mark.asyncio
