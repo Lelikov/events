@@ -50,10 +50,17 @@ type RequestOptions = {
   body?: unknown
   auth?: boolean
   baseUrl?: string
+  // Opt out of the global "401 on a token-carrying request → clear session +
+  // redirect to /login" behavior. Needed by endpoints where a 401 means
+  // something other than an expired/revoked JWT (e.g. PUT /api/me/password
+  // returns 401 for a wrong current password, not a stale session) — the
+  // caller still gets the thrown ApiError(401), it just isn't logged out.
+  // Defaults to false so every other caller keeps today's behavior.
+  suppressAuthRedirect?: boolean
 }
 
 export async function apiRequest<T>(path: string, options: RequestOptions = {}): Promise<T> {
-  const { method = 'GET', body, auth = true, baseUrl = API_BASE_URL } = options
+  const { method = 'GET', body, auth = true, baseUrl = API_BASE_URL, suppressAuthRedirect = false } = options
   const headers: Record<string, string> = {
     Accept: 'application/json',
   }
@@ -92,7 +99,7 @@ export async function apiRequest<T>(path: string, options: RequestOptions = {}):
     // A 401 on a request that carried a token means the JWT is expired or
     // revoked: clear the session and force a re-login. Requests without a
     // token (POST /auth/login itself) must NOT redirect.
-    if (error.status === 401 && tokenAttached) {
+    if (error.status === 401 && tokenAttached && !suppressAuthRedirect) {
       removeJwtToken()
       window.location.href = '/login'
     }

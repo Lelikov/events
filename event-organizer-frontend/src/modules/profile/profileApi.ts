@@ -10,5 +10,8 @@ export async function updateProfile(body: { name: string; time_zone: string }): 
 }
 
 export async function changePassword(body: { old_password: string; new_password: string }): Promise<void> {
-  await apiRequest<void>('/api/me/password', { method: 'PUT', body })
+  // 401 here means "wrong current password", not an expired session — suppress
+  // the global auth-redirect so ProfilePage can show the real message instead
+  // of the user being silently logged out.
+  await apiRequest<void>('/api/me/password', { method: 'PUT', body, suppressAuthRedirect: true })
 }

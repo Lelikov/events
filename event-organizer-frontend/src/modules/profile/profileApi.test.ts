@@ -14,7 +14,11 @@ describe('profileApi', () => {
   it('changePassword PUTs old + new', async () => {
     const spy = vi.spyOn(api, 'apiRequest').mockResolvedValue(null)
     await changePassword({ old_password: 'a', new_password: 'b' })
-    expect(spy).toHaveBeenCalledWith('/api/me/password', { method: 'PUT', body: { old_password: 'a', new_password: 'b' } })
+    expect(spy).toHaveBeenCalledWith('/api/me/password', {
+      method: 'PUT',
+      body: { old_password: 'a', new_password: 'b' },
+      suppressAuthRedirect: true,
+    })
   })
 
   it('getProfile GETs the profile', async () => {
