@@ -9,8 +9,15 @@ const STATUS_LABEL: Record<string, string> = {
   cancelled: 'Отменена',
 }
 
+const STATUS_VARIANT: Record<string, string> = {
+  confirmed: 'badge--confirmed',
+  cancelled: 'badge--cancelled',
+}
+
+// Only confirmed/cancelled get a colour; an unknown status falls back to the
+// neutral base badge rather than being mislabelled as confirmed (green).
 function statusVariant(status: string): string {
-  return status === 'cancelled' ? 'badge--cancelled' : 'badge--confirmed'
+  return STATUS_VARIANT[status] ?? ''
 }
 
 function BookingList({ rows, timeZone }: { rows: BookingRow[]; timeZone: string | undefined }) {

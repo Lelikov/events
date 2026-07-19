@@ -144,7 +144,7 @@ for `profile`/`password`.
 | POST | `/auth/login` | none | Body `{email, password}`. `200 {access_token}` on success; `401` on unknown email, disabled credential, or wrong password. |
 | POST | `/admin/organizers` | static `Authorization: Bearer ORGANIZER_ADMIN_KEY` | Body `{user_id, email, password}`. Resolves `email` to the real event-users organizer id (`422` if not an organizer, `422` if it doesn't match the supplied `user_id`), hashes the password, inserts the credential. `201 {id, user_id, email}`; `409` on duplicate email/user_id; `401` on wrong admin key. |
 | GET | `/api/me/schedule` | JWT bearer | Proxies `GET /api/v1/schedules/{me.user_id}` on event-scheduling; `404` if the organizer has no schedule yet. |
-| PUT | `/api/me/schedule` | JWT bearer | Body `{time_zone, weekly_hours, date_overrides}`. Proxies `PUT /api/v1/schedules/{me.user_id}` (upsert). |
+| PUT | `/api/me/schedule` | JWT bearer | Body `{name, time_zone, weekly_hours, date_overrides}`. Proxies `PUT /api/v1/schedules/{me.user_id}` (upsert); `name` is required by event-scheduling. |
 | PUT | `/api/me/schedule/travel` | JWT bearer | Proxies `PUT /api/v1/schedules/{me.user_id}/travel`. |
 | GET | `/api/me/bookings` | JWT bearer | Proxies `GET /api/v1/bookings?host_user_id={me.user_id}`; returns a projected `{id, start_time, end_time, status}` list only — no other participant's ids or contact info leak through. |
 | GET | `/api/me/profile` | JWT bearer | Proxies `GET /api/users/id/{me.user_id}` on event-users; returns `{name, email, time_zone}`. |
