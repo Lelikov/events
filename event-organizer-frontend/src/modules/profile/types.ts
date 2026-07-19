@@ -1,5 +1,5 @@
 export type Profile = {
-  name: string
+  name: string | null
   email: string
-  time_zone: string
+  time_zone: string | null
 }
