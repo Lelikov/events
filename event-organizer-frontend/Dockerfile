@@ -2,6 +2,13 @@
 # the SPA issues same-origin requests and nginx proxies them to event-organizer.
 FROM node:22-alpine AS build
 WORKDIR /app
+# events-design-system is a git dependency, but node:alpine ships no git and npm
+# pins it to git+ssh (no key in-build). Install git and rewrite GitHub ssh URLs →
+# anonymous https so `npm ci` can clone the (now public) repo.
+RUN apk add --no-cache git \
+ && git config --global url."https://github.com/".insteadOf "git+ssh://git@github.com/" \
+ && git config --global url."https://github.com/".insteadOf "ssh://git@github.com/" \
+ && git config --global url."https://github.com/".insteadOf "git@github.com:"
 COPY package*.json ./
 RUN npm ci
 COPY . .
