@@ -36,7 +36,9 @@ export function DateOverrides({ overrides, onChange }: Props) {
             <input
               type="checkbox"
               checked={o.fullDay}
-              onChange={(e) => update(idx, { ...o, fullDay: e.target.checked })}
+              onChange={(e) =>
+                update(idx, e.target.checked ? { ...o, fullDay: true, start: '', end: '' } : { ...o, fullDay: false })
+              }
             />{' '}
             весь день недоступен
           </label>

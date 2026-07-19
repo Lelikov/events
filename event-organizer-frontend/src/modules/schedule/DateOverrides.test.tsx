@@ -25,7 +25,9 @@ describe('DateOverrides', () => {
     const onChange = await mount([])
     const addBtn = [...container.querySelectorAll('button')].find((b) => b.textContent?.includes('Добавить дату'))!
     await act(async () => addBtn.click())
-    expect((onChange.mock.calls[0][0] as OverrideState[])).toHaveLength(1)
+    const next = onChange.mock.calls[0][0] as OverrideState[]
+    expect(next).toHaveLength(1)
+    expect(next[0]).toEqual({ date: '', fullDay: false, start: '09:00', end: '18:00' })
   })
 
   it('toggling full-day clears the times', async () => {
@@ -34,6 +36,8 @@ describe('DateOverrides', () => {
     await act(async () => box.click())
     const next = (onChange.mock.calls[0][0] as OverrideState[])[0]
     expect(next.fullDay).toBe(true)
+    expect(next.start).toBe('')
+    expect(next.end).toBe('')
   })
 
   it('removes a row', async () => {
