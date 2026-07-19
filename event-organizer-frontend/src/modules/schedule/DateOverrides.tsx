@@ -1,11 +1,11 @@
-import type { OverrideState } from './schedule.ts'
+import { makeUid, type OverrideState } from './schedule.ts'
 
 type Props = {
   overrides: OverrideState[]
   onChange: (overrides: OverrideState[]) => void
 }
 
-const EMPTY: OverrideState = { date: '', fullDay: false, start: '09:00', end: '18:00' }
+const EMPTY: Omit<OverrideState, 'uid'> = { date: '', fullDay: false, start: '09:00', end: '18:00' }
 
 export function DateOverrides({ overrides, onChange }: Props) {
   function update(idx: number, next: OverrideState) {
@@ -13,7 +13,7 @@ export function DateOverrides({ overrides, onChange }: Props) {
   }
 
   function add() {
-    onChange([...overrides, { ...EMPTY }])
+    onChange([...overrides, { ...EMPTY, uid: makeUid() }])
   }
 
   function remove(idx: number) {
@@ -23,7 +23,7 @@ export function DateOverrides({ overrides, onChange }: Props) {
   return (
     <div>
       {overrides.map((o, idx) => (
-        <div className="override-row" key={idx}>
+        <div className="override-row" key={o.uid}>
           <input type="date" value={o.date} onChange={(e) => update(idx, { ...o, date: e.target.value })} />
           {!o.fullDay && (
             <>

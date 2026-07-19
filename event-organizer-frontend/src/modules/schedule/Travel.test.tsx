@@ -29,7 +29,7 @@ describe('Travel', () => {
   })
 
   it('renders existing rows and removes one', async () => {
-    const onChange = await mount([{ start_date: '2026-08-01', end_date: '2026-08-10', time_zone: 'Asia/Dubai' }])
+    const onChange = await mount([{ uid: 'u1', start_date: '2026-08-01', end_date: '2026-08-10', time_zone: 'Asia/Dubai' }])
     expect(container.querySelectorAll('.travel-row')).toHaveLength(1)
     const del = container.querySelector('.travel-row .icon-button') as HTMLButtonElement
     await act(async () => del.click())

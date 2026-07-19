@@ -2,6 +2,12 @@ import { describe, expect, it } from 'vitest'
 import { bundleToState, buildUpsert, buildTravel, validate, emptyDays } from './schedule.ts'
 import type { ScheduleBundle } from './types.ts'
 
+// Strips the non-deterministic `uid` so rows produced by makeUid() can be compared by value.
+function withoutUid<T extends { uid: string }>(row: T): Omit<T, 'uid'> {
+  const { uid: _uid, ...rest } = row
+  return rest
+}
+
 const bundle: ScheduleBundle = {
   schedule: { id: '1', owner_user_id: '2', name: 'Моё', time_zone: 'Europe/Moscow' },
   weekly_hours: [
@@ -33,20 +39,22 @@ describe('bundleToState', () => {
     const s = bundleToState(bundle, 'UTC')
     expect(s.timeZone).toBe('Europe/Moscow')
     expect(s.name).toBe('Моё')
-    expect(s.days[0]).toEqual({ enabled: true, intervals: [{ start: '09:00', end: '12:00' }, { start: '14:00', end: '18:00' }] })
-    expect(s.days[1]).toEqual({ enabled: true, intervals: [{ start: '09:00', end: '18:00' }] })
+    expect(s.days[0].enabled).toBe(true)
+    expect(s.days[0].intervals.map(withoutUid)).toEqual([{ start: '09:00', end: '12:00' }, { start: '14:00', end: '18:00' }])
+    expect(s.days[1].enabled).toBe(true)
+    expect(s.days[1].intervals.map(withoutUid)).toEqual([{ start: '09:00', end: '18:00' }])
     expect(s.days[2].enabled).toBe(false)
   })
 
   it('maps overrides incl. the full-day block', () => {
     const s = bundleToState(bundle, 'UTC')
-    expect(s.overrides[0]).toEqual({ date: '2026-07-25', fullDay: false, start: '10:00', end: '14:00' })
-    expect(s.overrides[1]).toEqual({ date: '2026-07-26', fullDay: true, start: '', end: '' })
+    expect(withoutUid(s.overrides[0])).toEqual({ date: '2026-07-25', fullDay: false, start: '10:00', end: '14:00' })
+    expect(withoutUid(s.overrides[1])).toEqual({ date: '2026-07-26', fullDay: true, start: '', end: '' })
   })
 
   it('maps travel rows', () => {
     const s = bundleToState(bundle, 'UTC')
-    expect(s.travels[0]).toEqual({ start_date: '2026-08-01', end_date: '2026-08-10', time_zone: 'Asia/Dubai' })
+    expect(withoutUid(s.travels[0])).toEqual({ start_date: '2026-08-01', end_date: '2026-08-10', time_zone: 'Asia/Dubai' })
   })
 
   it('maps day_of_week 7 (Sunday) to day index 6', () => {
@@ -55,7 +63,15 @@ describe('bundleToState', () => {
       weekly_hours: [{ day_of_week: 7, start_time: '10:00:00', end_time: '11:00:00' }],
     }
     const s = bundleToState(sundayBundle, 'UTC')
-    expect(s.days[6]).toEqual({ enabled: true, intervals: [{ start: '10:00', end: '11:00' }] })
+    expect(s.days[6].enabled).toBe(true)
+    expect(s.days[6].intervals.map(withoutUid)).toEqual([{ start: '10:00', end: '11:00' }])
+  })
+
+  it('assigns a distinct uid to every generated row', () => {
+    const s = bundleToState(bundle, 'UTC')
+    const uids = [...s.days.flatMap((d) => d.intervals.map((iv) => iv.uid)), ...s.overrides.map((o) => o.uid), ...s.travels.map((t) => t.uid)]
+    expect(uids.every((uid) => typeof uid === 'string' && uid.length > 0)).toBe(true)
+    expect(new Set(uids).size).toBe(uids.length)
   })
 })
 
@@ -80,7 +96,7 @@ describe('buildUpsert', () => {
 
   it('drops intervals of a disabled day', () => {
     const s = bundleToState(null, 'UTC')
-    s.days[0] = { enabled: false, intervals: [{ start: '09:00', end: '10:00' }] }
+    s.days[0] = { enabled: false, intervals: [{ uid: 'u1', start: '09:00', end: '10:00' }] }
     expect(buildUpsert(s).weekly_hours).toEqual([])
   })
 })
@@ -88,7 +104,7 @@ describe('buildUpsert', () => {
 describe('buildTravel', () => {
   it('wraps rows in the travel_schedules envelope, prev_time_zone = base tz, empty end → null', () => {
     const s = bundleToState(null, 'Europe/Moscow')
-    s.travels = [{ start_date: '2026-08-01', end_date: '', time_zone: 'Asia/Dubai' }]
+    s.travels = [{ uid: 'u1', start_date: '2026-08-01', end_date: '', time_zone: 'Asia/Dubai' }]
     expect(buildTravel(s)).toEqual({
       travel_schedules: [
         { time_zone: 'Asia/Dubai', start_date: '2026-08-01', end_date: null, prev_time_zone: 'Europe/Moscow' },
@@ -100,7 +116,7 @@ describe('buildTravel', () => {
 describe('validate', () => {
   const base = () => {
     const s = bundleToState(null, 'Europe/Moscow')
-    s.days[0] = { enabled: true, intervals: [{ start: '09:00', end: '12:00' }] }
+    s.days[0] = { enabled: true, intervals: [{ uid: 'u1', start: '09:00', end: '12:00' }] }
     return s
   }
 
@@ -116,25 +132,25 @@ describe('validate', () => {
 
   it('flags start >= end', () => {
     const s = base()
-    s.days[0].intervals = [{ start: '12:00', end: '09:00' }]
+    s.days[0].intervals = [{ uid: 'u1', start: '12:00', end: '09:00' }]
     expect(validate(s).some((e) => e.includes('Пн'))).toBe(true)
   })
 
   it('flags overlapping intervals within a day', () => {
     const s = base()
-    s.days[0].intervals = [{ start: '09:00', end: '12:00' }, { start: '11:00', end: '13:00' }]
+    s.days[0].intervals = [{ uid: 'u1', start: '09:00', end: '12:00' }, { uid: 'u2', start: '11:00', end: '13:00' }]
     expect(validate(s).some((e) => e.includes('пересек'))).toBe(true)
   })
 
   it('flags an override with start >= end when not full-day', () => {
     const s = base()
-    s.overrides = [{ date: '2026-07-25', fullDay: false, start: '14:00', end: '10:00' }]
+    s.overrides = [{ uid: 'u1', date: '2026-07-25', fullDay: false, start: '14:00', end: '10:00' }]
     expect(validate(s).some((e) => e.includes('2026-07-25'))).toBe(true)
   })
 
   it('flags an empty interval time', () => {
     const s = base()
-    s.days[0].intervals = [{ start: '', end: '12:00' }]
+    s.days[0].intervals = [{ uid: 'u1', start: '', end: '12:00' }]
     expect(validate(s).some((e) => e.includes('заполните время интервала'))).toBe(true)
   })
 
@@ -146,13 +162,13 @@ describe('validate', () => {
 
   it('flags an override with an empty date', () => {
     const s = base()
-    s.overrides = [{ date: '', fullDay: false, start: '09:00', end: '10:00' }]
+    s.overrides = [{ uid: 'u1', date: '', fullDay: false, start: '09:00', end: '10:00' }]
     expect(validate(s).some((e) => e.includes('Укажите дату исключения'))).toBe(true)
   })
 
   it('does not flag adjacent, touching, non-overlapping intervals (half-open overlap check)', () => {
     const s = base()
-    s.days[0].intervals = [{ start: '09:00', end: '12:00' }, { start: '12:00', end: '15:00' }]
+    s.days[0].intervals = [{ uid: 'u1', start: '09:00', end: '12:00' }, { uid: 'u2', start: '12:00', end: '15:00' }]
     expect(validate(s)).toEqual([])
   })
 

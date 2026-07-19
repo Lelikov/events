@@ -39,7 +39,7 @@ describe('WeeklyHours', () => {
 
   it('adds an interval on an enabled day', async () => {
     const days = emptyDays()
-    days[0] = { enabled: true, intervals: [{ start: '09:00', end: '12:00' }] }
+    days[0] = { enabled: true, intervals: [{ uid: 'u1', start: '09:00', end: '12:00' }] }
     const onChange = await mount(days)
     const addBtn = [...container.querySelectorAll('button')].find((b) => b.textContent?.includes('интервал'))!
     await act(async () => addBtn.click())
@@ -51,8 +51,8 @@ describe('WeeklyHours', () => {
     days[0] = {
       enabled: true,
       intervals: [
-        { start: '09:00', end: '12:00' },
-        { start: '14:00', end: '18:00' },
+        { uid: 'u1', start: '09:00', end: '12:00' },
+        { uid: 'u2', start: '14:00', end: '18:00' },
       ],
     }
     const onChange = await mount(days)
@@ -62,12 +62,12 @@ describe('WeeklyHours', () => {
     const next = onChange.mock.calls[0][0] as DayState[]
     expect(next[0].enabled).toBe(true)
     expect(next[0].intervals).toHaveLength(1)
-    expect(next[0].intervals[0]).toEqual({ start: '14:00', end: '18:00' })
+    expect(next[0].intervals[0]).toEqual({ uid: 'u2', start: '14:00', end: '18:00' })
   })
 
   it('removing the last interval leaves the day enabled with zero intervals', async () => {
     const days = emptyDays()
-    days[0] = { enabled: true, intervals: [{ start: '09:00', end: '12:00' }] }
+    days[0] = { enabled: true, intervals: [{ uid: 'u1', start: '09:00', end: '12:00' }] }
     const onChange = await mount(days)
     const removeButton = container.querySelector('button[aria-label="Удалить интервал"]') as HTMLButtonElement
     await act(async () => removeButton.click())

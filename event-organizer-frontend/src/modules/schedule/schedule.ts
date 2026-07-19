@@ -1,9 +1,9 @@
 import type { ScheduleBundle, TravelBody, UpsertScheduleBody } from './types.ts'
 
-export type Interval = { start: string; end: string }
+export type Interval = { uid: string; start: string; end: string }
 export type DayState = { enabled: boolean; intervals: Interval[] }
-export type OverrideState = { date: string; fullDay: boolean; start: string; end: string }
-export type TravelState = { start_date: string; end_date: string; time_zone: string }
+export type OverrideState = { uid: string; date: string; fullDay: boolean; start: string; end: string }
+export type TravelState = { uid: string; start_date: string; end_date: string; time_zone: string }
 export type EditorState = {
   name: string
   timeZone: string
@@ -17,6 +17,11 @@ export const DAY_LABELS = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс
 
 export function emptyDays(): DayState[] {
   return DAY_LABELS.map(() => ({ enabled: false, intervals: [] }))
+}
+
+export function makeUid(): string {
+  if (typeof crypto !== 'undefined' && crypto.randomUUID) return crypto.randomUUID()
+  return 'r' + Date.now().toString(36) + Math.random().toString(36).slice(2)
 }
 
 // "09:00:00" | "09:00" → "09:00".
@@ -34,12 +39,13 @@ export function bundleToState(bundle: ScheduleBundle | null, defaultTz: string):
     const idx = wh.day_of_week - 1
     if (idx < 0 || idx > 6) continue
     days[idx].enabled = true
-    days[idx].intervals.push({ start: hhmm(wh.start_time), end: hhmm(wh.end_time) })
+    days[idx].intervals.push({ uid: makeUid(), start: hhmm(wh.start_time), end: hhmm(wh.end_time) })
   }
 
   const overrides: OverrideState[] = bundle.date_overrides.map((o) => {
     const fullDay = o.start_time === null || o.end_time === null
     return {
+      uid: makeUid(),
       date: o.date,
       fullDay,
       start: fullDay ? '' : hhmm(o.start_time ?? ''),
@@ -48,6 +54,7 @@ export function bundleToState(bundle: ScheduleBundle | null, defaultTz: string):
   })
 
   const travels: TravelState[] = bundle.travel_schedules.map((t) => ({
+    uid: makeUid(),
     start_date: t.start_date,
     end_date: t.end_date ?? '',
     time_zone: t.time_zone,

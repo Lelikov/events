@@ -27,11 +27,14 @@ describe('DateOverrides', () => {
     await act(async () => addBtn.click())
     const next = onChange.mock.calls[0][0] as OverrideState[]
     expect(next).toHaveLength(1)
-    expect(next[0]).toEqual({ date: '', fullDay: false, start: '09:00', end: '18:00' })
+    const { uid, ...rest } = next[0]
+    expect(typeof uid).toBe('string')
+    expect(uid.length).toBeGreaterThan(0)
+    expect(rest).toEqual({ date: '', fullDay: false, start: '09:00', end: '18:00' })
   })
 
   it('toggling full-day clears the times', async () => {
-    const onChange = await mount([{ date: '2026-07-25', fullDay: false, start: '10:00', end: '14:00' }])
+    const onChange = await mount([{ uid: 'u1', date: '2026-07-25', fullDay: false, start: '10:00', end: '14:00' }])
     const box = container.querySelector('.override-row input[type="checkbox"]') as HTMLInputElement
     await act(async () => box.click())
     const next = (onChange.mock.calls[0][0] as OverrideState[])[0]
@@ -41,7 +44,7 @@ describe('DateOverrides', () => {
   })
 
   it('removes a row', async () => {
-    const onChange = await mount([{ date: '2026-07-25', fullDay: true, start: '', end: '' }])
+    const onChange = await mount([{ uid: 'u1', date: '2026-07-25', fullDay: true, start: '', end: '' }])
     const del = container.querySelector('.override-row .icon-button') as HTMLButtonElement
     await act(async () => del.click())
     expect((onChange.mock.calls[0][0] as OverrideState[])).toHaveLength(0)

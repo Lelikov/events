@@ -1,11 +1,11 @@
-import { DAY_LABELS, type DayState, type Interval } from './schedule.ts'
+import { DAY_LABELS, makeUid, type DayState, type Interval } from './schedule.ts'
 
 type Props = {
   days: DayState[]
   onChange: (days: DayState[]) => void
 }
 
-const DEFAULT_INTERVAL: Interval = { start: '09:00', end: '18:00' }
+const DEFAULT_INTERVAL: Omit<Interval, 'uid'> = { start: '09:00', end: '18:00' }
 
 export function WeeklyHours({ days, onChange }: Props) {
   function updateDay(idx: number, next: DayState) {
@@ -19,12 +19,12 @@ export function WeeklyHours({ days, onChange }: Props) {
       updateDay(idx, { enabled: false, intervals: [] })
       return
     }
-    updateDay(idx, { enabled: true, intervals: [{ ...DEFAULT_INTERVAL }] })
+    updateDay(idx, { enabled: true, intervals: [{ ...DEFAULT_INTERVAL, uid: makeUid() }] })
   }
 
   function addInterval(idx: number) {
     const day = days[idx]
-    updateDay(idx, { ...day, intervals: [...day.intervals, { ...DEFAULT_INTERVAL }] })
+    updateDay(idx, { ...day, intervals: [...day.intervals, { ...DEFAULT_INTERVAL, uid: makeUid() }] })
   }
 
   function removeInterval(idx: number, ivIdx: number) {
@@ -52,7 +52,7 @@ export function WeeklyHours({ days, onChange }: Props) {
               {!day.enabled && <span className="muted">Недоступно</span>}
               {day.enabled &&
                 day.intervals.map((iv, ivIdx) => (
-                  <div className="interval-row" key={ivIdx}>
+                  <div className="interval-row" key={iv.uid}>
                     <input
                       type="time"
                       value={iv.start}

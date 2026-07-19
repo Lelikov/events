@@ -1,12 +1,12 @@
 import { TimeZoneField } from '../shared/TimeZoneField.tsx'
-import type { TravelState } from './schedule.ts'
+import { makeUid, type TravelState } from './schedule.ts'
 
 type Props = {
   travels: TravelState[]
   onChange: (travels: TravelState[]) => void
 }
 
-const EMPTY: TravelState = { start_date: '', end_date: '', time_zone: 'UTC' }
+const EMPTY: Omit<TravelState, 'uid'> = { start_date: '', end_date: '', time_zone: 'UTC' }
 
 export function Travel({ travels, onChange }: Props) {
   function update(idx: number, next: TravelState) {
@@ -14,7 +14,7 @@ export function Travel({ travels, onChange }: Props) {
   }
 
   function add() {
-    onChange([...travels, { ...EMPTY }])
+    onChange([...travels, { ...EMPTY, uid: makeUid() }])
   }
 
   function remove(idx: number) {
@@ -24,7 +24,7 @@ export function Travel({ travels, onChange }: Props) {
   return (
     <div>
       {travels.map((t, idx) => (
-        <div className="travel-row" key={idx}>
+        <div className="travel-row" key={t.uid}>
           <input type="date" value={t.start_date} onChange={(e) => update(idx, { ...t, start_date: e.target.value })} />
           <span>–</span>
           <input type="date" value={t.end_date} onChange={(e) => update(idx, { ...t, end_date: e.target.value })} />
