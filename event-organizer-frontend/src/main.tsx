@@ -4,11 +4,14 @@ import { ErrorBoundary } from './modules/shared/ErrorBoundary.tsx'
 import 'events-design-system/styles.css'
 import './index.css'
 import App from './App.tsx'
+import { AuthProvider } from './modules/auth/AuthContext.tsx'
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <ErrorBoundary>
-      <App />
+      <AuthProvider>
+        <App />
+      </AuthProvider>
     </ErrorBoundary>
   </StrictMode>,
 )
