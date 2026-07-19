@@ -1,8 +1,9 @@
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import App from './App.tsx'
 import { AuthProvider } from './modules/auth/AuthContext.tsx'
+import * as scheduleApi from './modules/schedule/scheduleApi.ts'
 
 let container: HTMLDivElement
 let root: Root
@@ -23,6 +24,7 @@ async function mount() {
       </AuthProvider>,
     ),
   )
+  await act(async () => {}) // flush SchedulePage's load effect
 }
 
 afterEach(() => {
@@ -30,6 +32,7 @@ afterEach(() => {
   container.remove()
   sessionStorage.clear()
   window.history.replaceState(null, '', '/')
+  vi.restoreAllMocks()
 })
 
 describe('App redirect', () => {
@@ -41,11 +44,12 @@ describe('App redirect', () => {
   })
 
   it('redirects an authenticated visitor away from /login to /', async () => {
+    vi.spyOn(scheduleApi, 'getSchedule').mockResolvedValue(null)
     const token = makeToken({ sub: 'organizer@example.com', exp: Math.floor(Date.now() / 1000) + 3600 })
     sessionStorage.setItem('event_organizer_jwt', token)
     window.history.replaceState(null, '', '/login')
     await mount()
     expect(window.location.pathname).toBe('/')
-    expect(container.querySelector('.card')?.textContent).toBe('Расписание')
+    expect(container.querySelector('h1')?.textContent).toBe('Расписание')
   })
 })
