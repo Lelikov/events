@@ -483,6 +483,27 @@ services:
       start_period: 10s
     restart: unless-stopped
 
+  event-organizer-frontend:
+    build:
+      context: ./event-organizer-frontend
+      dockerfile: Dockerfile
+      args:
+        # Empty = same-origin: nginx in the container proxies /api, /auth and
+        # /health to event-organizer:8888.
+        VITE_API_BASE_URL: ${VITE_API_BASE_URL:-}
+    ports:
+      - "${ORGANIZER_FRONTEND_PORT:-3003}:80"
+    depends_on:
+      event-organizer:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO /dev/null http://127.0.0.1:80/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+
   jitsi-chat:
     build:
       context: ./jitsi-chat
