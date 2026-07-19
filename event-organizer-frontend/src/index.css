@@ -91,3 +91,17 @@
 .empty-state { color: var(--muted); padding: 24px 0; text-align: center; }
 
 .login-form-panel .field + .field { margin-top: 12px; }
+
+/* Editable time zone reuses the design-system picker classes
+   (.tz-picker-input / .tz-dropdown / .tz-option) so it matches the rest of the
+   UI; the dropdown is portaled to <body> and positioned via inline styles.
+   The wrapper only exists to keep the input out of `.field > input`. */
+.tz-field { display: block; }
+
+/* Read-only time zone (details step): plain muted text, visibly not a control. */
+.tz-readonly {
+  display: block;
+  padding: 7px 2px;
+  color: var(--text-2);
+  font-size: 13px;
+}
