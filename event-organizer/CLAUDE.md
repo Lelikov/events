@@ -114,10 +114,12 @@ for `profile`/`password`.
 - **`adapters/scheduling_client.py`** — `SchedulingClient`: Bearer `SCHEDULING_API_KEY`
   httpx client for `GET/PUT /api/v1/schedules/{owner_user_id}`, `PUT …/travel`,
   `GET /api/v1/bookings?host_user_id=`, `GET /api/v1/bookings/{id}/detail`
-  (`get_booking_detail`). `404` → `NotFoundError`; `422` →
-  `ValidationError` carrying the upstream `detail` (so a domain rejection like
-  non-whole-hour schedule times surfaces to the editor, not a generic 502); any
-  other non-2xx → `UpstreamError`.
+  (`get_booking_detail`), `GET /api/v1/slots` (`get_slots`),
+  `POST /api/v1/bookings/{id}/reschedule` (`reschedule_booking`, sends actor
+  headers). `404` → `NotFoundError`; `422` → `ValidationError` and `409` →
+  `ConflictError`, both carrying the upstream `detail` (so domain rejections
+  surface with their reason, not a generic 502); any other non-2xx →
+  `UpstreamError`.
 - **`adapters/users_client.py`** — `UsersClient`: Bearer `EVENT_USERS_TOKEN` httpx
   client for `GET /api/users/id/{user_id}`, `PATCH /api/users/id/{user_id}`,
   `GET /api/users/by-identity?email=&role=organizer` (returns the resolved `UUID | None`,
@@ -151,6 +153,8 @@ for `profile`/`password`.
 | PUT | `/api/me/schedule/travel` | JWT bearer | Proxies `PUT /api/v1/schedules/{me.user_id}/travel`. |
 | GET | `/api/me/bookings` | JWT bearer | Proxies `GET /api/v1/bookings?host_user_id={me.user_id}`; returns a projected `{id, start_time, end_time, status}` list only — no other participant's ids or contact info leak through. |
 | GET | `/api/me/bookings/{id}` | JWT bearer | Owner-scoped booking detail. Gates `id` against the caller's own `get_bookings(me.user_id)` (404 if not theirs — no cross-organizer read), then merges event-scheduling `GET /api/v1/bookings/{id}/detail` (event type title + client name/email) with the list row's `attendee_time_zone`/`created_at`/`field_answers` → `{id, title, start_time, end_time, status, client_name, client_email, client_time_zone, created_at, field_answers[{label,value}]}`. |
+| GET | `/api/me/bookings/{id}/slots?date=&time_zone=` | JWT bearer | Owner-scoped available slots for rescheduling. Gates `id` against the caller's own bookings, resolves its `event_type_id`, windows `date` in `time_zone` (UTC), proxies event-scheduling `GET /api/v1/slots` → `{date, time_zone, slots:[utc_iso…]}` (that day's starts). |
+| POST | `/api/me/bookings/{id}/reschedule` | JWT bearer | Owner-scoped reschedule. Gates `id` against the caller's own bookings, proxies event-scheduling `POST /api/v1/bookings/{id}/reschedule {start_time}` with `actor-source: organizer` / `actor-user-id: me.user_id`. Upstream `409` (slot not free / cancelled) → `409`, `422` (past) → `422`. **Reassign (change host/client) is not implemented — no API exists yet.** |
 | GET | `/api/me/profile` | JWT bearer | Proxies `GET /api/users/id/{me.user_id}` on event-users; returns `{name, email, time_zone}`. |
 | PUT | `/api/me/profile` | JWT bearer | Body `{name, time_zone}` **only**. Proxies `PATCH /api/users/id/{me.user_id}` with exactly those two fields — never forwards `email`/`role` even though event-users' PATCH contract accepts them. |
 | PUT | `/api/me/password` | JWT bearer | Body `{old_password, new_password}`. Re-verifies `old_password` against the stored hash before updating; `401` on mismatch. `204` on success. |
