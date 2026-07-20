@@ -64,7 +64,12 @@ async def _mark_retry(
 async def _resolve_participants(
     sql: ISqlExecutor, row: RowMapping, users: IUsersClient, clock: Clock, max_backoff_s: int
 ) -> tuple | None:
-    """Resolve host/client emails via event-users. Returns (host, client) or None on failure."""
+    """Resolve host/client (and, if present, previous host) emails via event-users.
+
+    Returns (host, client, previous_host_or_None) or None on failure. The previous
+    host is best-effort — a booking.reassigned payload carries previous_host_user_id
+    for the previous_organizer participant, but a missing one does not block the emit.
+    """
     payload = row["payload"]
     try:
         host_id = UUID(payload["host_user_id"])
@@ -72,8 +77,17 @@ async def _resolve_participants(
     except (KeyError, ValueError) as exc:
         await _mark_failed(sql, row["id"], f"malformed-payload:{exc}")
         return None
+    ids = [host_id, client_id]
+    prev_id: UUID | None = None
+    prev_raw = payload.get("previous_host_user_id")
+    if prev_raw is not None:
+        try:
+            prev_id = UUID(prev_raw)
+            ids.append(prev_id)
+        except ValueError:
+            prev_id = None
     try:
-        resolved = await users.by_ids([host_id, client_id])
+        resolved = await users.by_ids(ids)
     except Exception as exc:  # noqa: BLE001 - transient users-service failure, retry
         await _mark_retry(sql, row["id"], row["attempts"], clock, max_backoff_s, f"users:{exc}")
         return None
@@ -82,7 +96,8 @@ async def _resolve_participants(
     if host is None or client is None:
         await _mark_retry(sql, row["id"], row["attempts"], clock, max_backoff_s, "email-not-found")
         return None
-    return host, client
+    previous = resolved.get(prev_id) if prev_id is not None else None
+    return host, client, previous
 
 
 async def _dispatch_row(
@@ -96,10 +111,17 @@ async def _dispatch_row(
     participants = await _resolve_participants(sql, row, users, clock, max_backoff_s)
     if participants is None:
         return
-    host, client = participants
+    host, client, previous_host = participants
     try:
         headers, body = build_cloudevent(
-            row["event_type"], row["booking_uid"], str(row["event_ce_id"]), row["payload"], host, client, clock.now()
+            row["event_type"],
+            row["booking_uid"],
+            str(row["event_ce_id"]),
+            row["payload"],
+            host,
+            client,
+            clock.now(),
+            previous_host=previous_host,
         )
     except (KeyError, ValueError) as exc:
         await _mark_failed(sql, row["id"], f"malformed-payload:{exc}")

@@ -200,7 +200,7 @@ every REMINDER_INTERVAL_SECONDS tick (default 60s)
   Protocols.
 - **`publishing/payload.py`** — `build_cloudevent`: pure function mapping
   `(event_type, booking_uid, ce_id, payload, host, client, now)` →
-  `(ce_headers, body)` for `booking.created`/`booking.rescheduled`/`booking.cancelled`;
+  `(ce_headers, body)` for `booking.created`/`booking.rescheduled`/`booking.reassigned`/`booking.cancelled`;
   no IO, dict-driven per-type body builders (no `elif`).
 - **`publishing/outbox_writer.py`** — `OutboxWriter`: inserts one `outbox` row via
   the request's own `ISqlExecutor`/`AsyncSession` — runs inside the caller's
@@ -319,8 +319,8 @@ every REMINDER_INTERVAL_SECONDS tick (default 60s)
 | `booking_limit` | Per-event-type limits by `limit_type`+`period` (UNIQUE). CHECK value>0. FK→event_type CASCADE. |
 | `schedule_change_log` | Append-only audit log: JSONB snapshot of the full schedule bundle written on every PUT. No FK to schedule (survives delete). |
 | `booking` (slice 3) | One row per booking. `EXCLUDE USING gist (host_user_id WITH =, tstzrange(start_time, end_time) WITH &&) WHERE status='confirmed'` — DB-enforced no-double-booking per host, race-safe under concurrency. FK→event_type RESTRICT. `field_answers` (booking fields phase 1) is a JSONB snapshot `[{"key","label","type","value"}]` of the guest's answers at booking time, validated against `booking_field` and stored/echoed by `BookingWriteAdapter.insert`/`BookingReadAdapter`. |
-| `booking_change_log` (slice 3) | Append-only transition log (`created`/`rescheduled`/`cancelled`) per booking, written in the same statement as the mutation. No FK to `booking` (kept for parity with `schedule_change_log`'s survive-delete pattern, though bookings are soft-cancelled, never deleted). |
-| `outbox` (slice 4a) | Transactional outbox for `booking.lifecycle` CloudEvents. One row per booking mutation, written in the same transaction. `status` IN `('pending','sent','failed')`; `event_type` IN `('booking.created','booking.rescheduled','booking.cancelled')`; `event_ce_id` is the stable `ce-id` used for at-least-once dedup downstream; `next_attempt_at`/`attempts`/`last_error` drive the backoff retry loop. No FK (booking identity is carried as `booking_uid` text, not a DB FK, so the outbox row survives independent of the booking row's lifecycle). Index `ix_outbox_dispatch (status, next_attempt_at)` backs the dispatcher's poll query. |
+| `booking_change_log` (slice 3) | Append-only transition log (`created`/`rescheduled`/`reassigned`/`cancelled`) per booking, written in the same statement as the mutation. No FK to `booking` (kept for parity with `schedule_change_log`'s survive-delete pattern, though bookings are soft-cancelled, never deleted). |
+| `outbox` (slice 4a) | Transactional outbox for `booking.lifecycle` CloudEvents. One row per booking mutation, written in the same transaction. `status` IN `('pending','sent','failed')`; `event_type` IN `('booking.created','booking.rescheduled','booking.reassigned','booking.cancelled')`; `event_ce_id` is the stable `ce-id` used for at-least-once dedup downstream; `next_attempt_at`/`attempts`/`last_error` drive the backoff retry loop. No FK (booking identity is carried as `booking_uid` text, not a DB FK, so the outbox row survives independent of the booking row's lifecycle). Index `ix_outbox_dispatch (status, next_attempt_at)` backs the dispatcher's poll query. |
 | `external_calendar` (slice 5) | One row per connected iCal-URL calendar. `kind` CHECK IN `('ical_url')`; `host_user_id`+`url` UNIQUE (`uq_external_calendar_host_url`); `enabled` gates whether the poller/busy-source consider it; `last_synced_at`/`last_error` track the most recent sync tick. |
 | `external_calendar_event` (slice 5) | Busy-interval cache for one `external_calendar`. Fully replaced (delete-all + insert) on every sync tick — not an incremental diff. FK→`external_calendar.id` ON DELETE CASCADE (deleting a calendar drops its cache). CHECK `busy_end > busy_start`. Index `ix_ext_cal_event_window (calendar_id, busy_start, busy_end)`. |
 | `booking_field` (booking fields phase 1) | Per-event-type configurable guest-facing form fields (`text`/`textarea`/`select`/`radio`/`checkbox`/`boolean`). `field_key` is slugified from `label` and unique per event type (`uq_booking_field_key`); `options` (JSONB) holds `[{"value","label"}]` for choice types; `position` orders display. FK→event_type CASCADE. Managed via `PUT/GET /api/v1/event-types/{id}/booking-fields` (`booking_fields/` module); read by `BookingService.create` to validate `POST /api/v1/bookings`' `field_answers` (`booking_fields.domain.validate_and_snapshot`) before the snapshot is stored on `booking.field_answers`. |
@@ -345,6 +345,7 @@ every REMINDER_INTERVAL_SECONDS tick (default 60s)
 | GET | `/api/v1/bookings?host_user_id=\|client_user_id=` | Bearer | List bookings; exactly one of `host_user_id`/`client_user_id` required (`422` otherwise), optional `from_`/`to` window |
 | POST | `/api/v1/bookings/{id}/cancel` | Bearer | Soft-cancel (`status='confirmed'→'cancelled'`); idempotent (second call returns the already-cancelled booking, no duplicate log row); frees the slot (exclusion constraint only applies `WHERE status='confirmed'`) |
 | POST | `/api/v1/bookings/{id}/reschedule` | Bearer | In-place move to a new `start_time`, **same host only**; re-checks host availability excluding the booking's own row (`exclude_booking_id`); `409` if cancelled or the new slot isn't free; `404` unknown booking |
+| POST | `/api/v1/bookings/{id}/reassign` | Bearer | Reassign to another host of the same event type (body `{new_host_user_id}`). **Same time, different host**: validates the target is a host of the event type (`422`) and free at the booking's time (`409`, no notice gate — a last-minute hand-off is allowed); writes a `reassigned` change-log + a `booking.reassigned` outbox row carrying the previous host. `422` same host / not a host; `409` cancelled / target busy; `404` unknown booking |
 | GET | `/api/v1/bookings/{id}/history` | Bearer | Ordered `booking_change_log` entries (`created`→`rescheduled`*→`cancelled`?) |
 | POST | `/api/v1/calendars` | Bearer | Connect a host's iCal-URL calendar (slice 5). Body: `{host_user_id, url}`. `201`; `422` if `url` isn't `http(s)://`; `409` if this `host_user_id`+`url` is already connected. |
 | GET | `/api/v1/calendars?host_user_id=` | Bearer | List a host's connected calendars (id, kind, url, enabled, last_synced_at, last_error). |
@@ -428,7 +429,7 @@ unaware that the implementation now also consults external calendars —
 - No slot caching. No reservations/holds (create is re-validate-then-insert, race-safe only via the DB exclusion constraint).
 
 **Slice-4a maturity notes (booking→events outbox integration):**
-- Booking mutations now publish `booking.created`/`booking.rescheduled`/`booking.cancelled`
+- Booking mutations now publish `booking.created`/`booking.rescheduled`/`booking.reassigned`/`booking.cancelled`
   CloudEvents via a transactional outbox + background dispatcher — see `publishing/`
   above and the "Outbox dispatch flow" section. Still no RabbitMQ/FastStream consumer
   in this service — it is purely a producer, over plain HTTP, still no message broker.

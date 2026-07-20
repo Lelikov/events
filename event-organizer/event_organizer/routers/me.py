@@ -6,7 +6,7 @@ from zoneinfo import ZoneInfo
 from dishka.integrations.fastapi import DishkaRoute, FromDishka
 from fastapi import APIRouter, Depends
 
-from event_organizer.adapters.interfaces import ISchedulingClient
+from event_organizer.adapters.interfaces import ISchedulingClient, IUsersClient
 from event_organizer.auth.identity import OrganizerIdentity, require_organizer
 from event_organizer.errors import NotFoundError
 from event_organizer.schemas.me import (
@@ -17,6 +17,8 @@ from event_organizer.schemas.me import (
     PasswordChangeRequest,
     ProfilePutRequest,
     ProfileResponse,
+    ReassignRequest,
+    ReassignTarget,
     RescheduleRequest,
     SchedulePutRequest,
 )
@@ -120,6 +122,33 @@ async def reschedule_booking(
 ) -> dict:
     await _owned_row(scheduling, me.user_id, booking_id)
     return await scheduling.reschedule_booking(booking_id, body.start_time, me.user_id)
+
+
+@me_router.get("/bookings/{booking_id}/reassign-targets", response_model=list[ReassignTarget])
+async def reassign_targets(
+    booking_id: str,
+    scheduling: FromDishka[ISchedulingClient],
+    users: FromDishka[IUsersClient],
+    me: RequireOrganizer,
+) -> list[ReassignTarget]:
+    row = await _owned_row(scheduling, me.user_id, booking_id)
+    event_type = await scheduling.get_event_type(row["event_type_id"])
+    current = row["host_user_id"]
+    targets: list[ReassignTarget] = []
+    for host in event_type.get("hosts", []):
+        if host["user_id"] == current:
+            continue
+        user = await users.get_user(UUID(host["user_id"]))
+        targets.append(ReassignTarget(user_id=host["user_id"], name=user.get("name"), email=user["email"]))
+    return targets
+
+
+@me_router.post("/bookings/{booking_id}/reassign")
+async def reassign_booking(
+    booking_id: str, body: ReassignRequest, scheduling: FromDishka[ISchedulingClient], me: RequireOrganizer
+) -> dict:
+    await _owned_row(scheduling, me.user_id, booking_id)
+    return await scheduling.reassign_booking(booking_id, body.new_host_user_id, me.user_id)
 
 
 @me_router.get("/profile", response_model=ProfileResponse)

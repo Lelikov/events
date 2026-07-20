@@ -1,6 +1,6 @@
 import json
 from datetime import datetime
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from event_scheduling.booking.dto import BookingDTO
 from event_scheduling.interfaces.sql import ISqlExecutor
@@ -17,6 +17,7 @@ class OutboxWriter:
         *,
         previous_start_time: datetime | None = None,
         cancellation_reason: str | None = None,
+        previous_host_user_id: UUID | None = None,
     ) -> None:
         payload = {
             "host_user_id": str(booking.host_user_id),
@@ -32,6 +33,8 @@ class OutboxWriter:
             payload["previous_start_time"] = previous_start_time.isoformat()
         if cancellation_reason is not None:
             payload["cancellation_reason"] = cancellation_reason
+        if previous_host_user_id is not None:
+            payload["previous_host_user_id"] = str(previous_host_user_id)
         await self._sql.execute(
             """
             INSERT INTO outbox (event_ce_id, event_type, booking_uid, payload)

@@ -85,3 +85,18 @@ class SchedulingClient:
                 headers=headers,
             )
         return self._ok(resp)
+
+    async def get_event_type(self, event_type_id: str) -> dict:
+        async with self._http() as c:
+            resp = await c.get(f"{self._base_url}/api/v1/event-types/{event_type_id}")
+        return self._ok(resp)
+
+    async def reassign_booking(self, booking_id: str, new_host_user_id: str, actor_user_id: UUID) -> dict:
+        headers = {"actor-source": "organizer", "actor-user-id": str(actor_user_id)}
+        async with self._http() as c:
+            resp = await c.post(
+                f"{self._base_url}/api/v1/bookings/{booking_id}/reassign",
+                json={"new_host_user_id": new_host_user_id},
+                headers=headers,
+            )
+        return self._ok(resp)

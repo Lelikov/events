@@ -220,7 +220,9 @@ class BookingChangeLog(Base):
     actor_user_id: Mapped[str | None] = mapped_column(UUID(as_uuid=True), nullable=True)
     at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("now()"), nullable=False)
 
-    __table_args__ = (CheckConstraint("kind IN ('created','rescheduled','cancelled')", name="ck_booking_log_kind"),)
+    __table_args__ = (
+        CheckConstraint("kind IN ('created','rescheduled','reassigned','cancelled')", name="ck_booking_log_kind"),
+    )
 
 
 class Outbox(Base):
@@ -243,7 +245,8 @@ class Outbox(Base):
     __table_args__ = (
         CheckConstraint("status IN ('pending','sent','failed')", name="ck_outbox_status"),
         CheckConstraint(
-            "event_type IN ('booking.created','booking.rescheduled','booking.cancelled')", name="ck_outbox_type"
+            "event_type IN ('booking.created','booking.rescheduled','booking.reassigned','booking.cancelled')",
+            name="ck_outbox_type",
         ),
         Index("ix_outbox_dispatch", "status", "next_attempt_at"),
     )

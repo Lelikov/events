@@ -6,10 +6,30 @@ from event_organizer.auth.jwt import create_access_token
 from event_organizer.config import get_settings
 
 
+_OTHER_HOST = "99999999-9999-9999-9999-999999999999"
+
+
 class _FakeScheduling:
     def __init__(self) -> None:
         self.seen_owner = None
         self.seen_body = None
+        self._current_host = None
+        self.reassigned = None
+
+    async def get_event_type(self, event_type_id):
+        # Include the caller's own host (set by the preceding get_bookings) + one other,
+        # so the route's "exclude self" filter yields exactly the other host.
+        return {
+            "id": event_type_id,
+            "hosts": [
+                {"user_id": self._current_host, "schedule_id": str(uuid4())},
+                {"user_id": _OTHER_HOST, "schedule_id": str(uuid4())},
+            ],
+        }
+
+    async def reassign_booking(self, booking_id, new_host_user_id, actor_user_id):
+        self.reassigned = (booking_id, new_host_user_id, actor_user_id)
+        return {"id": booking_id, "host_user_id": new_host_user_id, "status": "confirmed"}
 
     async def get_schedule(self, owner_user_id):
         self.seen_owner = owner_user_id
@@ -24,6 +44,7 @@ class _FakeScheduling:
         return {}
 
     async def get_bookings(self, host_user_id):
+        self._current_host = str(host_user_id)
         return [
             {
                 "id": "b1",
@@ -220,6 +241,53 @@ async def test_reschedule_unknown_id_404(sessionmaker_fixture) -> None:
     app, _, _ = _app_and_fakes()
     with TestClient(app) as c:
         r = c.post("/api/me/bookings/nope/reschedule", headers=_auth(uuid4()), json={"start_time": "2026-10-01T09:00:00Z"})
+        assert r.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_reassign_targets_lists_other_hosts(sessionmaker_fixture) -> None:
+    from starlette.testclient import TestClient
+
+    app, _, _ = _app_and_fakes()
+    with TestClient(app) as c:
+        r = c.get("/api/me/bookings/b1/reassign-targets", headers=_auth(uuid4()))
+        assert r.status_code == 200
+        body = r.json()
+        assert [t["user_id"] for t in body] == [_OTHER_HOST]  # caller excluded
+        assert body[0]["email"] == "org@x.io"
+
+
+@pytest.mark.asyncio
+async def test_reassign_targets_unknown_id_404(sessionmaker_fixture) -> None:
+    from starlette.testclient import TestClient
+
+    app, _, _ = _app_and_fakes()
+    with TestClient(app) as c:
+        r = c.get("/api/me/bookings/nope/reassign-targets", headers=_auth(uuid4()))
+        assert r.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_reassign_owned_forwards(sessionmaker_fixture) -> None:
+    from starlette.testclient import TestClient
+
+    app, sched, _ = _app_and_fakes()
+    uid = uuid4()
+    with TestClient(app) as c:
+        r = c.post("/api/me/bookings/b1/reassign", headers=_auth(uid), json={"new_host_user_id": _OTHER_HOST})
+        assert r.status_code == 200
+        assert sched.reassigned[0] == "b1"
+        assert sched.reassigned[1] == _OTHER_HOST
+        assert sched.reassigned[2] == uid  # actor = the token's uid
+
+
+@pytest.mark.asyncio
+async def test_reassign_unknown_id_404(sessionmaker_fixture) -> None:
+    from starlette.testclient import TestClient
+
+    app, _, _ = _app_and_fakes()
+    with TestClient(app) as c:
+        r = c.post("/api/me/bookings/nope/reassign", headers=_auth(uuid4()), json={"new_host_user_id": _OTHER_HOST})
         assert r.status_code == 404
 
 

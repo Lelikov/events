@@ -135,3 +135,41 @@ async def test_409_raises_conflict_with_detail() -> None:
     with pytest.raises(ConflictError) as ei:
         await _c(h).reschedule_booking(str(uuid4()), "2026-10-01T09:00:00Z", uuid4())
     assert "not available" in str(ei.value)
+
+
+@pytest.mark.asyncio
+async def test_get_event_type_path() -> None:
+    et = str(uuid4())
+
+    def h(req: httpx.Request) -> httpx.Response:
+        assert req.url.path == f"/api/v1/event-types/{et}"
+        return httpx.Response(200, json={"id": et, "hosts": [{"user_id": str(uuid4()), "schedule_id": str(uuid4())}]})
+
+    out = await _c(h).get_event_type(et)
+    assert len(out["hosts"]) == 1
+
+
+@pytest.mark.asyncio
+async def test_reassign_sends_body_and_actor_headers() -> None:
+    import json
+
+    bid, new_host, uid = str(uuid4()), str(uuid4()), uuid4()
+
+    def h(req: httpx.Request) -> httpx.Response:
+        assert req.url.path == f"/api/v1/bookings/{bid}/reassign"
+        assert req.headers["actor-source"] == "organizer"
+        assert req.headers["actor-user-id"] == str(uid)
+        assert json.loads(req.content)["new_host_user_id"] == new_host
+        return httpx.Response(200, json={"id": bid, "host_user_id": new_host})
+
+    out = await _c(h).reassign_booking(bid, new_host, uid)
+    assert out["host_user_id"] == new_host
+
+
+@pytest.mark.asyncio
+async def test_reassign_422_raises_validation() -> None:
+    def h(_req: httpx.Request) -> httpx.Response:
+        return httpx.Response(422, json={"detail": "new host is not a host of this event type"})
+
+    with pytest.raises(ValidationError):
+        await _c(h).reassign_booking(str(uuid4()), str(uuid4()), uuid4())

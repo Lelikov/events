@@ -112,7 +112,7 @@ export function BookingsPage() {
           key={`${selectedId ?? 'none'}:${refreshKey}`}
           bookingId={selectedId}
           organizerTz={timeZone}
-          onRescheduled={() => setRefreshKey((k) => k + 1)}
+          onChanged={() => setRefreshKey((k) => k + 1)}
         />
       </div>
     </div>

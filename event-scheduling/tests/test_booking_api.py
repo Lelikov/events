@@ -832,3 +832,145 @@ async def test_create_path_enforces_buffer_on_neighbor_booking(client) -> None:
         },
     )
     assert second.status_code == 409
+
+
+# ── Reassign (organizer change) ──────────────────────────────────────────────
+
+
+async def _seed_two_host_et(session, *, notice: int = 0) -> tuple[UUID, UUID, UUID]:
+    """Event type hosted by TWO organizers (both Thu 09:00-17:00 Europe/Berlin)."""
+    et_id = uuid4()
+    await session.execute(
+        text(
+            "INSERT INTO event_type (id, slug, title, duration_minutes, slot_interval_minutes, "
+            "min_booking_notice_minutes, buffer_before_minutes, buffer_after_minutes) "
+            "VALUES (:id, :slug, 'Intro', 60, 30, :notice, 0, 0)"
+        ),
+        {"id": et_id, "slug": f"et-{et_id}", "notice": notice},
+    )
+    hosts: list[UUID] = []
+    for _ in range(2):
+        owner = uuid4()
+        sid = uuid4()
+        await session.execute(
+            text("INSERT INTO schedule (id, owner_user_id, name, time_zone) VALUES (:id, :o, 's', 'Europe/Berlin')"),
+            {"id": sid, "o": owner},
+        )
+        await session.execute(
+            text("INSERT INTO weekly_hours (schedule_id, day_of_week, start_time, end_time) VALUES (:sid, 4, '09:00', '17:00')"),
+            {"sid": sid},
+        )
+        await session.execute(
+            text("INSERT INTO host (event_type_id, user_id, schedule_id) VALUES (:et, :u, :sid)"),
+            {"et": et_id, "u": owner, "sid": sid},
+        )
+        hosts.append(owner)
+    await session.commit()
+    return et_id, hosts[0], hosts[1]
+
+
+async def _insert_booking(session, et: UUID, host: UUID, start: dt.datetime, *, status: str = "confirmed") -> UUID:
+    bid = uuid4()
+    end = start + dt.timedelta(hours=1)
+    await session.execute(
+        text(
+            "INSERT INTO booking (id, event_type_id, host_user_id, client_user_id, start_time, end_time, status, "
+            "attendee_time_zone) VALUES (:id, :et, :h, :c, :s, :e, :st, 'Europe/Berlin')"
+        ),
+        {"id": bid, "et": et, "h": host, "c": uuid4(), "s": start, "e": end, "st": status},
+    )
+    await session.commit()
+    return bid
+
+
+@pytest.mark.asyncio
+async def test_reassign_moves_to_other_host_and_writes_outbox(sessionmaker_fixture) -> None:
+    async with sessionmaker_fixture() as s:
+        et, host_a, host_b = await _seed_two_host_et(s)
+        bid = await _insert_booking(s, et, host_a, START)
+
+    async with sessionmaker_fixture() as s:
+        service = _build_service(SqlExecutor(s), NOW)
+        updated = await service.reassign(bid, host_b, ACTOR)
+        await s.commit()
+    assert updated.host_user_id == host_b
+
+    async with sessionmaker_fixture() as s:
+        row = (
+            await s.execute(text("SELECT event_type, payload FROM outbox WHERE booking_uid = :u"), {"u": str(bid)})
+        ).mappings().first()
+    assert row["event_type"] == "booking.reassigned"
+    payload = row["payload"] if isinstance(row["payload"], dict) else __import__("json").loads(row["payload"])
+    assert payload["previous_host_user_id"] == str(host_a)
+
+
+@pytest.mark.asyncio
+async def test_reassign_same_host_422(sessionmaker_fixture) -> None:
+    async with sessionmaker_fixture() as s:
+        et, host_a, _ = await _seed_two_host_et(s)
+        bid = await _insert_booking(s, et, host_a, START)
+    async with sessionmaker_fixture() as s:
+        service = _build_service(SqlExecutor(s), NOW)
+        with pytest.raises(ValidationError):
+            await service.reassign(bid, host_a, ACTOR)
+
+
+@pytest.mark.asyncio
+async def test_reassign_non_host_422(sessionmaker_fixture) -> None:
+    async with sessionmaker_fixture() as s:
+        et, host_a, _ = await _seed_two_host_et(s)
+        bid = await _insert_booking(s, et, host_a, START)
+    async with sessionmaker_fixture() as s:
+        service = _build_service(SqlExecutor(s), NOW)
+        with pytest.raises(ValidationError):
+            await service.reassign(bid, uuid4(), ACTOR)
+
+
+@pytest.mark.asyncio
+async def test_reassign_cancelled_409(sessionmaker_fixture) -> None:
+    async with sessionmaker_fixture() as s:
+        et, host_a, host_b = await _seed_two_host_et(s)
+        bid = await _insert_booking(s, et, host_a, START, status="cancelled")
+    async with sessionmaker_fixture() as s:
+        service = _build_service(SqlExecutor(s), NOW)
+        with pytest.raises(ConflictError):
+            await service.reassign(bid, host_b, ACTOR)
+
+
+@pytest.mark.asyncio
+async def test_reassign_busy_new_host_409(sessionmaker_fixture) -> None:
+    async with sessionmaker_fixture() as s:
+        et, host_a, host_b = await _seed_two_host_et(s)
+        bid = await _insert_booking(s, et, host_a, START)
+        await _insert_booking(s, et, host_b, START)  # host_b already booked at START
+    async with sessionmaker_fixture() as s:
+        service = _build_service(SqlExecutor(s), NOW)
+        with pytest.raises(ConflictError):
+            await service.reassign(bid, host_b, ACTOR)
+
+
+@pytest.mark.asyncio
+async def test_reassign_allows_start_within_notice_window(sessionmaker_fixture) -> None:
+    soon = dt.datetime(2026, 9, 3, 9, tzinfo=dt.UTC)  # Thursday, ~2 days after NOW
+    async with sessionmaker_fixture() as s:
+        et, host_a, host_b = await _seed_two_host_et(s, notice=10080)  # 7-day notice
+        bid = await _insert_booking(s, et, host_a, soon)
+    async with sessionmaker_fixture() as s:
+        service = _build_service(SqlExecutor(s), NOW)
+        updated = await service.reassign(bid, host_b, ACTOR)  # check_notice=False → not blocked
+        await s.commit()
+    assert updated.host_user_id == host_b
+
+
+@pytest.mark.asyncio
+async def test_http_reassign_moves_host(client, sessionmaker_fixture) -> None:
+    async with sessionmaker_fixture() as s:
+        et, host_a, host_b = await _seed_two_host_et(s)
+        bid = await _insert_booking(s, et, host_a, START)
+    r = client.post(
+        f"/api/v1/bookings/{bid}/reassign",
+        json={"new_host_user_id": str(host_b)},
+        headers={"actor-source": "organizer", "actor-user-id": str(uuid4())},
+    )
+    assert r.status_code == 200
+    assert r.json()["host_user_id"] == str(host_b)
