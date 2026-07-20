@@ -30,7 +30,12 @@ export function WeeklyHours({ days, onChange }: Props) {
 
   function removeInterval(idx: number, ivIdx: number) {
     const day = days[idx]
-    updateDay(idx, { ...day, intervals: day.intervals.filter((_, i) => i !== ivIdx) })
+    const intervals = day.intervals.filter((_, i) => i !== ivIdx)
+    if (intervals.length === 0) {
+      updateDay(idx, { enabled: false, intervals: [] })
+      return
+    }
+    updateDay(idx, { ...day, intervals })
   }
 
   function setTime(idx: number, ivIdx: number, field: 'start' | 'end', value: string) {
