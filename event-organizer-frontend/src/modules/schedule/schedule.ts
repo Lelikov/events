@@ -15,6 +15,10 @@ export type EditorState = {
 // Index 0..6 → day_of_week 1..7 (ISO, Mon..Sun).
 export const DAY_LABELS = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс']
 
+// Whole-hour choices for the schedule time selects ("00:00".."23:00"). Times
+// are constrained to whole hours; the domain also enforces this on save.
+export const HOUR_OPTIONS: string[] = Array.from({ length: 24 }, (_, h) => `${String(h).padStart(2, '0')}:00`)
+
 export function emptyDays(): DayState[] {
   return DAY_LABELS.map(() => ({ enabled: false, intervals: [] }))
 }

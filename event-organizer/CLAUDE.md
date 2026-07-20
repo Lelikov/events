@@ -113,8 +113,10 @@ for `profile`/`password`.
   `email`, `password_hash`, `disabled`).
 - **`adapters/scheduling_client.py`** — `SchedulingClient`: Bearer `SCHEDULING_API_KEY`
   httpx client for `GET/PUT /api/v1/schedules/{owner_user_id}`, `PUT …/travel`,
-  `GET /api/v1/bookings?host_user_id=`. `404` → `NotFoundError`; other non-2xx →
-  `UpstreamError`.
+  `GET /api/v1/bookings?host_user_id=`. `404` → `NotFoundError`; `422` →
+  `ValidationError` carrying the upstream `detail` (so a domain rejection like
+  non-whole-hour schedule times surfaces to the editor, not a generic 502); any
+  other non-2xx → `UpstreamError`.
 - **`adapters/users_client.py`** — `UsersClient`: Bearer `EVENT_USERS_TOKEN` httpx
   client for `GET /api/users/id/{user_id}`, `PATCH /api/users/id/{user_id}`,
   `GET /api/users/by-identity?email=&role=organizer` (returns the resolved `UUID | None`,

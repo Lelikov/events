@@ -4,8 +4,9 @@ import type { ScheduleBundle } from './types.ts'
 
 // Strips the non-deterministic `uid` so rows produced by makeUid() can be compared by value.
 function withoutUid<T extends { uid: string }>(row: T): Omit<T, 'uid'> {
-  const { uid: _uid, ...rest } = row
-  return rest
+  const rest = { ...row } as Partial<T>
+  delete rest.uid
+  return rest as Omit<T, 'uid'>
 }
 
 const bundle: ScheduleBundle = {

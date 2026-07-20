@@ -1,3 +1,4 @@
+import { HourSelect } from './HourSelect.tsx'
 import { makeUid, type OverrideState } from './schedule.ts'
 
 type Props = {
@@ -24,12 +25,17 @@ export function DateOverrides({ overrides, onChange }: Props) {
     <div>
       {overrides.map((o, idx) => (
         <div className="override-row" key={o.uid}>
-          <input type="date" value={o.date} onChange={(e) => update(idx, { ...o, date: e.target.value })} />
+          <input
+            type="date"
+            className="field-control"
+            value={o.date}
+            onChange={(e) => update(idx, { ...o, date: e.target.value })}
+          />
           {!o.fullDay && (
             <>
-              <input type="time" value={o.start} onChange={(e) => update(idx, { ...o, start: e.target.value })} />
+              <HourSelect value={o.start} ariaLabel="Начало" onChange={(v) => update(idx, { ...o, start: v })} />
               <span>–</span>
-              <input type="time" value={o.end} onChange={(e) => update(idx, { ...o, end: e.target.value })} />
+              <HourSelect value={o.end} ariaLabel="Конец" onChange={(v) => update(idx, { ...o, end: v })} />
             </>
           )}
           <label>

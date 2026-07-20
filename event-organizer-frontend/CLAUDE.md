@@ -43,7 +43,9 @@ npm run preview   # Preview the production build
   throws `ApiError`; on `401` for a token-carrying request → clear session +
   redirect `/login`.
 - **Screens**: `schedule/` (weekly hours + date overrides + travel editor over
-  `/api/me/schedule` + `/api/me/schedule/travel`), `bookings/` (read-only
+  `/api/me/schedule` + `/api/me/schedule/travel`; weekly-hours and date-override
+  times are picked with a whole-hour `<select>` — `HourSelect`, `00:00…23:00` —
+  and the domain enforces whole hours on save), `bookings/` (read-only
   upcoming/past list over `/api/me/bookings`), `profile/` (profile + password
   cards over `/api/me/profile` + `/api/me/password`).
 - **Deploy**: nginx (`Dockerfile` + `nginx.conf`) same-origin-proxies `/api`,

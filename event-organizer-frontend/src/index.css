@@ -43,7 +43,30 @@
 
 .weekday-name { font-weight: 600; padding-top: 6px; }
 .interval-row { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
-.interval-row input[type="time"] { width: 120px; }
+
+/* Row-level controls (hour select, date input) reuse the design-system field
+   box so they sit consistently next to the tz picker / selects. */
+.field-control {
+  background: var(--bg-soft);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  padding: 9px 12px;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.field-control:focus {
+  outline: none;
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px rgba(79, 110, 242, 0.12);
+}
+.field-control--select {
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%236b7280'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+  padding-right: 30px;
+  cursor: pointer;
+}
 
 .override-row,
 .travel-row {
