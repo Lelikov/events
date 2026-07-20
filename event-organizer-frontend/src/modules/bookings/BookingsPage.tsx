@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { formatRange } from '../shared/format.ts'
 import { getProfile } from '../profile/profileApi.ts'
 import { getBookings } from './bookingsApi.ts'
+import { BookingDetailPanel } from './BookingDetailPanel.tsx'
 import type { BookingRow } from './types.ts'
 
 const STATUS_LABEL: Record<string, string> = {
@@ -20,17 +21,29 @@ function statusVariant(status: string): string {
   return STATUS_VARIANT[status] ?? ''
 }
 
-function BookingList({ rows, timeZone }: { rows: BookingRow[]; timeZone: string | undefined }) {
+type ListProps = {
+  rows: BookingRow[]
+  timeZone: string | undefined
+  selectedId: string | null
+  onSelect: (id: string) => void
+}
+
+function BookingList({ rows, timeZone, selectedId, onSelect }: ListProps) {
   if (rows.length === 0) {
     return <div className="empty-state">Нет броней</div>
   }
   return (
     <>
       {rows.map((b) => (
-        <div className="booking-row" key={b.id}>
+        <button
+          type="button"
+          className={`booking-row${b.id === selectedId ? ' is-selected' : ''}`}
+          key={b.id}
+          onClick={() => onSelect(b.id)}
+        >
           <span>{formatRange(b.start_time, b.end_time, timeZone)}</span>
           <span className={`badge ${statusVariant(b.status)}`}>{STATUS_LABEL[b.status] ?? b.status}</span>
-        </div>
+        </button>
       ))}
     </>
   )
@@ -41,6 +54,7 @@ export function BookingsPage() {
   const [timeZone, setTimeZone] = useState<string | undefined>(undefined)
   const [now, setNow] = useState<number | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [selectedId, setSelectedId] = useState<string | null>(null)
 
   useEffect(() => {
     let cancelled = false
@@ -81,13 +95,18 @@ export function BookingsPage() {
       <div className="page-head">
         <h1>Брони</h1>
       </div>
-      <div className="booking-group">
-        <h2>Предстоящие</h2>
-        <BookingList rows={upcoming} timeZone={timeZone} />
-      </div>
-      <div className="booking-group">
-        <h2>Прошедшие</h2>
-        <BookingList rows={past} timeZone={timeZone} />
+      <div className="bookings-layout">
+        <div className="bookings-list">
+          <div className="booking-group">
+            <h2>Предстоящие</h2>
+            <BookingList rows={upcoming} timeZone={timeZone} selectedId={selectedId} onSelect={setSelectedId} />
+          </div>
+          <div className="booking-group">
+            <h2>Прошедшие</h2>
+            <BookingList rows={past} timeZone={timeZone} selectedId={selectedId} onSelect={setSelectedId} />
+          </div>
+        </div>
+        <BookingDetailPanel key={selectedId ?? 'none'} bookingId={selectedId} organizerTz={timeZone} />
       </div>
     </div>
   )

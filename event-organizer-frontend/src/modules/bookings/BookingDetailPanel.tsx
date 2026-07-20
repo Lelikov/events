@@ -17,21 +17,15 @@ function Field({ label, value }: { label: string; value: string }) {
 
 type Props = { bookingId: string | null; organizerTz: string | undefined }
 
+// The parent keys this component by the selected booking id, so a new selection
+// remounts it with fresh state — no synchronous state reset in the effect.
 export function BookingDetailPanel({ bookingId, organizerTz }: Props) {
   const [detail, setDetail] = useState<BookingDetail | null>(null)
   const [error, setError] = useState(false)
-  const [loading, setLoading] = useState(false)
 
   useEffect(() => {
-    if (!bookingId) {
-      setDetail(null)
-      setError(false)
-      return
-    }
+    if (!bookingId) return
     let cancelled = false
-    setLoading(true)
-    setError(false)
-    setDetail(null)
     getBookingDetail(bookingId)
       .then((d) => {
         if (!cancelled) setDetail(d)
@@ -39,18 +33,14 @@ export function BookingDetailPanel({ bookingId, organizerTz }: Props) {
       .catch(() => {
         if (!cancelled) setError(true)
       })
-      .finally(() => {
-        if (!cancelled) setLoading(false)
-      })
     return () => {
       cancelled = true
     }
   }, [bookingId])
 
   if (!bookingId) return <div className="detail-panel detail-empty">Выберите бронь, чтобы увидеть детали</div>
-  if (loading) return <div className="detail-panel">Загрузка…</div>
   if (error) return <div className="detail-panel error-text">Не удалось загрузить бронь</div>
-  if (!detail) return <div className="detail-panel" />
+  if (!detail) return <div className="detail-panel">Загрузка…</div>
 
   return (
     <div className="detail-panel">
