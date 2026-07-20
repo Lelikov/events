@@ -50,11 +50,13 @@ export function BookingDetailPanel({ bookingId, organizerTz }: Props) {
           {STATUS_LABEL[detail.status] ?? detail.status}
         </span>
       </div>
-      <Field label="Дата и время" value={formatRange(detail.start_time, detail.end_time, organizerTz)} />
-      {detail.client_name && <Field label="Клиент" value={detail.client_name} />}
-      {detail.client_email && <Field label="Email" value={detail.client_email} />}
-      {detail.client_time_zone && <Field label="Часовой пояс клиента" value={detail.client_time_zone} />}
-      {detail.created_at && <Field label="Создана" value={formatDateTime(detail.created_at, organizerTz)} />}
+      <div className="detail-fields">
+        <Field label="Дата и время" value={formatRange(detail.start_time, detail.end_time, organizerTz)} />
+        {detail.client_name && <Field label="Клиент" value={detail.client_name} />}
+        {detail.client_email && <Field label="Email" value={detail.client_email} />}
+        {detail.client_time_zone && <Field label="Часовой пояс клиента" value={detail.client_time_zone} />}
+        {detail.created_at && <Field label="Создана" value={formatDateTime(detail.created_at, organizerTz)} />}
+      </div>
       {detail.field_answers.length > 0 && (
         <div className="detail-answers">
           <h3>Анкета</h3>
