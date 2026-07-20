@@ -36,6 +36,21 @@ def test_date_override_null_invariant() -> None:
         validate_date_overrides([DateOverrideDTO(dt.date(2026, 1, 1), dt.time(12), dt.time(9))])  # end<start
 
 
+def test_weekly_hours_rejects_non_whole_hour() -> None:
+    with pytest.raises(ValidationError):
+        validate_weekly_hours([WeeklyHourDTO(1, dt.time(9, 30), dt.time(17))])
+    with pytest.raises(ValidationError):
+        validate_weekly_hours([WeeklyHourDTO(1, dt.time(9), dt.time(17, 15))])
+    validate_weekly_hours([WeeklyHourDTO(1, dt.time(9), dt.time(17))])  # whole hours ok
+
+
+def test_date_override_rejects_non_whole_hour() -> None:
+    with pytest.raises(ValidationError):
+        validate_date_overrides([DateOverrideDTO(dt.date(2026, 1, 1), dt.time(9, 30), dt.time(12))])
+    validate_date_overrides([DateOverrideDTO(dt.date(2026, 1, 1), dt.time(9), dt.time(12))])  # ok
+    validate_date_overrides([DateOverrideDTO(dt.date(2026, 1, 1), None, None)])  # full-day ok
+
+
 def test_booking_limits_validation() -> None:
     validate_booking_limits([BookingLimitDTO("booking_count", "day", 3)])  # ok
     with pytest.raises(ValidationError):

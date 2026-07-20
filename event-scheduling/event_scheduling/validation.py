@@ -1,4 +1,5 @@
 from collections.abc import Sequence
+from datetime import time
 from zoneinfo import ZoneInfo, available_timezones
 
 from event_scheduling.dto.event_type import BookingLimitDTO, HostDTO
@@ -9,6 +10,10 @@ from event_scheduling.errors import ValidationError
 _LIMIT_TYPES = {"booking_count", "booking_duration"}
 _PERIODS = {"day", "week", "month", "year"}
 _TZ_NAMES = available_timezones()
+
+
+def _is_whole_hour(t: time) -> bool:
+    return t.minute == 0 and t.second == 0 and t.microsecond == 0
 
 
 def validate_time_zone(tz: str) -> None:
@@ -23,6 +28,8 @@ def validate_weekly_hours(rows: Sequence[WeeklyHourDTO]) -> None:
             raise ValidationError(f"day_of_week must be 1..7, got {r.day_of_week}")
         if r.end_time <= r.start_time:
             raise ValidationError(f"weekly_hours end_time must be > start_time (day {r.day_of_week})")
+        if not _is_whole_hour(r.start_time) or not _is_whole_hour(r.end_time):
+            raise ValidationError(f"weekly_hours times must be on the hour (day {r.day_of_week})")
 
 
 def validate_date_overrides(rows: Sequence[DateOverrideDTO]) -> None:
@@ -33,6 +40,8 @@ def validate_date_overrides(rows: Sequence[DateOverrideDTO]) -> None:
             raise ValidationError(f"date_override {r.date}: start/end must both be null or both set")
         if both_set and r.end_time <= r.start_time:
             raise ValidationError(f"date_override {r.date}: end_time must be > start_time")
+        if both_set and (not _is_whole_hour(r.start_time) or not _is_whole_hour(r.end_time)):
+            raise ValidationError(f"date_override {r.date}: times must be on the hour")
 
 
 def validate_booking_limits(rows: Sequence[BookingLimitDTO]) -> None:
