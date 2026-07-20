@@ -73,3 +73,13 @@ class BookingSlotsResponse(BaseModel):
 
 class RescheduleRequest(BaseModel):
     start_time: str
+
+
+class ReassignTarget(BaseModel):
+    user_id: str
+    name: str | None
+    email: str
+
+
+class ReassignRequest(BaseModel):
+    new_host_user_id: str
