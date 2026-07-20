@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
-import { HourSelect, HOUR_OPTIONS } from './HourSelect.tsx'
+import { HourSelect } from './HourSelect.tsx'
+import { HOUR_OPTIONS } from './schedule.ts'
 
 // Definite-assignment: every mounting test assigns these; the pure-constant
 // test doesn't, so the teardown guards them at runtime.
