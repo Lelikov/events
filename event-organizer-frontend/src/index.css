@@ -274,6 +274,12 @@ button.booking-row.is-selected {
   font-size: 13px;
   font-weight: 600;
 }
+.detail-actions {
+  display: flex;
+  gap: 8px;
+  border-top: 1px solid var(--border);
+  padding-top: 14px;
+}
 
 .login-form-panel .field + .field { margin-top: 12px; }
 

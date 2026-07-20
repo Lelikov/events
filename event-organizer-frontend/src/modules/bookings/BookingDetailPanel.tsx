@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { formatDateTime, formatRange } from '../shared/format.ts'
 import { getBookingDetail } from './bookingsApi.ts'
+import { RescheduleModal } from './RescheduleModal.tsx'
 import type { BookingDetail } from './types.ts'
 
 const STATUS_LABEL: Record<string, string> = { confirmed: 'Подтверждена', cancelled: 'Отменена' }
@@ -15,13 +16,14 @@ function Field({ label, value }: { label: string; value: string }) {
   )
 }
 
-type Props = { bookingId: string | null; organizerTz: string | undefined }
+type Props = { bookingId: string | null; organizerTz: string | undefined; onRescheduled?: () => void }
 
 // The parent keys this component by the selected booking id, so a new selection
 // remounts it with fresh state — no synchronous state reset in the effect.
-export function BookingDetailPanel({ bookingId, organizerTz }: Props) {
+export function BookingDetailPanel({ bookingId, organizerTz, onRescheduled }: Props) {
   const [detail, setDetail] = useState<BookingDetail | null>(null)
   const [error, setError] = useState(false)
+  const [rescheduling, setRescheduling] = useState(false)
 
   useEffect(() => {
     if (!bookingId) return
@@ -41,6 +43,8 @@ export function BookingDetailPanel({ bookingId, organizerTz }: Props) {
   if (!bookingId) return <div className="detail-panel detail-empty">Выберите бронь, чтобы увидеть детали</div>
   if (error) return <div className="detail-panel error-text">Не удалось загрузить бронь</div>
   if (!detail) return <div className="detail-panel">Загрузка…</div>
+
+  const canReschedule = detail.status === 'confirmed' && new Date(detail.start_time).getTime() > Date.now()
 
   return (
     <div className="detail-panel">
@@ -64,6 +68,25 @@ export function BookingDetailPanel({ bookingId, organizerTz }: Props) {
             <Field key={a.label} label={a.label} value={a.value} />
           ))}
         </div>
+      )}
+      {canReschedule && (
+        <div className="detail-actions">
+          <button type="button" onClick={() => setRescheduling(true)}>
+            Перенести
+          </button>
+        </div>
+      )}
+      {rescheduling && (
+        <RescheduleModal
+          bookingId={detail.id}
+          currentStart={detail.start_time}
+          organizerTz={organizerTz}
+          onClose={() => setRescheduling(false)}
+          onRescheduled={() => {
+            setRescheduling(false)
+            onRescheduled?.()
+          }}
+        />
       )}
     </div>
   )

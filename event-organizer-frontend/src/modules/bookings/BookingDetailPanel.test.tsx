@@ -54,4 +54,31 @@ describe('BookingDetailPanel', () => {
     await mount('b1')
     expect(container.querySelector('.error-text')).not.toBeNull()
   })
+
+  function rescheduleButton(): HTMLButtonElement | undefined {
+    return [...container.querySelectorAll('.detail-actions button')].find((b) => b.textContent === 'Перенести') as
+      | HTMLButtonElement
+      | undefined
+  }
+
+  it('shows Перенести for a confirmed future booking', async () => {
+    const future = new Date(Date.now() + 86_400_000).toISOString()
+    vi.spyOn(api, 'getBookingDetail').mockResolvedValue({ ...detail, status: 'confirmed', start_time: future })
+    await mount('b1')
+    expect(rescheduleButton()).toBeDefined()
+  })
+
+  it('hides Перенести for a cancelled booking', async () => {
+    const future = new Date(Date.now() + 86_400_000).toISOString()
+    vi.spyOn(api, 'getBookingDetail').mockResolvedValue({ ...detail, status: 'cancelled', start_time: future })
+    await mount('b1')
+    expect(rescheduleButton()).toBeUndefined()
+  })
+
+  it('hides Перенести for a past booking', async () => {
+    const pastStart = new Date(Date.now() - 86_400_000).toISOString()
+    vi.spyOn(api, 'getBookingDetail').mockResolvedValue({ ...detail, status: 'confirmed', start_time: pastStart })
+    await mount('b1')
+    expect(rescheduleButton()).toBeUndefined()
+  })
 })
