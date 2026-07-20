@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { formatDateTime, formatRange } from '../shared/format.ts'
 import { getBookingDetail } from './bookingsApi.ts'
+import { ReassignModal } from './ReassignModal.tsx'
 import { RescheduleModal } from './RescheduleModal.tsx'
 import type { BookingDetail } from './types.ts'
 
@@ -16,14 +17,15 @@ function Field({ label, value }: { label: string; value: string }) {
   )
 }
 
-type Props = { bookingId: string | null; organizerTz: string | undefined; onRescheduled?: () => void }
+type Props = { bookingId: string | null; organizerTz: string | undefined; onChanged?: () => void }
 
 // The parent keys this component by the selected booking id, so a new selection
 // remounts it with fresh state — no synchronous state reset in the effect.
-export function BookingDetailPanel({ bookingId, organizerTz, onRescheduled }: Props) {
+export function BookingDetailPanel({ bookingId, organizerTz, onChanged }: Props) {
   const [detail, setDetail] = useState<BookingDetail | null>(null)
   const [error, setError] = useState(false)
   const [rescheduling, setRescheduling] = useState(false)
+  const [reassigning, setReassigning] = useState(false)
 
   useEffect(() => {
     if (!bookingId) return
@@ -44,7 +46,7 @@ export function BookingDetailPanel({ bookingId, organizerTz, onRescheduled }: Pr
   if (error) return <div className="detail-panel error-text">Не удалось загрузить бронь</div>
   if (!detail) return <div className="detail-panel">Загрузка…</div>
 
-  const canReschedule = detail.status === 'confirmed' && new Date(detail.start_time).getTime() > Date.now()
+  const canModify = detail.status === 'confirmed' && new Date(detail.start_time).getTime() > Date.now()
 
   return (
     <div className="detail-panel">
@@ -69,10 +71,13 @@ export function BookingDetailPanel({ bookingId, organizerTz, onRescheduled }: Pr
           ))}
         </div>
       )}
-      {canReschedule && (
+      {canModify && (
         <div className="detail-actions">
           <button type="button" onClick={() => setRescheduling(true)}>
             Перенести
+          </button>
+          <button type="button" className="secondary" onClick={() => setReassigning(true)}>
+            Переназначить
           </button>
         </div>
       )}
@@ -84,7 +89,17 @@ export function BookingDetailPanel({ bookingId, organizerTz, onRescheduled }: Pr
           onClose={() => setRescheduling(false)}
           onRescheduled={() => {
             setRescheduling(false)
-            onRescheduled?.()
+            onChanged?.()
+          }}
+        />
+      )}
+      {reassigning && (
+        <ReassignModal
+          bookingId={detail.id}
+          onClose={() => setReassigning(false)}
+          onReassigned={() => {
+            setReassigning(false)
+            onChanged?.()
           }}
         />
       )}
