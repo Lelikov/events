@@ -56,3 +56,24 @@ def test_cancelled_includes_reason() -> None:
     assert body["cancellation_reason"] == "client no-show"
     assert body["booking_uid"] == "bk-1"
     assert {u["role"] for u in body["users"]} == {"organizer", "client"}
+
+
+PREV = ParticipantInfo("old.org@x.io", "Europe/Berlin")
+
+
+def test_reassigned_body_has_three_users_and_previous_email() -> None:
+    payload = _payload(previous_host_user_id="33333333-3333-3333-3333-333333333333")
+    headers, body = build_cloudevent("booking.reassigned", "bk-9", "ce-9", payload, HOST, CLIENT, NOW, previous_host=PREV)
+    assert headers["ce-type"] == "booking.reassigned"
+    roles = sorted(u["role"] for u in body["users"])
+    assert roles == ["client", "organizer", "previous_organizer"]
+    prev = next(u for u in body["users"] if u["role"] == "previous_organizer")
+    assert prev == {"email": "old.org@x.io", "role": "previous_organizer", "time_zone": "Europe/Berlin"}
+    assert body["previous_organizer_email"] == "old.org@x.io"
+    assert body["booking_uid"] == "bk-9"
+
+
+def test_reassigned_without_previous_host_omits_role() -> None:
+    _headers, body = build_cloudevent("booking.reassigned", "bk-9", "ce-9", _payload(), HOST, CLIENT, NOW)
+    assert all(u["role"] != "previous_organizer" for u in body["users"])
+    assert body["previous_organizer_email"] is None

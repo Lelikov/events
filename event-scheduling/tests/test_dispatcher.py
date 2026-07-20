@@ -321,3 +321,32 @@ async def test_dispatch_uses_stable_ce_id(sessionmaker_fixture) -> None:
         )
         await s.commit()
     assert rcv.calls[0][0]["ce-id"] == str(ce)
+
+
+@pytest.mark.asyncio
+async def test_dispatch_reassigned_resolves_previous_organizer(sessionmaker_fixture) -> None:
+    host, client, prev = uuid4(), uuid4(), uuid4()
+    payload = {
+        "host_user_id": str(host),
+        "client_user_id": str(client),
+        "previous_host_user_id": str(prev),
+        "start_time": "2026-10-01T07:00:00Z",
+        "end_time": "2026-10-01T08:00:00Z",
+        "attendee_time_zone": "Europe/Moscow",
+    }
+    async with sessionmaker_fixture() as s:
+        await s.execute(
+            text(
+                "INSERT INTO outbox (event_ce_id, event_type, booking_uid, payload) "
+                "VALUES (:ce, 'booking.reassigned', :uid, CAST(:p AS jsonb))"
+            ),
+            {"ce": uuid4(), "uid": str(uuid4()), "p": json.dumps(payload)},
+        )
+        await s.commit()
+    rcv = _Receiver(202)
+    async with sessionmaker_fixture() as s:
+        await dispatch_once(SqlExecutor(s), _Users(), rcv, _FixedClock(dt.datetime(2026, 7, 13, tzinfo=dt.UTC)), 300, 50)
+        await s.commit()
+    _headers, body = rcv.calls[0]
+    assert body["previous_organizer_email"] == f"{prev}@x.io"
+    assert any(u["role"] == "previous_organizer" for u in body["users"])
