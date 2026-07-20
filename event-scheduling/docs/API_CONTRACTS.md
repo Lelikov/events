@@ -35,8 +35,10 @@ Request:
 - `day_of_week`: 1=Monday … 7=Sunday (ISO-8601).
 - `date_overrides`: omitting both times = full-day block (no availability that day).
 - `time_zone`: must be a valid IANA zone (e.g. `"Europe/Moscow"`, `"UTC"`).
-- Validation errors: `422` if `time_zone` invalid or `weekly_hours` intervals overlap
-  on the same day.
+- `weekly_hours` and `date_override` `start_time`/`end_time` must be **on the hour**
+  (minute/second == 0); off-hour times are rejected.
+- Validation errors: `422` if `time_zone` invalid, `weekly_hours` intervals overlap
+  on the same day, or any weekly/date-override time is not a whole hour.
 
 Response `200` — full bundle:
 ```json
