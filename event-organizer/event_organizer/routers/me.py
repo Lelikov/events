@@ -5,7 +5,10 @@ from fastapi import APIRouter, Depends
 
 from event_organizer.adapters.interfaces import ISchedulingClient
 from event_organizer.auth.identity import OrganizerIdentity, require_organizer
+from event_organizer.errors import NotFoundError
 from event_organizer.schemas.me import (
+    BookingDetailItem,
+    BookingFieldAnswer,
     BookingItem,
     PasswordChangeRequest,
     ProfilePutRequest,
@@ -43,6 +46,43 @@ async def get_bookings(scheduling: FromDishka[ISchedulingClient], me: RequireOrg
     return [
         BookingItem(id=r["id"], start_time=r["start_time"], end_time=r["end_time"], status=r["status"]) for r in rows
     ]
+
+
+def _stringify(value: object) -> str:
+    if isinstance(value, bool):
+        return "Да" if value else "Нет"
+    if isinstance(value, list):
+        return ", ".join(str(v) for v in value)
+    return str(value)
+
+
+@me_router.get("/bookings/{booking_id}", response_model=BookingDetailItem)
+async def get_booking_detail(
+    booking_id: str, scheduling: FromDishka[ISchedulingClient], me: RequireOrganizer
+) -> BookingDetailItem:
+    # Ownership by construction: the booking id must be one of this organizer's own
+    # bookings, else 404 — no cross-organizer read. The id is opaque here;
+    # event-scheduling validates the UUID downstream.
+    rows = await scheduling.get_bookings(me.user_id)
+    row = next((r for r in rows if r["id"] == booking_id), None)
+    if row is None:
+        raise NotFoundError("booking not found")
+    detail = await scheduling.get_booking_detail(booking_id)
+    client = detail.get("client") or {}
+    return BookingDetailItem(
+        id=detail["uid"],
+        title=detail["title"],
+        start_time=detail["start_time"],
+        end_time=detail["end_time"],
+        status=detail["status"],
+        client_name=client.get("name"),
+        client_email=client.get("email"),
+        client_time_zone=row.get("attendee_time_zone"),
+        created_at=row.get("created_at"),
+        field_answers=[
+            BookingFieldAnswer(label=a["label"], value=_stringify(a["value"])) for a in row.get("field_answers", [])
+        ],
+    )
 
 
 @me_router.get("/profile", response_model=ProfileResponse)
