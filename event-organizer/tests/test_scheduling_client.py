@@ -5,7 +5,7 @@ import httpx
 import pytest
 
 from event_organizer.adapters.scheduling_client import SchedulingClient
-from event_organizer.errors import NotFoundError, UpstreamError, ValidationError
+from event_organizer.errors import ConflictError, NotFoundError, UpstreamError, ValidationError
 
 BASE, KEY = "http://sched.test", "k"
 
@@ -91,3 +91,47 @@ async def test_422_raises_validation_with_upstream_detail() -> None:
     with pytest.raises(ValidationError) as ei:
         await _c(h).put_schedule(uuid4(), {"time_zone": "UTC", "weekly_hours": [], "date_overrides": []})
     assert "on the hour" in str(ei.value)
+
+
+@pytest.mark.asyncio
+async def test_get_slots_params() -> None:
+    et = str(uuid4())
+
+    def h(req: httpx.Request) -> httpx.Response:
+        assert req.url.path == "/api/v1/slots"
+        assert req.url.params["event_type_id"] == et
+        assert req.url.params["time_zone"] == "Europe/Moscow"
+        return httpx.Response(
+            200,
+            json={"event_type_id": et, "time_zone": "Europe/Moscow", "slots": {"2026-10-01": ["2026-10-01T09:00:00Z"]}},
+        )
+
+    out = await _c(h).get_slots(et, "2026-10-01T00:00:00Z", "2026-10-02T00:00:00Z", "Europe/Moscow")
+    assert out["slots"]["2026-10-01"] == ["2026-10-01T09:00:00Z"]
+
+
+@pytest.mark.asyncio
+async def test_reschedule_sends_body_and_actor_headers() -> None:
+    import json
+
+    bid, uid = str(uuid4()), uuid4()
+
+    def h(req: httpx.Request) -> httpx.Response:
+        assert req.url.path == f"/api/v1/bookings/{bid}/reschedule"
+        assert req.headers["actor-source"] == "organizer"
+        assert req.headers["actor-user-id"] == str(uid)
+        assert json.loads(req.content)["start_time"] == "2026-10-01T09:00:00Z"
+        return httpx.Response(200, json={"id": bid, "status": "confirmed"})
+
+    out = await _c(h).reschedule_booking(bid, "2026-10-01T09:00:00Z", uid)
+    assert out["status"] == "confirmed"
+
+
+@pytest.mark.asyncio
+async def test_409_raises_conflict_with_detail() -> None:
+    def h(_req: httpx.Request) -> httpx.Response:
+        return httpx.Response(409, json={"detail": "host is not available at the new time"})
+
+    with pytest.raises(ConflictError) as ei:
+        await _c(h).reschedule_booking(str(uuid4()), "2026-10-01T09:00:00Z", uuid4())
+    assert "not available" in str(ei.value)

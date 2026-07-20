@@ -55,6 +55,8 @@ export function BookingsPage() {
   const [now, setNow] = useState<number | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [selectedId, setSelectedId] = useState<string | null>(null)
+  // Bumped after a reschedule to reload the list and remount the detail panel.
+  const [refreshKey, setRefreshKey] = useState(0)
 
   useEffect(() => {
     let cancelled = false
@@ -71,7 +73,7 @@ export function BookingsPage() {
     return () => {
       cancelled = true
     }
-  }, [])
+  }, [refreshKey])
 
   if (error) return <div className="card">{error}</div>
   if (!rows || now === null) return <div className="card">Загрузка…</div>
@@ -106,7 +108,12 @@ export function BookingsPage() {
             <BookingList rows={past} timeZone={timeZone} selectedId={selectedId} onSelect={setSelectedId} />
           </div>
         </div>
-        <BookingDetailPanel key={selectedId ?? 'none'} bookingId={selectedId} organizerTz={timeZone} />
+        <BookingDetailPanel
+          key={`${selectedId ?? 'none'}:${refreshKey}`}
+          bookingId={selectedId}
+          organizerTz={timeZone}
+          onRescheduled={() => setRefreshKey((k) => k + 1)}
+        />
       </div>
     </div>
   )

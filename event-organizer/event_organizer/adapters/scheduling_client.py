@@ -2,7 +2,7 @@ from uuid import UUID
 
 import httpx
 
-from event_organizer.errors import NotFoundError, UpstreamError, ValidationError
+from event_organizer.errors import ConflictError, NotFoundError, UpstreamError, ValidationError
 
 
 class SchedulingClient:
@@ -33,6 +33,10 @@ class SchedulingClient:
         # 422 with the upstream message, not a generic 502 that hides the reason.
         if resp.status_code == httpx.codes.UNPROCESSABLE_ENTITY:
             raise ValidationError(cls._detail(resp))
+        # A domain conflict (slot not free, booking cancelled, …) surfaces as a 409
+        # with its message rather than a generic 502.
+        if resp.status_code == httpx.codes.CONFLICT:
+            raise ConflictError(cls._detail(resp))
         if not resp.is_success:
             raise UpstreamError(f"event-scheduling returned {resp.status_code}")
         return resp.json()
@@ -62,4 +66,22 @@ class SchedulingClient:
     async def get_booking_detail(self, booking_id: str) -> dict:
         async with self._http() as c:
             resp = await c.get(f"{self._base_url}/api/v1/bookings/{booking_id}/detail")
+        return self._ok(resp)
+
+    async def get_slots(self, event_type_id: str, start_iso: str, end_iso: str, time_zone: str) -> dict:
+        async with self._http() as c:
+            resp = await c.get(
+                f"{self._base_url}/api/v1/slots",
+                params={"event_type_id": event_type_id, "start": start_iso, "end": end_iso, "time_zone": time_zone},
+            )
+        return self._ok(resp)
+
+    async def reschedule_booking(self, booking_id: str, start_time_iso: str, actor_user_id: UUID) -> dict:
+        headers = {"actor-source": "organizer", "actor-user-id": str(actor_user_id)}
+        async with self._http() as c:
+            resp = await c.post(
+                f"{self._base_url}/api/v1/bookings/{booking_id}/reschedule",
+                json={"start_time": start_time_iso},
+                headers=headers,
+            )
         return self._ok(resp)

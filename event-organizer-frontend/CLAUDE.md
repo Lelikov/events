@@ -60,7 +60,11 @@ npm run preview   # Preview the production build
   over `/api/me/bookings` on the left; clicking a row loads `BookingDetailPanel`
   from `GET /api/me/bookings/{id}` on the right — event type title, client
   name/email, time, client tz, created, guest field answers; the panel is keyed
-  by the selected id so it remounts fresh per selection), `profile/` (profile + password
+  by the selected id so it remounts fresh per selection. A **«Перенести»** button
+  (confirmed future bookings only) opens `RescheduleModal` — pick a date → the
+  available slots from `GET /api/me/bookings/{id}/slots` → confirm →
+  `POST /api/me/bookings/{id}/reschedule`; on success the list reloads and the
+  panel remounts. **«Переназначить» is not built** — no API exists yet), `profile/` (profile + password
   cards over `/api/me/profile` + `/api/me/password`).
 - **Deploy**: nginx (`Dockerfile` + `nginx.conf`) same-origin-proxies `/api`,
   `/auth`, `/health` to `event-organizer:8888`; `docker-entrypoint.d/40-env-config.sh`

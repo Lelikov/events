@@ -147,6 +147,30 @@ button.danger:hover {
   background: #b02525;
 }
 
+/* Reschedule modal: available-slot chips. */
+.slot-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-height: 40px;
+  align-content: start;
+  margin: 4px 0 8px;
+}
+button.slot-chip {
+  background: var(--bg-soft);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 8px;
+  padding: 6px 12px;
+  font-size: 13px;
+  cursor: pointer;
+}
+button.slot-chip.is-selected {
+  border-color: var(--primary);
+  background: var(--primary-pale, rgba(79, 110, 242, 0.1));
+  color: var(--primary);
+}
+
 .booking-group { display: grid; gap: 8px; margin-bottom: 20px; }
 .empty-state { color: var(--muted); padding: 24px 0; text-align: center; }
 
@@ -249,6 +273,12 @@ button.booking-row.is-selected {
 .detail-answers h3 {
   font-size: 13px;
   font-weight: 600;
+}
+.detail-actions {
+  display: flex;
+  gap: 8px;
+  border-top: 1px solid var(--border);
+  padding-top: 14px;
 }
 
 .login-form-panel .field + .field { margin-top: 12px; }
