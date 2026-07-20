@@ -64,7 +64,10 @@ npm run preview   # Preview the production build
   (confirmed future bookings only) opens `RescheduleModal` — pick a date → the
   available slots from `GET /api/me/bookings/{id}/slots` → confirm →
   `POST /api/me/bookings/{id}/reschedule`; on success the list reloads and the
-  panel remounts. **«Переназначить» is not built** — no API exists yet), `profile/` (profile + password
+  panel remounts. A **«Переназначить»** button opens `ReassignModal` — pick another
+  host of the event type (`GET /api/me/bookings/{id}/reassign-targets`) → confirm →
+  `POST /api/me/bookings/{id}/reassign`, publishing `booking.reassigned` downstream.
+  Both modals share one `onChanged` refresh callback), `profile/` (profile + password
   cards over `/api/me/profile` + `/api/me/password`).
 - **Deploy**: nginx (`Dockerfile` + `nginx.conf`) same-origin-proxies `/api`,
   `/auth`, `/health` to `event-organizer:8888`; `docker-entrypoint.d/40-env-config.sh`
