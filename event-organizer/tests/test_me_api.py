@@ -32,11 +32,20 @@ class _FakeScheduling:
                 "status": "confirmed",
                 "client_user_id": str(uuid4()),
                 "host_user_id": str(host_user_id),
+                "event_type_id": "et1",
                 "attendee_time_zone": "Europe/Berlin",
                 "created_at": "2026-09-01T08:00:00Z",
                 "field_answers": [{"key": "note", "label": "Комментарий", "type": "text", "value": "привет"}],
             }
         ]
+
+    async def get_slots(self, event_type_id, start_iso, end_iso, time_zone):
+        self.seen_slots = (event_type_id, start_iso, end_iso, time_zone)
+        return {"event_type_id": event_type_id, "time_zone": time_zone, "slots": {"2026-10-01": ["2026-10-01T09:00:00Z"]}}
+
+    async def reschedule_booking(self, booking_id, start_time_iso, actor_user_id):
+        self.rescheduled = (booking_id, start_time_iso, actor_user_id)
+        return {"id": booking_id, "status": "confirmed", "start_time": start_time_iso}
 
     async def get_booking_detail(self, booking_id):
         return {
@@ -164,6 +173,53 @@ async def test_booking_detail_unknown_id_is_404(sessionmaker_fixture) -> None:
     app, _, _ = _app_and_fakes()
     with TestClient(app) as c:
         r = c.get("/api/me/bookings/does-not-exist", headers=_auth(uuid4()))
+        assert r.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_booking_slots_owned(sessionmaker_fixture) -> None:
+    from starlette.testclient import TestClient
+
+    app, sched, _ = _app_and_fakes()
+    with TestClient(app) as c:
+        r = c.get("/api/me/bookings/b1/slots?date=2026-10-01&time_zone=Europe/Moscow", headers=_auth(uuid4()))
+        assert r.status_code == 200
+        body = r.json()
+        assert body["slots"] == ["2026-10-01T09:00:00Z"]
+        assert sched.seen_slots[0] == "et1"  # resolved event_type_id from the owned booking
+
+
+@pytest.mark.asyncio
+async def test_booking_slots_unknown_id_404(sessionmaker_fixture) -> None:
+    from starlette.testclient import TestClient
+
+    app, _, _ = _app_and_fakes()
+    with TestClient(app) as c:
+        r = c.get("/api/me/bookings/nope/slots?date=2026-10-01&time_zone=Europe/Moscow", headers=_auth(uuid4()))
+        assert r.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_reschedule_owned_forwards(sessionmaker_fixture) -> None:
+    from starlette.testclient import TestClient
+
+    app, sched, _ = _app_and_fakes()
+    uid = uuid4()
+    with TestClient(app) as c:
+        r = c.post("/api/me/bookings/b1/reschedule", headers=_auth(uid), json={"start_time": "2026-10-01T09:00:00Z"})
+        assert r.status_code == 200
+        assert sched.rescheduled[0] == "b1"
+        assert sched.rescheduled[1] == "2026-10-01T09:00:00Z"
+        assert sched.rescheduled[2] == uid  # actor = the organizer from the token
+
+
+@pytest.mark.asyncio
+async def test_reschedule_unknown_id_404(sessionmaker_fixture) -> None:
+    from starlette.testclient import TestClient
+
+    app, _, _ = _app_and_fakes()
+    with TestClient(app) as c:
+        r = c.post("/api/me/bookings/nope/reschedule", headers=_auth(uuid4()), json={"start_time": "2026-10-01T09:00:00Z"})
         assert r.status_code == 404
 
 

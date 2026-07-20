@@ -63,3 +63,13 @@ class BookingDetailItem(BaseModel):
     client_time_zone: str | None
     created_at: str | None
     field_answers: list[BookingFieldAnswer]
+
+
+class BookingSlotsResponse(BaseModel):
+    date: str
+    time_zone: str
+    slots: list[str]
+
+
+class RescheduleRequest(BaseModel):
+    start_time: str

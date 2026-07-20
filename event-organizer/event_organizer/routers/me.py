@@ -1,4 +1,7 @@
+from datetime import datetime, timedelta
 from typing import Annotated
+from uuid import UUID
+from zoneinfo import ZoneInfo
 
 from dishka.integrations.fastapi import DishkaRoute, FromDishka
 from fastapi import APIRouter, Depends
@@ -10,9 +13,11 @@ from event_organizer.schemas.me import (
     BookingDetailItem,
     BookingFieldAnswer,
     BookingItem,
+    BookingSlotsResponse,
     PasswordChangeRequest,
     ProfilePutRequest,
     ProfileResponse,
+    RescheduleRequest,
     SchedulePutRequest,
 )
 from event_organizer.services.password_change_service import PasswordChangeService
@@ -21,6 +26,23 @@ from event_organizer.services.profile_service import ProfileService
 me_router = APIRouter(prefix="/api/me", tags=["me"], route_class=DishkaRoute)
 
 RequireOrganizer = Annotated[OrganizerIdentity, Depends(require_organizer)]
+
+
+def _day_window_utc(date_str: str, time_zone: str) -> tuple[str, str]:
+    tz = ZoneInfo(time_zone)
+    day = datetime.strptime(date_str, "%Y-%m-%d").replace(tzinfo=tz)
+    start = day.astimezone(ZoneInfo("UTC"))
+    end = (day + timedelta(days=1)).astimezone(ZoneInfo("UTC"))
+    return start.strftime("%Y-%m-%dT%H:%M:%SZ"), end.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+async def _owned_row(scheduling: ISchedulingClient, user_id: UUID, booking_id: str) -> dict:
+    # Ownership by construction: the booking must be one of this organizer's own.
+    rows = await scheduling.get_bookings(user_id)
+    row = next((r for r in rows if r["id"] == booking_id), None)
+    if row is None:
+        raise NotFoundError("booking not found")
+    return row
 
 
 @me_router.get("/schedule")
@@ -60,13 +82,9 @@ def _stringify(value: object) -> str:
 async def get_booking_detail(
     booking_id: str, scheduling: FromDishka[ISchedulingClient], me: RequireOrganizer
 ) -> BookingDetailItem:
-    # Ownership by construction: the booking id must be one of this organizer's own
-    # bookings, else 404 — no cross-organizer read. The id is opaque here;
-    # event-scheduling validates the UUID downstream.
-    rows = await scheduling.get_bookings(me.user_id)
-    row = next((r for r in rows if r["id"] == booking_id), None)
-    if row is None:
-        raise NotFoundError("booking not found")
+    # Ownership by construction — the id is opaque here; event-scheduling validates
+    # the UUID downstream.
+    row = await _owned_row(scheduling, me.user_id, booking_id)
     detail = await scheduling.get_booking_detail(booking_id)
     client = detail.get("client") or {}
     return BookingDetailItem(
@@ -83,6 +101,25 @@ async def get_booking_detail(
             BookingFieldAnswer(label=a["label"], value=_stringify(a["value"])) for a in row.get("field_answers", [])
         ],
     )
+
+
+@me_router.get("/bookings/{booking_id}/slots", response_model=BookingSlotsResponse)
+async def get_booking_slots(
+    booking_id: str, date: str, time_zone: str, scheduling: FromDishka[ISchedulingClient], me: RequireOrganizer
+) -> BookingSlotsResponse:
+    row = await _owned_row(scheduling, me.user_id, booking_id)
+    start_iso, end_iso = _day_window_utc(date, time_zone)
+    result = await scheduling.get_slots(row["event_type_id"], start_iso, end_iso, time_zone)
+    slots = result.get("slots", {}).get(date, [])
+    return BookingSlotsResponse(date=date, time_zone=time_zone, slots=slots)
+
+
+@me_router.post("/bookings/{booking_id}/reschedule")
+async def reschedule_booking(
+    booking_id: str, body: RescheduleRequest, scheduling: FromDishka[ISchedulingClient], me: RequireOrganizer
+) -> dict:
+    await _owned_row(scheduling, me.user_id, booking_id)
+    return await scheduling.reschedule_booking(booking_id, body.start_time, me.user_id)
 
 
 @me_router.get("/profile", response_model=ProfileResponse)
