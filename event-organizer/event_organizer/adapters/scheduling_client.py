@@ -58,3 +58,8 @@ class SchedulingClient:
         if not resp.is_success:
             raise UpstreamError(f"event-scheduling returned {resp.status_code}")
         return resp.json()["bookings"]
+
+    async def get_booking_detail(self, booking_id: UUID) -> dict:
+        async with self._http() as c:
+            resp = await c.get(f"{self._base_url}/api/v1/bookings/{booking_id}/detail")
+        return self._ok(resp)
