@@ -7,6 +7,8 @@ export type BookingRow = {
 
 export type BookingFieldAnswer = { label: string; value: string }
 
+export type ReassignTarget = { user_id: string; name: string | null; email: string }
+
 export type BookingDetail = {
   id: string
   title: string
