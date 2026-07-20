@@ -2,7 +2,7 @@ from uuid import UUID
 
 import httpx
 
-from event_organizer.errors import NotFoundError, UpstreamError
+from event_organizer.errors import NotFoundError, UpstreamError, ValidationError
 
 
 class SchedulingClient:
@@ -17,9 +17,22 @@ class SchedulingClient:
         )
 
     @staticmethod
-    def _ok(resp: httpx.Response) -> dict:
+    def _detail(resp: httpx.Response) -> str:
+        try:
+            body = resp.json()
+        except ValueError:
+            return f"event-scheduling returned {resp.status_code}"
+        detail = body.get("detail") if isinstance(body, dict) else None
+        return detail if isinstance(detail, str) else f"event-scheduling returned {resp.status_code}"
+
+    @classmethod
+    def _ok(cls, resp: httpx.Response) -> dict:
         if resp.status_code == httpx.codes.NOT_FOUND:
             raise NotFoundError("schedule not found")
+        # Forward a domain validation rejection (e.g. non-whole-hour times) as a
+        # 422 with the upstream message, not a generic 502 that hides the reason.
+        if resp.status_code == httpx.codes.UNPROCESSABLE_ENTITY:
+            raise ValidationError(cls._detail(resp))
         if not resp.is_success:
             raise UpstreamError(f"event-scheduling returned {resp.status_code}")
         return resp.json()

@@ -5,7 +5,7 @@ import httpx
 import pytest
 
 from event_organizer.adapters.scheduling_client import SchedulingClient
-from event_organizer.errors import NotFoundError, UpstreamError
+from event_organizer.errors import NotFoundError, UpstreamError, ValidationError
 
 BASE, KEY = "http://sched.test", "k"
 
@@ -63,3 +63,13 @@ async def test_get_bookings_query_and_unwrap() -> None:
 async def test_5xx_raises_upstream() -> None:
     with pytest.raises(UpstreamError):
         await _c(lambda _req: httpx.Response(503)).get_schedule(uuid4())
+
+
+@pytest.mark.asyncio
+async def test_422_raises_validation_with_upstream_detail() -> None:
+    def h(_req: httpx.Request) -> httpx.Response:
+        return httpx.Response(422, json={"detail": "weekly_hours times must be on the hour (day 1)"})
+
+    with pytest.raises(ValidationError) as ei:
+        await _c(h).put_schedule(uuid4(), {"time_zone": "UTC", "weekly_hours": [], "date_overrides": []})
+    assert "on the hour" in str(ei.value)
