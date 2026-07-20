@@ -1,8 +1,9 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { OrganizerLayout } from './OrganizerLayout.tsx'
 import { AuthProvider } from '../auth/AuthContext.tsx'
+import { setNavBlocker } from '../shared/navGuard.ts'
 
 let container: HTMLDivElement
 let root: Root
@@ -22,10 +23,13 @@ async function mount(pathname: string) {
   )
 }
 
+const realConfirm = window.confirm
 beforeEach(() => sessionStorage.clear())
 afterEach(() => {
   act(() => root.unmount())
   container.remove()
+  setNavBlocker(null)
+  window.confirm = realConfirm
 })
 
 describe('OrganizerLayout', () => {
@@ -43,6 +47,27 @@ describe('OrganizerLayout', () => {
   })
 
   it('logout clears the session and navigates to /login', async () => {
+    sessionStorage.setItem('event_organizer_jwt', 'tok')
+    await mount('/')
+    await act(async () => (container.querySelector('.app-logout') as HTMLButtonElement).click())
+    expect(sessionStorage.getItem('event_organizer_jwt')).toBeNull()
+    expect(window.location.pathname).toBe('/login')
+  })
+
+  it('does not log out when the unsaved-changes guard is declined', async () => {
+    window.history.replaceState(null, '', '/schedule')
+    setNavBlocker(() => true)
+    window.confirm = vi.fn().mockReturnValue(false)
+    sessionStorage.setItem('event_organizer_jwt', 'tok')
+    await mount('/')
+    await act(async () => (container.querySelector('.app-logout') as HTMLButtonElement).click())
+    expect(sessionStorage.getItem('event_organizer_jwt')).toBe('tok')
+    expect(window.location.pathname).toBe('/schedule')
+  })
+
+  it('logs out when the unsaved-changes guard is confirmed', async () => {
+    setNavBlocker(() => true)
+    window.confirm = vi.fn().mockReturnValue(true)
     sessionStorage.setItem('event_organizer_jwt', 'tok')
     await mount('/')
     await act(async () => (container.querySelector('.app-logout') as HTMLButtonElement).click())

@@ -2,6 +2,7 @@ import type { ReactNode } from 'react'
 import { Icon, type IconName } from 'events-design-system'
 import { useAuth } from '../auth/useAuth.ts'
 import { decodeJwtPayload } from '../auth/jwt.ts'
+import { confirmLeaveIfBlocked } from '../shared/navGuard.ts'
 import { navigateTo } from '../shared/routing.ts'
 
 type OrganizerLayoutProps = {
@@ -50,8 +51,11 @@ export function OrganizerLayout({ pathname, children }: OrganizerLayoutProps) {
   const identity = sidebarIdentity(jwtToken)
 
   function handleLogout() {
+    // Check the unsaved-changes guard before tearing down the session, then skip
+    // the guard on the redirect (the session is already gone).
+    if (!confirmLeaveIfBlocked()) return
     logout()
-    navigateTo('/login', { replace: true })
+    navigateTo('/login', { replace: true, skipGuard: true })
   }
 
   return (

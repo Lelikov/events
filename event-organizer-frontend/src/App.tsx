@@ -25,11 +25,11 @@ function App() {
 
   useEffect(() => {
     if (!isAuthenticated && route.name !== 'login') {
-      navigateTo('/login', { replace: true })
+      navigateTo('/login', { replace: true, skipGuard: true })
       return
     }
     if (isAuthenticated && route.name === 'login') {
-      navigateTo('/', { replace: true })
+      navigateTo('/', { replace: true, skipGuard: true })
     }
   }, [isAuthenticated, route.name])
 
