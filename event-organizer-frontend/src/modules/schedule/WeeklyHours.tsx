@@ -1,3 +1,4 @@
+import { HourSelect } from './HourSelect.tsx'
 import { DAY_LABELS, makeUid, type DayState, type Interval } from './schedule.ts'
 
 type Props = {
@@ -53,17 +54,9 @@ export function WeeklyHours({ days, onChange }: Props) {
               {day.enabled &&
                 day.intervals.map((iv, ivIdx) => (
                   <div className="interval-row" key={iv.uid}>
-                    <input
-                      type="time"
-                      value={iv.start}
-                      onChange={(e) => setTime(idx, ivIdx, 'start', e.target.value)}
-                    />
+                    <HourSelect value={iv.start} ariaLabel="Начало" onChange={(v) => setTime(idx, ivIdx, 'start', v)} />
                     <span>–</span>
-                    <input
-                      type="time"
-                      value={iv.end}
-                      onChange={(e) => setTime(idx, ivIdx, 'end', e.target.value)}
-                    />
+                    <HourSelect value={iv.end} ariaLabel="Конец" onChange={(v) => setTime(idx, ivIdx, 'end', v)} />
                     <button
                       type="button"
                       className="icon-button"

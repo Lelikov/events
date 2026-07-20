@@ -25,9 +25,19 @@ export function Travel({ travels, onChange }: Props) {
     <div>
       {travels.map((t, idx) => (
         <div className="travel-row" key={t.uid}>
-          <input type="date" value={t.start_date} onChange={(e) => update(idx, { ...t, start_date: e.target.value })} />
+          <input
+            type="date"
+            className="field-control"
+            value={t.start_date}
+            onChange={(e) => update(idx, { ...t, start_date: e.target.value })}
+          />
           <span>–</span>
-          <input type="date" value={t.end_date} onChange={(e) => update(idx, { ...t, end_date: e.target.value })} />
+          <input
+            type="date"
+            className="field-control"
+            value={t.end_date}
+            onChange={(e) => update(idx, { ...t, end_date: e.target.value })}
+          />
           <TimeZoneField value={t.time_zone} onChange={(tz) => update(idx, { ...t, time_zone: tz })} />
           <button type="button" className="icon-button" aria-label="Удалить поездку" onClick={() => remove(idx)}>
             ✕

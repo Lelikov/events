@@ -1,4 +1,4 @@
-export const HOUR_OPTIONS: string[] = Array.from({ length: 24 }, (_, h) => `${String(h).padStart(2, '0')}:00`)
+import { HOUR_OPTIONS } from './schedule.ts'
 
 type Props = {
   value: string

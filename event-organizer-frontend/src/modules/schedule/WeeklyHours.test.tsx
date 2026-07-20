@@ -75,4 +75,18 @@ describe('WeeklyHours', () => {
     expect(next[0].enabled).toBe(true)
     expect(next[0].intervals).toHaveLength(0)
   })
+
+  it('changing the start hour updates the interval via HourSelect', async () => {
+    const days = emptyDays()
+    days[0] = { enabled: true, intervals: [{ uid: 'u1', start: '09:00', end: '12:00' }] }
+    const onChange = await mount(days)
+    const select = container.querySelector('.weekday-row select') as HTMLSelectElement
+    const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value')!.set!
+    await act(async () => {
+      setter.call(select, '10:00')
+      select.dispatchEvent(new Event('change', { bubbles: true }))
+    })
+    const next = onChange.mock.calls[0][0] as DayState[]
+    expect(next[0].intervals[0]).toEqual({ uid: 'u1', start: '10:00', end: '12:00' })
+  })
 })
