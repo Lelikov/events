@@ -18,6 +18,7 @@ from event_scheduling.schemas.booking import (
     BookingResponse,
     ChangeEntryModel,
     CreateBookingRequest,
+    ReassignRequest,
     RescheduleRequest,
 )
 
@@ -87,6 +88,19 @@ async def reschedule_booking(
 ) -> BookingResponse:
     return BookingResponse.from_dto(
         await service.reschedule(booking_id, body.start_time, _actor(actor_source, actor_user_id))
+    )
+
+
+@booking_router.post("/{booking_id}/reassign", response_model=BookingResponse)
+async def reassign_booking(
+    booking_id: UUID,
+    body: ReassignRequest,
+    service: FromDishka[IBookingService],
+    actor_source: Annotated[str, Header()] = "api",
+    actor_user_id: Annotated[UUID | None, Header()] = None,
+) -> BookingResponse:
+    return BookingResponse.from_dto(
+        await service.reassign(booking_id, body.new_host_user_id, _actor(actor_source, actor_user_id))
     )
 
 

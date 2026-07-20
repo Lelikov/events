@@ -960,3 +960,17 @@ async def test_reassign_allows_start_within_notice_window(sessionmaker_fixture) 
         updated = await service.reassign(bid, host_b, ACTOR)  # check_notice=False → not blocked
         await s.commit()
     assert updated.host_user_id == host_b
+
+
+@pytest.mark.asyncio
+async def test_http_reassign_moves_host(client, sessionmaker_fixture) -> None:
+    async with sessionmaker_fixture() as s:
+        et, host_a, host_b = await _seed_two_host_et(s)
+        bid = await _insert_booking(s, et, host_a, START)
+    r = client.post(
+        f"/api/v1/bookings/{bid}/reassign",
+        json={"new_host_user_id": str(host_b)},
+        headers={"actor-source": "organizer", "actor-user-id": str(uuid4())},
+    )
+    assert r.status_code == 200
+    assert r.json()["host_user_id"] == str(host_b)

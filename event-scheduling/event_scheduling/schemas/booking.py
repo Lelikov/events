@@ -34,6 +34,10 @@ class RescheduleRequest(BaseModel):
     start_time: datetime
 
 
+class ReassignRequest(BaseModel):
+    new_host_user_id: UUID
+
+
 class BookingResponse(BaseModel):
     id: UUID
     event_type_id: UUID
