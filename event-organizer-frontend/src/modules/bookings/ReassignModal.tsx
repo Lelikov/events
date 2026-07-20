@@ -66,7 +66,7 @@ export function ReassignModal({ bookingId, onClose, onReassigned }: Props) {
               onClick={() => setPicked(t.user_id)}
             >
               <span className="target-name">{t.name ?? t.email}</span>
-              <span className="target-email">{t.email}</span>
+              {t.name && <span className="target-email">{t.email}</span>}
             </button>
           ))}
         </div>
