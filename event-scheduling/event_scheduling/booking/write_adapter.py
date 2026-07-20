@@ -99,6 +99,22 @@ class BookingWriteAdapter:
             raise ConflictError("slot taken") from e
         return _row_to_dto(row)
 
+    async def update_host(self, booking_id: UUID, new_host_user_id: UUID) -> BookingDTO:
+        # Same SAVEPOINT rationale as update_times(): the new host may take an
+        # overlapping slot between the service's availability check and this UPDATE,
+        # tripping the exclusion constraint. reminder_sent_at is intentionally NOT
+        # reset — a pending reminder resolves the host at send time and reaches the
+        # new host, and the reassignment itself notifies both parties.
+        try:
+            async with self._sql.begin_nested():
+                row = await self._sql.fetch_one(
+                    f"UPDATE booking SET host_user_id=:h, updated_at=now() WHERE id=:id RETURNING {_COLS}",  # noqa: S608
+                    {"id": booking_id, "h": new_host_user_id},
+                )
+        except IntegrityError as e:
+            raise ConflictError("host already has a booking at this time") from e
+        return _row_to_dto(row)
+
     async def set_cancelled(self, booking_id: UUID) -> BookingDTO:
         row = await self._sql.fetch_one(
             f"UPDATE booking SET status='cancelled', updated_at=now() WHERE id=:id RETURNING {_COLS}",  # noqa: S608

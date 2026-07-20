@@ -44,8 +44,10 @@ class BookingService:
         notice_min: int,
         now: datetime,
         exclude_booking_id: UUID | None,
+        *,
+        check_notice: bool = True,
     ) -> bool:
-        if start < now + timedelta(minutes=notice_min):
+        if check_notice and start < now + timedelta(minutes=notice_min):
             return False
         window = TimeWindow(start, end)
         avail = host_availability_intervals(host, start, end)
@@ -130,6 +132,32 @@ class BookingService:
         updated = await self._write.update_times(booking_id, start, end)
         await self._write.append_log(booking_id, "rescheduled", booking.start_time, booking.end_time, start, end, actor)
         await self._outbox.write("booking.rescheduled", updated, previous_start_time=booking.start_time)
+        return updated
+
+    async def reassign(self, booking_id: UUID, new_host_user_id: UUID, actor: ActorDTO) -> BookingDTO:
+        booking = await self.get(booking_id)
+        if booking.status == "cancelled":
+            raise ConflictError("cannot reassign a cancelled booking")
+        if new_host_user_id == booking.host_user_id:
+            raise ValidationError("new host is the same as the current host")
+        bundle = await self._slots.load(booking.event_type_id)
+        if bundle is None:
+            raise NotFoundError(f"event_type {booking.event_type_id} not found")
+        new_host = next((h for h in bundle.hosts if h.user_id == new_host_user_id), None)
+        if new_host is None:
+            raise ValidationError("new host is not a host of this event type")
+        now = self._clock.now()
+        free = await self._free_host(
+            new_host, booking.start_time, booking.end_time, 0, now, booking_id, check_notice=False
+        )
+        if not free:
+            raise ConflictError("new host is not available at this time")
+        previous_host = booking.host_user_id
+        updated = await self._write.update_host(booking_id, new_host_user_id)
+        await self._write.append_log(
+            booking_id, "reassigned", booking.start_time, booking.end_time, booking.start_time, booking.end_time, actor
+        )
+        await self._outbox.write("booking.reassigned", updated, previous_host_user_id=previous_host)
         return updated
 
     async def list_by(
