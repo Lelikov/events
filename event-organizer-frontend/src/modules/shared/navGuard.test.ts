@@ -1,34 +1,64 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { confirmLeaveIfBlocked, setNavBlocker } from './navGuard.ts'
+import { cancelLeave, confirmLeave, isLeavePending, requestLeave, setNavBlocker, subscribeGuard } from './navGuard.ts'
 
-// happy-dom has no window.confirm, so tests install a vi.fn() explicitly.
-const realConfirm = window.confirm
 afterEach(() => {
   setNavBlocker(null)
-  window.confirm = realConfirm
+  if (isLeavePending()) cancelLeave()
 })
 
 describe('navGuard', () => {
-  it('allows navigation when no blocker is registered', () => {
-    const confirm = vi.fn()
-    window.confirm = confirm
-    expect(confirmLeaveIfBlocked()).toBe(true)
-    expect(confirm).not.toHaveBeenCalled()
+  it('runs the action immediately when no blocker is registered', () => {
+    const proceed = vi.fn()
+    requestLeave(proceed)
+    expect(proceed).toHaveBeenCalledTimes(1)
+    expect(isLeavePending()).toBe(false)
   })
 
-  it('allows navigation when the blocker reports clean', () => {
+  it('runs the action immediately when the blocker reports clean', () => {
     setNavBlocker(() => false)
-    const confirm = vi.fn()
-    window.confirm = confirm
-    expect(confirmLeaveIfBlocked()).toBe(true)
-    expect(confirm).not.toHaveBeenCalled()
+    const proceed = vi.fn()
+    requestLeave(proceed)
+    expect(proceed).toHaveBeenCalledTimes(1)
+    expect(isLeavePending()).toBe(false)
   })
 
-  it('prompts and returns the confirm result when the blocker reports dirty', () => {
+  it('defers the action and marks pending when blocked', () => {
     setNavBlocker(() => true)
-    window.confirm = vi.fn().mockReturnValue(false)
-    expect(confirmLeaveIfBlocked()).toBe(false)
-    window.confirm = vi.fn().mockReturnValue(true)
-    expect(confirmLeaveIfBlocked()).toBe(true)
+    const proceed = vi.fn()
+    requestLeave(proceed)
+    expect(proceed).not.toHaveBeenCalled()
+    expect(isLeavePending()).toBe(true)
+  })
+
+  it('confirmLeave runs the pending action and clears pending', () => {
+    setNavBlocker(() => true)
+    const proceed = vi.fn()
+    requestLeave(proceed)
+    confirmLeave()
+    expect(proceed).toHaveBeenCalledTimes(1)
+    expect(isLeavePending()).toBe(false)
+  })
+
+  it('cancelLeave clears pending without running the action', () => {
+    setNavBlocker(() => true)
+    const proceed = vi.fn()
+    requestLeave(proceed)
+    cancelLeave()
+    expect(proceed).not.toHaveBeenCalled()
+    expect(isLeavePending()).toBe(false)
+  })
+
+  it('notifies subscribers when the pending state changes', () => {
+    const cb = vi.fn()
+    const unsub = subscribeGuard(cb)
+    setNavBlocker(() => true)
+    requestLeave(() => {})
+    expect(cb).toHaveBeenCalled()
+    unsub()
+    cancelLeave()
+    const callsAfterUnsub = cb.mock.calls.length
+    setNavBlocker(() => true)
+    requestLeave(() => {})
+    expect(cb.mock.calls.length).toBe(callsAfterUnsub)
   })
 })

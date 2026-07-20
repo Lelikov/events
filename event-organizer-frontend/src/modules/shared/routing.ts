@@ -1,4 +1,4 @@
-import { confirmLeaveIfBlocked } from './navGuard.ts'
+import { requestLeave } from './navGuard.ts'
 
 export type AppRoute =
   | { name: 'login' }
@@ -24,9 +24,16 @@ export function parseRoute(pathname: string): AppRoute {
 }
 
 export function navigateTo(path: string, options?: { replace?: boolean; skipGuard?: boolean }): void {
+  const doNav = () => {
+    const method = options?.replace ? 'replaceState' : 'pushState'
+    window.history[method](null, '', path)
+    window.dispatchEvent(new Event('app:navigate'))
+  }
   const leavingCurrent = path !== window.location.pathname
-  if (leavingCurrent && !options?.skipGuard && !confirmLeaveIfBlocked()) return
-  const method = options?.replace ? 'replaceState' : 'pushState'
-  window.history[method](null, '', path)
-  window.dispatchEvent(new Event('app:navigate'))
+  if (leavingCurrent && !options?.skipGuard) {
+    // Deferred: runs now if clean, otherwise waits for the leave modal's confirm.
+    requestLeave(doNav)
+    return
+  }
+  doNav()
 }

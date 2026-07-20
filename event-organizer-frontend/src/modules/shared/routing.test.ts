@@ -1,6 +1,6 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { navigateTo, parseRoute } from './routing.ts'
-import { setNavBlocker } from './navGuard.ts'
+import { cancelLeave, confirmLeave, isLeavePending, setNavBlocker } from './navGuard.ts'
 
 describe('parseRoute', () => {
   it('parses known routes', () => {
@@ -17,43 +17,47 @@ describe('parseRoute', () => {
 })
 
 describe('navigateTo guard', () => {
-  const realConfirm = window.confirm
   beforeEach(() => {
     window.history.replaceState(null, '', '/schedule')
   })
   afterEach(() => {
     setNavBlocker(null)
-    window.confirm = realConfirm
+    if (isLeavePending()) cancelLeave()
   })
 
-  it('does not navigate when a dirty blocker is declined', () => {
+  it('defers navigation when blocked until confirmLeave', () => {
     setNavBlocker(() => true)
-    window.confirm = vi.fn().mockReturnValue(false)
     navigateTo('/bookings')
     expect(window.location.pathname).toBe('/schedule')
-  })
-
-  it('navigates when a dirty blocker is confirmed', () => {
-    setNavBlocker(() => true)
-    window.confirm = vi.fn().mockReturnValue(true)
-    navigateTo('/bookings')
+    expect(isLeavePending()).toBe(true)
+    confirmLeave()
     expect(window.location.pathname).toBe('/bookings')
   })
 
-  it('skips the guard for same-path navigation', () => {
+  it('does not navigate when the leave is cancelled', () => {
     setNavBlocker(() => true)
-    const confirm = vi.fn()
-    window.confirm = confirm
-    navigateTo('/schedule')
-    expect(confirm).not.toHaveBeenCalled()
+    navigateTo('/bookings')
+    cancelLeave()
+    expect(window.location.pathname).toBe('/schedule')
+    expect(isLeavePending()).toBe(false)
   })
 
-  it('skips the guard when skipGuard is set', () => {
+  it('navigates immediately for same-path navigation', () => {
     setNavBlocker(() => true)
-    const confirm = vi.fn()
-    window.confirm = confirm
+    navigateTo('/schedule')
+    expect(isLeavePending()).toBe(false)
+  })
+
+  it('navigates immediately when skipGuard is set', () => {
+    setNavBlocker(() => true)
     navigateTo('/login', { replace: true, skipGuard: true })
-    expect(confirm).not.toHaveBeenCalled()
+    expect(isLeavePending()).toBe(false)
     expect(window.location.pathname).toBe('/login')
+  })
+
+  it('navigates immediately when nothing is blocked', () => {
+    navigateTo('/bookings')
+    expect(window.location.pathname).toBe('/bookings')
+    expect(isLeavePending()).toBe(false)
   })
 })

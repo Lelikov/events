@@ -49,10 +49,12 @@ npm run preview   # Preview the production build
   the changed slice(s) — `putSchedule` if tz/weekly/overrides changed, `putTravel`
   if travel changed (`computeDirty` vs a saved baseline); each changed section
   shows a `.section.is-dirty` accent + «не сохранено» badge. Leaving with unsaved
-  changes warns: native `beforeunload` for close/refresh, and
-  `shared/navGuard.ts` (`confirmLeaveIfBlocked`) for in-app menu nav + logout —
-  `navigateTo` consults it, skipping same-path and `skipGuard` navigations
-  (App's auth redirects pass `skipGuard`)), `bookings/` (read-only
+  changes warns: native `beforeunload` for close/refresh, and a styled
+  `LeaveGuardModal` for in-app menu nav + logout. `shared/navGuard.ts` defers the
+  navigation (`requestLeave(proceed)` runs now if clean, else opens the modal;
+  `confirmLeave`/`cancelLeave` are the modal's callbacks); `navigateTo` routes
+  through it, skipping same-path and `skipGuard` navigations (App's auth
+  redirects pass `skipGuard`)), `bookings/` (read-only
   upcoming/past list over `/api/me/bookings`), `profile/` (profile + password
   cards over `/api/me/profile` + `/api/me/password`).
 - **Deploy**: nginx (`Dockerfile` + `nginx.conf`) same-origin-proxies `/api`,
