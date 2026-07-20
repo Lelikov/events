@@ -159,3 +159,9 @@ replace-in-transaction write.
 - **Backend rejects off-grid times on save** — matches "проверять на бэке";
   the UI preserves legacy off-grid values on load but any edit snaps to whole
   hours.
+- **BFF 422 forwarding (discovered during implementation)** — `event-organizer`'s
+  `SchedulingClient._ok` collapsed every upstream non-2xx (except 404) into a
+  502, so the domain 422 never reached the organizer. Added: upstream `422` →
+  `ValidationError(<upstream detail>)` → HTTP 422, so the schedule editor's
+  `.error-text` shows the real message. This improves every schedule-save
+  validation error (invalid tz, overlap, whole-hour), not just this feature.
