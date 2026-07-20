@@ -1,3 +1,5 @@
+import { confirmLeaveIfBlocked } from './navGuard.ts'
+
 export type AppRoute =
   | { name: 'login' }
   | { name: 'schedule' }
@@ -21,7 +23,9 @@ export function parseRoute(pathname: string): AppRoute {
   return { name: 'not-found' }
 }
 
-export function navigateTo(path: string, options?: { replace?: boolean }): void {
+export function navigateTo(path: string, options?: { replace?: boolean; skipGuard?: boolean }): void {
+  const leavingCurrent = path !== window.location.pathname
+  if (leavingCurrent && !options?.skipGuard && !confirmLeaveIfBlocked()) return
   const method = options?.replace ? 'replaceState' : 'pushState'
   window.history[method](null, '', path)
   window.dispatchEvent(new Event('app:navigate'))
