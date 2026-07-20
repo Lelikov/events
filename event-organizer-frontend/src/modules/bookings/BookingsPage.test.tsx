@@ -4,7 +4,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import { BookingsPage } from './BookingsPage.tsx'
 import * as bookingsApi from './bookingsApi.ts'
 import * as profileApi from '../profile/profileApi.ts'
-import type { BookingRow } from './types.ts'
+import type { BookingDetail, BookingRow } from './types.ts'
 
 let container: HTMLDivElement
 let root: Root
@@ -45,5 +45,30 @@ describe('BookingsPage', () => {
   it('shows an empty state when there are none', async () => {
     await mount([])
     expect(container.querySelector('.empty-state')).toBeTruthy()
+  })
+
+  it('shows the detail placeholder until a booking is selected, then its detail', async () => {
+    const detail: BookingDetail = {
+      id: 'a',
+      title: 'Консультация',
+      start_time: future,
+      end_time: futureEnd,
+      status: 'confirmed',
+      client_name: 'Анна',
+      client_email: 'anna@x.io',
+      client_time_zone: 'Europe/Berlin',
+      created_at: past,
+      field_answers: [],
+    }
+    const detailSpy = vi.spyOn(bookingsApi, 'getBookingDetail').mockResolvedValue(detail)
+    await mount([{ id: 'a', start_time: future, end_time: futureEnd, status: 'confirmed' }])
+    expect(container.querySelector('.detail-empty')).not.toBeNull()
+    const row = container.querySelector('button.booking-row') as HTMLButtonElement
+    await act(async () => row.click())
+    await act(async () => {})
+    expect(detailSpy).toHaveBeenCalledWith('a')
+    expect(container.querySelector('.booking-row.is-selected')).not.toBeNull()
+    expect(container.textContent).toContain('Консультация')
+    expect(container.textContent).toContain('Анна')
   })
 })

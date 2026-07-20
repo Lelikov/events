@@ -11,10 +11,10 @@ export function parseRoute(pathname: string): AppRoute {
   if (pathname === '/login') {
     return { name: 'login' }
   }
-  if (pathname === '/' || pathname === '/schedule') {
+  if (pathname === '/schedule') {
     return { name: 'schedule' }
   }
-  if (pathname === '/bookings') {
+  if (pathname === '/' || pathname === '/bookings') {
     return { name: 'bookings' }
   }
   if (pathname === '/profile') {

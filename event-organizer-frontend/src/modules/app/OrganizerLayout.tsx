@@ -20,16 +20,16 @@ type NavItem = {
 
 const NAV_ITEMS: NavItem[] = [
   {
-    label: 'Расписание',
+    label: 'Брони',
     path: '/',
-    icon: 'bookings',
-    match: (pathname) => pathname === '/' || pathname === '/schedule',
+    icon: 'dashboard',
+    match: (pathname) => pathname === '/' || pathname === '/bookings',
   },
   {
-    label: 'Брони',
-    path: '/bookings',
-    icon: 'dashboard',
-    match: (pathname) => pathname === '/bookings',
+    label: 'Расписание',
+    path: '/schedule',
+    icon: 'bookings',
+    match: (pathname) => pathname === '/schedule',
   },
   {
     label: 'Профиль',

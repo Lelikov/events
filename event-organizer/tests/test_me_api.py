@@ -32,8 +32,22 @@ class _FakeScheduling:
                 "status": "confirmed",
                 "client_user_id": str(uuid4()),
                 "host_user_id": str(host_user_id),
+                "attendee_time_zone": "Europe/Berlin",
+                "created_at": "2026-09-01T08:00:00Z",
+                "field_answers": [{"key": "note", "label": "Комментарий", "type": "text", "value": "привет"}],
             }
         ]
+
+    async def get_booking_detail(self, booking_id):
+        return {
+            "uid": str(booking_id),
+            "title": "Консультация",
+            "start_time": "2026-10-01T09:00:00Z",
+            "end_time": "2026-10-01T09:30:00Z",
+            "status": "confirmed",
+            "host": {"email": "org@x.io", "name": "Org", "time_zone": "UTC", "locale": None},
+            "client": {"email": "anna@x.io", "name": "Анна", "time_zone": "Europe/Berlin", "locale": None},
+        }
 
 
 class _FakeUsers:
@@ -125,6 +139,32 @@ async def test_bookings_projection_hides_user_ids(sessionmaker_fixture) -> None:
         assert set(item) == {"id", "start_time", "end_time", "status"}
         assert "client_user_id" not in item
         assert "host_user_id" not in item
+
+
+@pytest.mark.asyncio
+async def test_booking_detail_merges_row_and_detail(sessionmaker_fixture) -> None:
+    from starlette.testclient import TestClient
+
+    app, _, _ = _app_and_fakes()
+    with TestClient(app) as c:
+        r = c.get("/api/me/bookings/b1", headers=_auth(uuid4()))
+        assert r.status_code == 200
+        body = r.json()
+        assert body["title"] == "Консультация"
+        assert body["client_name"] == "Анна"
+        assert body["client_email"] == "anna@x.io"
+        assert body["client_time_zone"] == "Europe/Berlin"
+        assert body["field_answers"] == [{"label": "Комментарий", "value": "привет"}]
+
+
+@pytest.mark.asyncio
+async def test_booking_detail_unknown_id_is_404(sessionmaker_fixture) -> None:
+    from starlette.testclient import TestClient
+
+    app, _, _ = _app_and_fakes()
+    with TestClient(app) as c:
+        r = c.get("/api/me/bookings/does-not-exist", headers=_auth(uuid4()))
+        assert r.status_code == 404
 
 
 @pytest.mark.asyncio

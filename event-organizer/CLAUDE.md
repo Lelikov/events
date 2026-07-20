@@ -113,7 +113,8 @@ for `profile`/`password`.
   `email`, `password_hash`, `disabled`).
 - **`adapters/scheduling_client.py`** — `SchedulingClient`: Bearer `SCHEDULING_API_KEY`
   httpx client for `GET/PUT /api/v1/schedules/{owner_user_id}`, `PUT …/travel`,
-  `GET /api/v1/bookings?host_user_id=`. `404` → `NotFoundError`; `422` →
+  `GET /api/v1/bookings?host_user_id=`, `GET /api/v1/bookings/{id}/detail`
+  (`get_booking_detail`). `404` → `NotFoundError`; `422` →
   `ValidationError` carrying the upstream `detail` (so a domain rejection like
   non-whole-hour schedule times surfaces to the editor, not a generic 502); any
   other non-2xx → `UpstreamError`.
@@ -149,6 +150,7 @@ for `profile`/`password`.
 | PUT | `/api/me/schedule` | JWT bearer | Body `{name, time_zone, weekly_hours, date_overrides}`. Proxies `PUT /api/v1/schedules/{me.user_id}` (upsert); `name` is required by event-scheduling. |
 | PUT | `/api/me/schedule/travel` | JWT bearer | Proxies `PUT /api/v1/schedules/{me.user_id}/travel`. |
 | GET | `/api/me/bookings` | JWT bearer | Proxies `GET /api/v1/bookings?host_user_id={me.user_id}`; returns a projected `{id, start_time, end_time, status}` list only — no other participant's ids or contact info leak through. |
+| GET | `/api/me/bookings/{id}` | JWT bearer | Owner-scoped booking detail. Gates `id` against the caller's own `get_bookings(me.user_id)` (404 if not theirs — no cross-organizer read), then merges event-scheduling `GET /api/v1/bookings/{id}/detail` (event type title + client name/email) with the list row's `attendee_time_zone`/`created_at`/`field_answers` → `{id, title, start_time, end_time, status, client_name, client_email, client_time_zone, created_at, field_answers[{label,value}]}`. |
 | GET | `/api/me/profile` | JWT bearer | Proxies `GET /api/users/id/{me.user_id}` on event-users; returns `{name, email, time_zone}`. |
 | PUT | `/api/me/profile` | JWT bearer | Body `{name, time_zone}` **only**. Proxies `PATCH /api/users/id/{me.user_id}` with exactly those two fields — never forwards `email`/`role` even though event-users' PATCH contract accepts them. |
 | PUT | `/api/me/password` | JWT bearer | Body `{old_password, new_password}`. Re-verifies `old_password` against the stored hash before updating; `401` on mismatch. `204` on success. |

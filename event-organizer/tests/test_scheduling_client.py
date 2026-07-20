@@ -66,6 +66,24 @@ async def test_5xx_raises_upstream() -> None:
 
 
 @pytest.mark.asyncio
+async def test_get_booking_detail_ok_and_path() -> None:
+    bid = str(uuid4())
+
+    def h(req: httpx.Request) -> httpx.Response:
+        assert req.url.path == f"/api/v1/bookings/{bid}/detail"
+        return httpx.Response(200, json={"uid": bid, "title": "Консультация", "status": "confirmed"})
+
+    out = await _c(h).get_booking_detail(bid)
+    assert out["title"] == "Консультация"
+
+
+@pytest.mark.asyncio
+async def test_get_booking_detail_404_raises_not_found() -> None:
+    with pytest.raises(NotFoundError):
+        await _c(lambda _req: httpx.Response(404)).get_booking_detail(str(uuid4()))
+
+
+@pytest.mark.asyncio
 async def test_422_raises_validation_with_upstream_detail() -> None:
     def h(_req: httpx.Request) -> httpx.Response:
         return httpx.Response(422, json={"detail": "weekly_hours times must be on the hour (day 1)"})

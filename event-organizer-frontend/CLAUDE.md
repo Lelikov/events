@@ -34,6 +34,8 @@ npm run preview   # Preview the production build
   → `AppRoute` union (`login`/`schedule`/`bookings`/`profile`/`not-found`),
   `navigateTo` → `history.pushState` + `app:navigate`; `App.tsx` re-renders on
   `popstate`/`app:navigate`, redirects unauth → `/login` and auth → away from `/login`.
+  **`/` → Bookings** (the default landing); `/schedule` → Schedule. Menu order:
+  Брони, Расписание, Профиль.
 - **Auth** (`src/modules/auth/`): `AuthProvider` holds the JWT in state +
   `sessionStorage` key `event_organizer_jwt`; drops an expired token at startup
   (`jwt.ts` decodes `exp`). `login(email,password)` → `POST /auth/login` (no
@@ -54,8 +56,11 @@ npm run preview   # Preview the production build
   navigation (`requestLeave(proceed)` runs now if clean, else opens the modal;
   `confirmLeave`/`cancelLeave` are the modal's callbacks); `navigateTo` routes
   through it, skipping same-path and `skipGuard` navigations (App's auth
-  redirects pass `skipGuard`)), `bookings/` (read-only
-  upcoming/past list over `/api/me/bookings`), `profile/` (profile + password
+  redirects pass `skipGuard`)), `bookings/` (master-detail: upcoming/past list
+  over `/api/me/bookings` on the left; clicking a row loads `BookingDetailPanel`
+  from `GET /api/me/bookings/{id}` on the right — event type title, client
+  name/email, time, client tz, created, guest field answers; the panel is keyed
+  by the selected id so it remounts fresh per selection), `profile/` (profile + password
   cards over `/api/me/profile` + `/api/me/password`).
 - **Deploy**: nginx (`Dockerfile` + `nginx.conf`) same-origin-proxies `/api`,
   `/auth`, `/health` to `event-organizer:8888`; `docker-entrypoint.d/40-env-config.sh`

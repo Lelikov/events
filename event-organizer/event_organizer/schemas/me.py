@@ -45,3 +45,21 @@ class BookingItem(BaseModel):
     start_time: str
     end_time: str
     status: str
+
+
+class BookingFieldAnswer(BaseModel):
+    label: str
+    value: str
+
+
+class BookingDetailItem(BaseModel):
+    id: str
+    title: str
+    start_time: str
+    end_time: str
+    status: str
+    client_name: str | None
+    client_email: str | None
+    client_time_zone: str | None
+    created_at: str | None
+    field_answers: list[BookingFieldAnswer]

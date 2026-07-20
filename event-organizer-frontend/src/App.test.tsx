@@ -3,7 +3,8 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import App from './App.tsx'
 import { AuthProvider } from './modules/auth/AuthContext.tsx'
-import * as scheduleApi from './modules/schedule/scheduleApi.ts'
+import * as bookingsApi from './modules/bookings/bookingsApi.ts'
+import * as profileApi from './modules/profile/profileApi.ts'
 
 let container: HTMLDivElement
 let root: Root
@@ -44,12 +45,13 @@ describe('App redirect', () => {
   })
 
   it('redirects an authenticated visitor away from /login to /', async () => {
-    vi.spyOn(scheduleApi, 'getSchedule').mockResolvedValue(null)
+    vi.spyOn(bookingsApi, 'getBookings').mockResolvedValue([])
+    vi.spyOn(profileApi, 'getProfile').mockResolvedValue({ name: 'N', email: 'e@x.io', time_zone: 'UTC' })
     const token = makeToken({ sub: 'organizer@example.com', exp: Math.floor(Date.now() / 1000) + 3600 })
     sessionStorage.setItem('event_organizer_jwt', token)
     window.history.replaceState(null, '', '/login')
     await mount()
     expect(window.location.pathname).toBe('/')
-    expect(container.querySelector('h1')?.textContent).toBe('Расписание')
+    expect(container.querySelector('h1')?.textContent).toBe('Брони')
   })
 })
