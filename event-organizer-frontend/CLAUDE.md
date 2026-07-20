@@ -45,7 +45,14 @@ npm run preview   # Preview the production build
 - **Screens**: `schedule/` (weekly hours + date overrides + travel editor over
   `/api/me/schedule` + `/api/me/schedule/travel`; weekly-hours and date-override
   times are picked with a whole-hour `<select>` — `HourSelect`, `00:00…23:00` —
-  and the domain enforces whole hours on save), `bookings/` (read-only
+  and the domain enforces whole hours on save. **One** «Сохранить» persists only
+  the changed slice(s) — `putSchedule` if tz/weekly/overrides changed, `putTravel`
+  if travel changed (`computeDirty` vs a saved baseline); each changed section
+  shows a `.section.is-dirty` accent + «не сохранено» badge. Leaving with unsaved
+  changes warns: native `beforeunload` for close/refresh, and
+  `shared/navGuard.ts` (`confirmLeaveIfBlocked`) for in-app menu nav + logout —
+  `navigateTo` consults it, skipping same-path and `skipGuard` navigations
+  (App's auth redirects pass `skipGuard`)), `bookings/` (read-only
   upcoming/past list over `/api/me/bookings`), `profile/` (profile + password
   cards over `/api/me/profile` + `/api/me/password`).
 - **Deploy**: nginx (`Dockerfile` + `nginx.conf`) same-origin-proxies `/api`,

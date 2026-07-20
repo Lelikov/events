@@ -44,36 +44,78 @@ describe('SchedulePage', () => {
     expect(boxes.every((b) => !b.checked)).toBe(true)
   })
 
-  it('saves with the exact upsert body incl. name', async () => {
+  it('shows a single save button labelled Сохранить', async () => {
+    vi.spyOn(scheduleApi, 'getSchedule').mockResolvedValue(bundle)
+    await mount()
+    const labels = [...container.querySelectorAll('button')].map((b) => b.textContent)
+    expect(labels.filter((t) => t?.includes('Сохранить'))).toEqual(['Сохранить'])
+  })
+
+  it('marks a section dirty and enables save after an edit', async () => {
+    vi.spyOn(scheduleApi, 'getSchedule').mockResolvedValue(bundle)
+    await mount()
+    const save = [...container.querySelectorAll('button')].find((b) => b.textContent === 'Сохранить') as HTMLButtonElement
+    expect(save.disabled).toBe(true)
+    const mon = container.querySelector('.weekday-row input[type="checkbox"]') as HTMLInputElement
+    await act(async () => mon.click()) // toggle Пн off → weekly section dirty
+    expect(container.querySelector('.section.is-dirty')).not.toBeNull()
+    expect(save.disabled).toBe(false)
+  })
+
+  it('saves the schedule (incl. name) after an edit', async () => {
     vi.spyOn(scheduleApi, 'getSchedule').mockResolvedValue(bundle)
     const put = vi.spyOn(scheduleApi, 'putSchedule').mockResolvedValue(bundle)
     await mount()
+    const mon = container.querySelector('.weekday-row input[type="checkbox"]') as HTMLInputElement
+    await act(async () => mon.click()) // toggle Пн off → weekly_hours becomes []
     const save = [...container.querySelectorAll('button')].find((b) => b.textContent === 'Сохранить')!
     await act(async () => save.click())
     expect(put).toHaveBeenCalledWith({
       name: 'Моё',
       time_zone: 'Europe/Moscow',
-      weekly_hours: [{ day_of_week: 1, start_time: '09:00', end_time: '12:00' }],
+      weekly_hours: [],
       date_overrides: [],
     })
   })
 
-  it('travel save hits putTravel with the envelope', async () => {
+  it('saves only travel via putTravel when only travel changed', async () => {
     vi.spyOn(scheduleApi, 'getSchedule').mockResolvedValue(bundle)
     const putT = vi.spyOn(scheduleApi, 'putTravel').mockResolvedValue({})
+    const putS = vi.spyOn(scheduleApi, 'putSchedule').mockResolvedValue(bundle)
     await mount()
-    const saveT = [...container.querySelectorAll('button')].find((b) => b.textContent === 'Сохранить поездки')!
-    await act(async () => saveT.click())
-    expect(putT).toHaveBeenCalledWith({ travel_schedules: [] })
+    const addTravel = [...container.querySelectorAll('button')].find((b) => b.textContent?.includes('Добавить поездку'))!
+    await act(async () => addTravel.click())
+    const save = [...container.querySelectorAll('button')].find((b) => b.textContent === 'Сохранить')!
+    await act(async () => save.click())
+    expect(putT).toHaveBeenCalledTimes(1)
+    expect(putS).not.toHaveBeenCalled()
   })
 
-  it('blocks save and shows an inline error on invalid state', async () => {
-    vi.spyOn(scheduleApi, 'getSchedule').mockResolvedValue({
-      ...bundle,
-      weekly_hours: [{ day_of_week: 1, start_time: '12:00:00', end_time: '09:00:00' }],
-    })
+  it('clears the dirty markers after a successful save', async () => {
+    vi.spyOn(scheduleApi, 'getSchedule').mockResolvedValue(bundle)
+    vi.spyOn(scheduleApi, 'putSchedule').mockResolvedValue(bundle)
+    await mount()
+    const mon = container.querySelector('.weekday-row input[type="checkbox"]') as HTMLInputElement
+    await act(async () => mon.click())
+    expect(container.querySelector('.section.is-dirty')).not.toBeNull()
+    const save = [...container.querySelectorAll('button')].find((b) => b.textContent === 'Сохранить') as HTMLButtonElement
+    await act(async () => save.click())
+    await act(async () => {})
+    expect(container.querySelector('.section.is-dirty')).toBeNull()
+    expect(save.disabled).toBe(true)
+  })
+
+  it('blocks save and shows an inline error on an invalid edit', async () => {
+    vi.spyOn(scheduleApi, 'getSchedule').mockResolvedValue(bundle)
     const put = vi.spyOn(scheduleApi, 'putSchedule').mockResolvedValue(bundle)
     await mount()
+    // Set Пн start to 13:00 (after its 12:00 end) via the HourSelect.
+    const startSelect = container.querySelector('.weekday-row .interval-row select') as HTMLSelectElement
+    const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value')!.set!
+    await act(async () => {
+      setter.call(startSelect, '13:00')
+      startSelect.dispatchEvent(new Event('change', { bubbles: true }))
+    })
     const save = [...container.querySelectorAll('button')].find((b) => b.textContent === 'Сохранить')!
     await act(async () => save.click())
     expect(put).not.toHaveBeenCalled()

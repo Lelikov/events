@@ -32,6 +32,25 @@
 
 .section h2 { font-size: 15px; font-weight: 600; }
 
+.section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.section.is-dirty {
+  box-shadow: inset 3px 0 0 var(--primary);
+}
+.dirty-badge {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--primary);
+  background: var(--primary-pale, rgba(79, 110, 242, 0.1));
+  border-radius: 999px;
+  padding: 2px 10px;
+  white-space: nowrap;
+}
+
 .weekday-row {
   display: grid;
   grid-template-columns: 90px 1fr;

@@ -15,6 +15,28 @@ export type EditorState = {
 // Index 0..6 → day_of_week 1..7 (ISO, Mon..Sun).
 export const DAY_LABELS = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс']
 
+export type DirtyFlags = {
+  tz: boolean
+  weekly: boolean
+  overrides: boolean
+  travel: boolean
+  schedule: boolean
+  any: boolean
+}
+
+// Which slices differ from the last saved baseline. `schedule` groups the parts
+// persisted by PUT /api/me/schedule (tz + weekly + overrides); `travel` maps to
+// PUT /api/me/schedule/travel. Comparing full slices (with client uids) is
+// correct — the baseline shares the same uids until a row is added/removed.
+export function computeDirty(current: EditorState, saved: EditorState): DirtyFlags {
+  const tz = current.timeZone !== saved.timeZone
+  const weekly = JSON.stringify(current.days) !== JSON.stringify(saved.days)
+  const overrides = JSON.stringify(current.overrides) !== JSON.stringify(saved.overrides)
+  const travel = JSON.stringify(current.travels) !== JSON.stringify(saved.travels)
+  const schedule = tz || weekly || overrides
+  return { tz, weekly, overrides, travel, schedule, any: schedule || travel }
+}
+
 // Whole-hour choices for the schedule time selects ("00:00".."23:00"). Times
 // are constrained to whole hours; the domain also enforces this on save.
 export const HOUR_OPTIONS: string[] = Array.from({ length: 24 }, (_, h) => `${String(h).padStart(2, '0')}:00`)

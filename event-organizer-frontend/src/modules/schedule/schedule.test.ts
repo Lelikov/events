@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { bundleToState, buildUpsert, buildTravel, validate, emptyDays } from './schedule.ts'
+import { bundleToState, buildUpsert, buildTravel, computeDirty, validate, emptyDays } from './schedule.ts'
 import type { ScheduleBundle } from './types.ts'
 
 // Strips the non-deterministic `uid` so rows produced by makeUid() can be compared by value.
@@ -175,5 +175,58 @@ describe('validate', () => {
 
   it('uses emptyDays for 7 disabled days', () => {
     expect(emptyDays()).toHaveLength(7)
+  })
+})
+
+describe('computeDirty', () => {
+  const base = () => bundleToState(null, 'Europe/Moscow')
+
+  it('reports nothing dirty for an identical snapshot', () => {
+    const s = base()
+    expect(computeDirty(s, s)).toEqual({
+      tz: false,
+      weekly: false,
+      overrides: false,
+      travel: false,
+      schedule: false,
+      any: false,
+    })
+  })
+
+  it('flags a time-zone change as schedule-dirty', () => {
+    const saved = base()
+    const d = computeDirty({ ...saved, timeZone: 'Europe/Berlin' }, saved)
+    expect(d.tz).toBe(true)
+    expect(d.schedule).toBe(true)
+    expect(d.any).toBe(true)
+    expect(d.travel).toBe(false)
+  })
+
+  it('flags a weekly-hours change', () => {
+    const saved = base()
+    const cur = {
+      ...saved,
+      days: saved.days.map((day, i) => (i === 0 ? { enabled: true, intervals: [{ uid: 'x', start: '09:00', end: '10:00' }] } : day)),
+    }
+    const d = computeDirty(cur, saved)
+    expect(d.weekly).toBe(true)
+    expect(d.schedule).toBe(true)
+  })
+
+  it('flags an overrides change', () => {
+    const saved = base()
+    const cur = { ...saved, overrides: [{ uid: 'o', date: '2026-08-01', fullDay: true, start: '', end: '' }] }
+    const d = computeDirty(cur, saved)
+    expect(d.overrides).toBe(true)
+    expect(d.schedule).toBe(true)
+  })
+
+  it('flags a travel change without marking the schedule part dirty', () => {
+    const saved = base()
+    const cur = { ...saved, travels: [{ uid: 't', start_date: '2026-08-01', end_date: '', time_zone: 'Asia/Dubai' }] }
+    const d = computeDirty(cur, saved)
+    expect(d.travel).toBe(true)
+    expect(d.schedule).toBe(false)
+    expect(d.any).toBe(true)
   })
 })
