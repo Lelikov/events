@@ -5,7 +5,8 @@ import { cancelLeave, confirmLeave, isLeavePending, setNavBlocker } from './navG
 describe('parseRoute', () => {
   it('parses known routes', () => {
     expect(parseRoute('/login')).toEqual({ name: 'login' })
-    expect(parseRoute('/')).toEqual({ name: 'schedule' })
+    expect(parseRoute('/')).toEqual({ name: 'bookings' })
+    expect(parseRoute('/schedule')).toEqual({ name: 'schedule' })
     expect(parseRoute('/bookings')).toEqual({ name: 'bookings' })
     expect(parseRoute('/profile')).toEqual({ name: 'profile' })
   })

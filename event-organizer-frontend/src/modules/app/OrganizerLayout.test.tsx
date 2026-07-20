@@ -35,7 +35,7 @@ describe('OrganizerLayout', () => {
   it('renders the three nav items and children', async () => {
     await mount('/')
     const labels = [...container.querySelectorAll('.app-nav-item')].map((b) => b.textContent)
-    expect(labels).toEqual(['Расписание', 'Брони', 'Профиль'])
+    expect(labels).toEqual(['Брони', 'Расписание', 'Профиль'])
     expect(container.querySelector('.probe')?.textContent).toBe('child')
   })
 

@@ -49,7 +49,7 @@ function App() {
             Адрес <code>{pathname}</code> не существует.
           </p>
           <button type="button" onClick={() => navigateTo('/', { replace: true })}>
-            Вернуться к расписанию
+            На главную
           </button>
         </div>
       )}
