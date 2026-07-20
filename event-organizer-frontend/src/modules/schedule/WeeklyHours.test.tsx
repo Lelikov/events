@@ -65,14 +65,14 @@ describe('WeeklyHours', () => {
     expect(next[0].intervals[0]).toEqual({ uid: 'u2', start: '14:00', end: '18:00' })
   })
 
-  it('removing the last interval leaves the day enabled with zero intervals', async () => {
+  it('removing the last interval disables the day', async () => {
     const days = emptyDays()
     days[0] = { enabled: true, intervals: [{ uid: 'u1', start: '09:00', end: '12:00' }] }
     const onChange = await mount(days)
     const removeButton = container.querySelector('button[aria-label="Удалить интервал"]') as HTMLButtonElement
     await act(async () => removeButton.click())
     const next = onChange.mock.calls[0][0] as DayState[]
-    expect(next[0].enabled).toBe(true)
+    expect(next[0].enabled).toBe(false)
     expect(next[0].intervals).toHaveLength(0)
   })
 
